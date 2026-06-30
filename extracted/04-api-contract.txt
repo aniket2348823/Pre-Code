@@ -1,0 +1,769 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — API Contract
+Version: 3.0 | Date: June 2026 | Status: Final | Base URL: 
+https://api.vigilagent.com/v1
+1. API Design Principles
+1. RESTful by Default — Standard HTTP methods and status codes
+2. JSON Everywhere — All request/response bodies are JSON
+3. Pagination — All list endpoints support cursor-based pagination
+4. Idempotency — POST/PUT endpoints accept Idempotency-Key header
+5. Versioning — URL-based versioning (/v1/, /v2/)
+6. Rate Limiting — Per-user and per-endpoint rate limits with clear headers
+2. Authentication
+2.1 JWT Authentication (Interactive)
+POST /v1/auth/login
+Content-Type: application/json
+{
+  "email": "user@example.com",
+  "password": "secure_password"
+}
+Response: 200 OK
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
+  "expires_in": 3600,
+  "token_type": "Bearer",
+  "user": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "email": "user@example.com",
+    "display_name": "John Doe",
+    "role": "developer",
+    "subscription_tier": "pro"
+  }
+}
+2.2 API Key Authentication (Programmatic)
+Authorization: Bearer vga_live_abc123def456...
+2.3 Refresh Token Flow
+POST /v1/auth/refresh
+
+--- PAGE 2 ---
+
+Content-Type: application/json
+{
+  "refresh_token": "eyJhbGciOiJIUzI1NiIs..."
+}
+Response: 200 OK
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "expires_in": 3600
+}
+3. Error Responses
+3.1 Standard Error Format
+{
+  "error": {
+    "code": "RESOURCE_NOT_FOUND",
+    "message": "Task not found",
+    "details": {
+      "task_id": "550e8400-e29b-41d4-a716-446655440000"
+    },
+    "request_id": "req_abc123",
+    "timestamp": "2026-06-23T10:30:00Z"
+  }
+}
+3.2 Error Codes
+Code HTTP Status Description
+AUTH_INVALID_TOKEN 401 Token is invalid or expired
+AUTH_INSUFFICIENT_SCO
+PE
+403 Token lacks required scope
+RESOURCE_NOT_FOUND 404 Requested resource does not 
+exist
+RESOURCE_CONFLICT 409 Resource already exists or state 
+conflict
+VALIDATION_ERROR 422 Request body validation failed
+RATE_LIMIT_EXCEEDED 429 Too many requests
+QUOTA_EXCEEDED 402 Monthly quota exceeded, 
+upgrade required
+TASK_FAILED 500 Task execution failed
+PROVIDER_UNAVAILABLE 503 LLM provider temporarily 
+unavailable
+
+--- PAGE 3 ---
+
+4. Endpoints
+4.1 Tasks
+Create Task
+POST /v1/tasks
+Authorization: Bearer <token>
+Content-Type: application/json
+Idempotency-Key: <unique-key>
+{
+  "project_id": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Add error handling to UserService",
+  "description": "Add comprehensive error handling to the UserService class, 
+including input validation, database error handling, and appropriate HTTP status 
+codes.",
+  "priority": "normal",
+  "options": {
+    "model_preference": "balanced",
+    "max_tokens": 8192,
+    "require_hitl": false,
+    "timeout_seconds": 300,
+    "allowed_tools": ["read_file", "write_file", "edit_file", "run_command"],
+    "blocked_tools": ["git_push"]
+  },
+  "context": {
+    "files": ["src/services/user_service.go"],
+    "instructions": "Follow existing error handling patterns in the codebase"
+  }
+}
+Response: 201 Created
+{
+  "id": "660e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
+  "title": "Add error handling to UserService",
+  "model_selected": "claude-sonnet-4-20250514",
+  "estimated_cost": 0.23,
+  "estimated_duration": 45,
+  "created_at": "2026-06-23T10:30:00Z"
+}
+Get Task
+GET /v1/tasks/{task_id}
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "id": "660e8400-e29b-41d4-a716-446655440000",
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "project_id": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Add error handling to UserService",
+  "description": "Add comprehensive error handling...",
+  "status": "completed",
+  "priority": "normal",
+  "plan": {
+    "steps": [
+      {"tool": "read_file", "description": "Read UserService class"},
+      {"tool": "edit_file", "description": "Add error handling"},
+      {"tool": "run_command", "description": "Run tests"}
+
+--- PAGE 4 ---
+
+    ],
+    "total_steps": 3
+  },
+  "result": "Successfully added error handling to UserService. Added input 
+validation, database error handling, and proper HTTP status codes.",
+  "files_changed": [
+    {
+      "path": "src/services/user_service.go",
+      "action": "modified",
+      "lines_added": 45,
+      "lines_removed": 12
+    }
+  ],
+  "model_used": "claude-sonnet-4-20250514",
+  "provider": "anthropic",
+  "complexity": "moderate",
+  "input_tokens": 1847,
+  "output_tokens": 923,
+  "total_tokens": 2770,
+  "cost": 0.23,
+  "duration_ms": 18432,
+  "hitl_required": false,
+  "metadata": {},
+  "created_at": "2026-06-23T10:30:00Z",
+  "started_at": "2026-06-23T10:30:01Z",
+  "completed_at": "2026-06-23T10:30:19Z"
+}
+List Tasks
+GET /v1/tasks?status=completed&limit=20&cursor=abc123
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "data": [...],
+  "pagination": {
+    "has_more": true,
+    "next_cursor": "def456",
+    "total_count": 156
+  }
+}
+Cancel Task
+POST /v1/tasks/{task_id}/cancel
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "id": "660e8400-e29b-41d4-a716-446655440000",
+  "status": "cancelled",
+  "cancelled_at": "2026-06-23T10:31:00Z"
+}
+Stream Task (SSE)
+GET /v1/tasks/{task_id}/stream
+Authorization: Bearer <token>
+Accept: text/event-stream
+Response: 200 OK (SSE Stream)
+
+--- PAGE 5 ---
+
+event: task_started
+data: {"task_id": "660e8400...", "model": "claude-sonnet"}
+event: step_started
+data: {"step": 1, "tool": "read_file", "description": "Reading UserService..."}
+event: step_completed
+data: {"step": 1, "result": "Read 234 lines", "duration_ms": 1200}
+event: token_stream
+data: {"content": "Adding error handling..."}
+event: task_completed
+data: {"status": "completed", "cost": 0.23, "duration_ms": 18432}
+4.2 Projects
+Create Project
+POST /v1/projects
+Authorization: Bearer <token>
+Content-Type: application/json
+{
+  "name": "my-app",
+  "description": "My awesome application",
+  "repo_url": "https://github.com/user/my-app",
+  "config": {
+    "default_model": "claude-sonnet-4-20250514",
+    "budget_limit": 50.00,
+    "allowed_tools": ["*"],
+    "blocked_tools": ["git_push"]
+  }
+}
+Response: 201 Created
+{
+  "id": "770e8400-e29b-41d4-a716-446655440000",
+  "name": "my-app",
+  "slug": "my-app",
+  "status": "active",
+  "config": {...},
+  "created_at": "2026-06-23T10:30:00Z"
+}
+Get Project
+GET /v1/projects/{project_id}
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "id": "770e8400-e29b-41d4-a716-446655440000",
+  "name": "my-app",
+  "slug": "my-app",
+  "description": "My awesome application",
+  "repo_url": "https://github.com/user/my-app",
+  "stats": {
+    "total_tasks": 156,
+    "total_tokens": 450000,
+
+--- PAGE 6 ---
+
+    "total_cost": 23.45,
+    "active_skills": 8
+  },
+  "context_summary": "A Go web application with user management...",
+  "created_at": "2026-06-23T10:30:00Z"
+}
+List Projects
+GET /v1/projects?limit=20&cursor=abc123
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "data": [...],
+  "pagination": {
+    "has_more": false,
+    "next_cursor": null,
+    "total_count": 5
+  }
+}
+4.3 Skills
+List Skills (Marketplace)
+GET /v1/skills?category=code_quality&sort=installs&limit=20
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "data": [
+    {
+      "id": "880e8400-e29b-41d4-a716-446655440000",
+      "name": "lint-and-fix",
+      "display_name": "Lint & Fix",
+      "description": "Automatically lint code and fix common issues",
+      "category": "code_quality",
+      "version": "1.2.0",
+      "author": {
+        "id": "user-123",
+        "display_name": "VigilAgent Team"
+      },
+      "stats": {
+        "installs": 15234,
+        "rating_avg": 4.8,
+        "rating_count": 342
+      },
+      "is_verified": true,
+      "is_featured": true,
+      "tags": ["linting", "formatting", "auto-fix"]
+    }
+  ],
+  "pagination": {
+    "has_more": true,
+    "next_cursor": "next-skill-id",
+    "total_count": 234
+  }
+}
+
+--- PAGE 7 ---
+
+Get Skill Details
+GET /v1/skills/{skill_slug}
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "id": "880e8400-e29b-41d4-a716-446655440000",
+  "name": "lint-and-fix",
+  "display_name": "Lint & Fix",
+  "description": "Automatically lint code and fix common issues",
+  "long_description": "This skill analyzes your codebase...",
+  "category": "code_quality",
+  "version": "1.2.0",
+  "author": {
+    "id": "user-123",
+    "display_name": "VigilAgent Team",
+    "avatar_url": "https://..."
+  },
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "linters": {
+        "type": "array",
+        "items": {"type": "string"},
+        "default": ["golangci-lint", "staticcheck"]
+      },
+      "auto_fix": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
+  "required_permissions": ["read_file", "write_file", "run_command"],
+  "stats": {
+    "installs": 15234,
+    "rating_avg": 4.8,
+    "rating_count": 342
+  },
+  "versions": [
+    {"version": "1.2.0", "created_at": "2026-06-20T10:00:00Z"},
+    {"version": "1.1.0", "created_at": "2026-06-15T10:00:00Z"}
+  ],
+  "reviews": [...],
+  "created_at": "2026-06-01T10:00:00Z"
+}
+Install Skill
+POST /v1/skills/install
+Authorization: Bearer <token>
+Content-Type: application/json
+{
+  "skill_id": "880e8400-e29b-41d4-a716-446655440000",
+  "config": {
+    "linters": ["golangci-lint"],
+    "auto_fix": true
+  }
+}
+Response: 201 Created
+{
+
+--- PAGE 8 ---
+
+  "id": "990e8400-e29b-41d4-a716-446655440000",
+  "skill_id": "880e8400-e29b-41d4-a716-446655440000",
+  "version": "1.2.0",
+  "status": "installed",
+  "installed_at": "2026-06-23T10:30:00Z"
+}
+Uninstall Skill
+DELETE /v1/skills/{skill_id}
+Authorization: Bearer <token>
+Response: 204 No Content
+Create Skill (Publish)
+POST /v1/skills
+Authorization: Bearer <token>
+Content-Type: application/json
+Content-Type: multipart/form-data (for package upload)
+{
+  "name": "my-custom-skill",
+  "display_name": "My Custom Skill",
+  "description": "A custom skill for my workflow",
+  "category": "custom",
+  "version": "1.0.0",
+  "license": "MIT",
+  "config_schema": {...},
+  "required_permissions": ["read_file"]
+}
+Response: 201 Created
+{
+  "id": "aa0e8400-e29b-41d4-a716-446655440000",
+  "name": "my-custom-skill",
+  "slug": "my-custom-skill",
+  "status": "pending_review",
+  "created_at": "2026-06-23T10:30:00Z"
+}
+4.4 Memory
+Search Memory
+POST /v1/memory/search
+Authorization: Bearer <token>
+Content-Type: application/json
+{
+  "query": "error handling patterns in UserService",
+  "project_id": "550e8400-e29b-41d4-a716-446655440000",
+  "types": ["episodic", "pattern"],
+  "limit": 10,
+  "min_relevance": 0.7
+}
+Response: 200 OK
+{
+
+--- PAGE 9 ---
+
+  "results": [
+    {
+      "id": "bb0e8400-e29b-41d4-a716-446655440000",
+      "type": "pattern",
+      "name": "Go Error Handling Pattern",
+      "content": "Wrap errors with context using fmt.Errorf...",
+      "relevance": 0.92,
+      "importance": 0.85,
+      "created_at": "2026-06-20T10:00:00Z"
+    }
+  ],
+  "total_results": 1
+}
+Create Memory Episode
+POST /v1/memory/episodes
+Authorization: Bearer <token>
+Content-Type: application/json
+{
+  "project_id": "550e8400-e29b-41d4-a716-446655440000",
+  "episode_type": "learning_acquired",
+  "title": "UserService requires input validation before DB calls",
+  "content": "When modifying UserService, always add input validation...",
+  "importance": 0.8,
+  "tags": ["user-service", "validation", "error-handling"]
+}
+Response: 201 Created
+{
+  "id": "cc0e8400-e29b-41d4-a716-446655440000",
+  "created_at": "2026-06-23T10:30:00Z"
+}
+4.5 Usage & Billing
+Get Usage Summary
+GET /v1/usage?period=30d
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "period": {
+    "start": "2026-05-24T00:00:00Z",
+    "end": "2026-06-23T23:59:59Z"
+  },
+  "tasks": {
+    "total": 156,
+    "completed": 142,
+    "failed": 8,
+    "cancelled": 6
+  },
+  "tokens": {
+    "input": 450000,
+    "output": 230000,
+    "total": 680000
+  },
+  "cost": {
+
+--- PAGE 10 ---
+
+    "total": 23.45,
+    "by_model": {
+      "claude-sonnet-4-20250514": 12.30,
+      "gpt-4o": 7.85,
+      "claude-haiku": 3.30
+    },
+    "by_day": [
+      {"date": "2026-06-22", "cost": 1.23},
+      {"date": "2026-06-21", "cost": 0.98}
+    ]
+  },
+  "budget": {
+    "limit": 50.00,
+    "used": 23.45,
+    "remaining": 26.55,
+    "percent_used": 46.9
+  }
+}
+Get Cost Breakdown
+GET /v1/usage/costs?group_by=model&period=7d
+Authorization: Bearer <token>
+Response: 200 OK
+{
+  "period": {
+    "start": "2026-06-16T00:00:00Z",
+    "end": "2026-06-23T23:59:59Z"
+  },
+  "breakdown": [
+    {
+      "model": "claude-sonnet-4-20250514",
+      "provider": "anthropic",
+      "requests": 89,
+      "tokens": {"input": 234000, "output": 112000},
+      "cost": 7.80,
+      "avg_latency_ms": 1800,
+      "success_rate": 0.94
+    },
+    {
+      "model": "gpt-4o",
+      "provider": "openai",
+      "requests": 45,
+      "tokens": {"input": 120000, "output": 67000},
+      "cost": 4.50,
+      "avg_latency_ms": 2100,
+      "success_rate": 0.91
+    }
+  ]
+}
+4.6 Organizations (Teams)
+Create Organization
+POST /v1/organizations
+Authorization: Bearer <token>
+Content-Type: application/json
+
+--- PAGE 11 ---
+
+{
+  "name": "Acme Engineering",
+  "settings": {
+    "default_model": "claude-sonnet-4-20250514",
+    "budget_limit": 500.00,
+    "require_hitl": true,
+    "allowed_models": ["claude-sonnet-4-20250514", "gpt-4o"]
+  }
+}
+Response: 201 Created
+{
+  "id": "dd0e8400-e29b-41d4-a716-446655440000",
+  "name": "Acme Engineering",
+  "slug": "acme-engineering",
+  "role": "owner",
+  "member_count": 1,
+  "created_at": "2026-06-23T10:30:00Z"
+}
+Invite Member
+POST /v1/organizations/{org_id}/members/invite
+Authorization: Bearer <token>
+Content-Type: application/json
+{
+  "email": "new-engineer@acme.com",
+  "role": "member"
+}
+Response: 201 Created
+{
+  "invitation_id": "ee0e8400-e29b-41d4-a716-446655440000",
+  "email": "new-engineer@acme.com",
+  "role": "member",
+  "expires_at": "2026-06-30T10:30:00Z"
+}
+4.7 Webhooks
+Create Webhook
+POST /v1/webhooks
+Authorization: Bearer <token>
+Content-Type: application/json
+{
+  "url": "https://my-app.com/webhooks/vigilagent",
+  "events": ["task.completed", "task.failed", "budget.exceeded"],
+  "secret": "whsec_abc123..."
+}
+Response: 201 Created
+{
+  "id": "ff0e8400-e29b-41d4-a716-446655440000",
+  "url": "https://my-app.com/webhooks/vigilagent",
+  "events": ["task.completed", "task.failed", "budget.exceeded"],
+  "status": "active",
+  "created_at": "2026-06-23T10:30:00Z"
+
+--- PAGE 12 ---
+
+}
+Webhook Payload Format
+{
+  "id": "webhook_event_123",
+  "type": "task.completed",
+  "created_at": "2026-06-23T10:30:19Z",
+  "data": {
+    "task_id": "660e8400-e29b-41d4-a716-446655440000",
+    "status": "completed",
+    "cost": 0.23,
+    "duration_ms": 18432
+  }
+}
+Webhook Verification
+func verifyWebhook(payload []byte, signature string, secret string) bool {
+    mac := hmac.New(sha256.New, []byte(secret))
+    mac.Write(payload)
+    expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+    return hmac.Equal([]byte(signature), []byte(expected))
+}
+5. Rate Limits
+5.1 Default Limits
+Tier Requests/min Tasks/month Tokens/month
+Free 60 100 500,000
+Pro 300 2,000 5,000,000
+Team 600 5,000/seat 10,000,000/seat
+Enterprise Custom Custom Custom
+Note: Task and token limits are monthly (aligned with pricing tiers in the Master 
+Project Prompt). Rate limits (requests/min) are per-minute.
+5.2 Rate Limit Headers
+X-RateLimit-Limit: 300
+X-RateLimit-Remaining: 245
+X-RateLimit-Reset: 1687531800
+X-RateLimit-Policy: 300;w=60
+5.3 Retry-After Header (429 Response)
+HTTP/1.1 429 Too Many Requests
+Retry-After: 30
+X-RateLimit-Limit: 300
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1687531800
+
+--- PAGE 13 ---
+
+6. Pagination
+6.1 Cursor-Based Pagination
+GET /v1/tasks?limit=20&cursor=abc123
+Response:
+{
+  "data": [...],
+  "pagination": {
+    "has_more": true,
+    "next_cursor": "def456",
+    "prev_cursor": "xyz789",
+    "total_count": 156
+  }
+}
+6.2 Pagination Rules
+• Default limit: 20, Maximum: 100
+• Cursors are opaque strings (base64-encoded composite keys)
+• has_more indicates if more results exist beyond current page
+• total_count is optional and may be expensive for large datasets
+7. Streaming (SSE)
+7.1 Connection Setup
+GET /v1/tasks/{task_id}/stream
+Authorization: Bearer <token>
+Accept: text/event-stream
+Connection: keep-alive
+Cache-Control: no-cache
+7.2 Event Types
+Event Description Payload
+task_started Task execution begins {task_id, model, 
+estimated_cost}
+step_started Individual step begins {step, tool, 
+description}
+step_completed Individual step finishes {step, result, 
+duration_ms}
+token_stream Incremental output {content}
+hitl_required Human approval needed {checkpoint_id, 
+
+--- PAGE 14 ---
+
+Event Description Payload
+description, options}
+task_completed Task finished successfully {status, cost, 
+duration_ms, 
+files_changed}
+task_failed Task failed {error, 
+retry_possible}
+heartbeat Keep-alive (every 30s) {timestamp}
+7.3 Reconnection Strategy
+Client connects → Receives events → Connection drops
+    │
+    ├── Store last event ID
+    ├── Wait 1s (exponential backoff)
+    ├── Reconnect with Last-Event-ID header
+    └── Resume from where it left off
+8. SDK Examples
+8.1 Go SDK
+package main
+import (
+    "context"
+    "fmt"
+    vigil "github.com/vigilagent/go-sdk"
+)
+func main() {
+    client := vigil.NewClient("vga_live_abc123...")
+    
+    ctx := context.Background()
+    
+    // Create a task
+    task, err := client.Tasks.Create(ctx, &vigil.CreateTaskRequest{
+        Title:       "Add error handling to UserService",
+        Description: "Add comprehensive error handling...",
+        ProjectID:   "project-123",
+    })
+    if err != nil {
+        panic(err)
+    }
+    
+    fmt.Printf("Task created: %s (estimated cost: $%.2f)\n", 
+        task.ID, task.EstimatedCost)
+    
+    // Stream task execution
+    events := client.Tasks.Stream(ctx, task.ID)
+    for event := range events {
+        switch event.Type {
+        case "token_stream":
+            fmt.Print(event.Data.Content)
+
+--- PAGE 15 ---
+
+        case "task_completed":
+            fmt.Printf("\nCompleted! Cost: $%.2f\n", event.Data.Cost)
+        case "task_failed":
+            fmt.Printf("\nFailed: %s\n", event.Data.Error)
+        }
+    }
+}
+8.2 Python SDK
+from vigilagent import VigilClient
+client = VigilClient(api_key="vga_live_abc123...")
+# Create and execute a task
+task = client.tasks.create(
+    title="Add error handling to UserService",
+    description="Add comprehensive error handling...",
+    project_id="project-123"
+)
+# Stream execution
+for event in client.tasks.stream(task.id):
+    if event.type == "token_stream":
+        print(event.data.content, end="", flush=True)
+    elif event.type == "task_completed":
+        print(f"\nCompleted! Cost: ${event.data.cost:.2f}")
+    elif event.type == "task_failed":
+        print(f"\nFailed: {event.data.error}")
+8.3 CLI Usage
+# Install
+curl -fsSL https://get.vigilagent.com | sh
+# Authenticate
+vigil auth login
+# Create task
+vigil task create \
+  --title "Add error handling" \
+  --description "Add comprehensive error handling to UserService" \
+  --project "my-app"
+# Stream task
+vigil task stream <task-id>
+# List tasks
+vigil task list --status completed --limit 10
+# View usage
+vigil usage --period 30d
+9. OpenAPI Specification
+The full OpenAPI 3.1 specification is available at:
+• URL: https://api.vigilagent.com/v1/openapi.json
+
+--- PAGE 16 ---
+
+• Swagger UI: https://api.vigilagent.com/v1/docs
+• ReDoc: https://api.vigilagent.com/v1/redoc
+10. Changelog
+Version Date Changes
+3.0 2026-06-23 Complete rewrite with 
+streaming, memory, and skills 
+APIs
+2.1 2026-05-15 Added organization and team 
+endpoints
+2.0 2026-04-01 Breaking: New authentication, 
+pagination
+1.0 2026-03-01 Initial release
+This API contract defines the complete interface for VigilAgent. All changes must be submitted as 
+OpenAPI diffs with corresponding SDK updates.

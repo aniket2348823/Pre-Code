@@ -1,0 +1,395 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — Master Project Prompt
+Version: 3.0 | Last Updated: June 2026 | Classification: Internal — Founding Team
+1. Project Identity
+VigilAgent is an autonomous AI agent platform that enables developers and enterprises to deploy, 
+orchestrate, and monetize intelligent coding agents. It combines a high-performance Go backend 
+with a multi-model LLM orchestration layer and a community-driven skills marketplace.
+Mission Statement: Eliminate the gap between human intent and working software by deploying 
+AI agents that understand, write, review, test, and deploy code — autonomously, reliably, and cost-
+effectively.
+Vision: Become the default operating system for AI-assisted software development, where every 
+developer has a team of specialized AI agents working alongside them 24/7.
+2. Problem Statement
+2.1 The Status Quo Is Broken
+Pain Point Current Reality VigilAgent Solution
+Context Loss Every AI coding session starts 
+from zero; no memory across 
+sessions
+Persistent agent memory with 
+episodic + semantic layers
+Single-Model Lock-in Teams depend on one LLM 
+vendor, accepting its 
+weaknesses
+Model-agnostic routing: 
+optimal model per task
+No Accountability AI-generated code ships 
+without audit trails or review
+Full provenance tracking, 
+automated review, and HITL 
+gates
+Token Waste Developers pay full price for 
+every token, including repeated 
+context
+Aggressive caching, 
+compression, and model routing 
+(40-90% savings)
+Skill Fragility One-off prompts, no reusable 
+knowledge
+Community marketplace of 
+tested, versioned skills
+2.2 Who Feels This Pain?
+Primary Personas:
+• Solo Founders / Indie Hackers — Building fast, can't afford a full team, need AI agents 
+that work autonomously
+• Small Development Teams (2-15) — Need to multiply output without multiplying 
+
+--- PAGE 2 ---
+
+headcount
+• Enterprise Engineering Orgs — Need auditable, compliant AI-assisted development at 
+scale
+Secondary Personas:
+• DevOps / Platform Engineers — Want automated infrastructure provisioning via agents
+• Security Teams — Need visibility into AI-generated code before it ships
+• Non-Technical Founders — Want to build MVPs without deep coding knowledge
+3. Core Value Proposition
+3.1 The Three Pillars
+┌─────────────────────────────────────────────────────────────┐
+│                      VIGILAGENT                              │
+│                                                              │
+│  ┌──────────┐    ┌──────────────┐    ┌──────────────────┐   │
+│  │ AUTONOMY │    │ INTELLIGENCE │    │   ACCOUNTABILITY  │   │
+│  │          │    │              │    │                    │   │
+│  │ Agents   │    │ Multi-model  │    │ Audit trails      │   │
+│  │ that act │    │ routing for  │    │ HITL gates        │   │
+│  │ without  │    │ optimal cost │    │ Code provenance   │   │
+│  │ waiting  │    │ & quality    │    │ Rollback safety   │   │
+│  └──────────┘    └──────────────┘    └──────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+3.2 Competitive Moat
+1. Proprietary Skill Graph — Each user's agent learns from their codebase patterns, building 
+a graph that compounds over time
+2. Model Routing Intelligence — Our routing layer learns which model works best for each 
+codebase/task combination
+3. Community Network Effects — Skills marketplace creates flywheel: more users → more 
+skills → better agents → more users
+4. Cost Advantage — Our optimization stack makes us 5-10x cheaper than raw API usage for 
+equivalent output
+4. Technical Foundation
+4.1 Architecture Summary
+┌──────────────────────────────────────────────────────────────┐
+│                     CLIENT LAYER                              │
+│  CLI Tool │ VS Code Extension │ Web Dashboard │ API Client   │
+└──────────────┬───────────────────────────────────────────────┘
+               │
+┌──────────────▼───────────────────────────────────────────────┐
+
+--- PAGE 3 ---
+
+│                    API GATEWAY (Go)                           │
+│  Auth │ Rate Limiting │ Routing │ WebSocket │ SSE Streaming  │
+└──────────────┬───────────────────────────────────────────────┘
+               │
+┌──────────────▼───────────────────────────────────────────────┐
+│                  AGENT ORCHESTRATOR                           │
+│  Task Decomposition │ State Machine │ Tool Execution         │
+│  Memory Management  │ Error Recovery │ HITL Checkpoints      │
+└──────────────┬───────────────────────────────────────────────┘
+               │
+┌──────────────▼───────────────────────────────────────────────┐
+│                LLM ROUTING LAYER                              │
+│  Model Router │ Prompt Cache │ Token Counter │ Cost Tracker   │
+│  ┌──────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐    │
+│  │GPT-4o│ │Claude  │ │Gemini  │ │Llama   │ │DeepSeek  │    │
+│  │      │ │Opus    │ │Pro     │ │3.1 405B│ │R1        │    │
+│  └──────┘ └────────┘ └────────┘ └────────┘ └──────────┘    │
+└──────────────┬───────────────────────────────────────────────┘
+               │
+┌──────────────▼───────────────────────────────────────────────┐
+│                  DATA LAYER                                   │
+│  PostgreSQL + pgvector │ Redis (Semantic Cache) │ S3/MinIO   │
+│  Vector Index │ Session Store │ Skills Registry              │
+└──────────────────────────────────────────────────────────────┘
+4.2 Technology Stack
+Layer Technology Rationale
+Backend Go 1.22+ Concurrency, performance, 
+single-binary deployment
+HTTP Framework chi router Lightweight, stdlib-compatible, 
+middleware-friendly
+Database PostgreSQL 16 + pgvector ACID + vector search in one 
+system
+Cache Redis 7 Semantic caching, session state, 
+rate limiting
+Message Queue NATS JetStream Lightweight, fast, exactly-once 
+delivery
+Object Storage S3-compatible (MinIO for dev) Code snapshots, artifacts, skill 
+packages
+Observability OpenTelemetry + Grafana Distributed tracing, metrics, 
+structured logs
+Container Runtime Docker + gVisor Sandboxed skill execution
+4.3 Key Design Principles
+1. Interface-Driven Design — Every LLM provider, database, and external service is 
+accessed through Go interfaces. This enables testing, switching providers, and future-
+proofing.
+2. Fail-Safe Defaults — Agents never take destructive actions without explicit user 
+confirmation. All file modifications, deployments, and external API calls require HITL 
+
+--- PAGE 4 ---
+
+approval.
+3. Cost-Aware by Default — Every LLM call tracks token usage and cost. Agents have 
+configurable budgets that hard-stop when exceeded.
+4. Graceful Degradation — If the primary LLM is unavailable, the system falls back to 
+cached responses, local models, or queued retry — never fails silently.
+5. Observability First — Every agent action is traceable. Every decision is explainable. Every 
+token is accounted for.
+5. Skills Marketplace
+5.1 Marketplace Vision
+The Skills Marketplace is VigilAgent's community layer — a curated ecosystem where developers 
+share, discover, and monetize reusable agent capabilities.
+Core Concept: A skill is a packaged, versioned, testable unit of agent behavior that can be 
+installed, configured, and composed.
+5.2 Skill Lifecycle
+Author → Publish → Review → Publish → Install → Configure → Execute → Rate
+  │         │         │         │         │          │          │        │
+  ▼         ▼         ▼         ▼         ▼          ▼          ▼        ▼
+Create   Submit   Automated  Live     Pull from   Set params  Run in   Community
+skill    to       quality    on       registry    & env vars  sandbox  feedback
+         registry checks    registry                          environment
+5.3 Revenue Model
+Tier Commission Features
+Free 0% Open-source skills, community 
+contribution
+Premium 15% Paid skills with guaranteed 
+support
+Enterprise 10% Private skills, SLA, dedicated 
+support
+6. Go-To-Market Strategy
+6.1 Phase 1: Developer Community (Months 1-6)
+Goal: 1,000 active developers, 50 published skills
+• Launch CLI tool with free tier (100 agent tasks/month)
+
+--- PAGE 5 ---
+
+• Publish 10 "hero skills" covering common workflows (linting, testing, documentation, 
+deployment)
+• Content marketing: technical blog posts, YouTube tutorials, conference talks
+• Open-source the core agent framework to build trust and contributions
+6.2 Phase 2: Team Plans (Months 6-12)
+Goal: 50 paying teams, $50K MRR
+• Team dashboard with shared skills, usage analytics, and admin controls
+• Integration with GitHub/GitLab for automated PR review and code suggestions
+• Enterprise features: SSO, audit logs, custom skill development
+6.3 Phase 3: Platform Play (Months 12-24)
+Goal: 500 paying teams, $500K MRR, 500 marketplace skills
+• Skills marketplace open to third-party publishers
+• Enterprise API for custom integrations
+• On-premises deployment option for regulated industries
+6.4 Pricing Strategy
+Plan Price Includes
+Free $0/mo 100 tasks/mo, 3 skills, 
+community support
+Pro $29/mo 2,000 tasks/mo, unlimited 
+skills, priority support
+Team $99/seat/mo 5,000 tasks/seat, shared 
+workspace, admin controls
+Enterprise Custom Unlimited, SSO, SLA, 
+dedicated support, on-prem
+Pricing Philosophy: We charge per outcome, not per token. Users buy task bundles, not API 
+credits. This aligns our incentives with user success — if our agents don't work, users don't pay.
+7. Success Metrics
+7.1 North Star Metric
+Tasks Completed Autonomously — Number of coding tasks the agent completes without human 
+intervention. This measures both agent capability and user trust.
+
+--- PAGE 6 ---
+
+7.2 Key Performance Indicators
+Category Metric Target (Month 12)
+Growth Monthly Active Users 5,000
+Revenue MRR $100,000
+Engagement Tasks per user per week 20
+Quality Task success rate (no human fix 
+needed)
+85%
+Efficiency Avg. cost per task < $0.50
+Retention Monthly retention rate 75%
+Marketplace Published skills 200
+NPS Net Promoter Score 50+
+7.3 Anti-Metrics (Things We Watch but Don't Optimize)
+• Token usage — We optimize for cost efficiency, not token reduction
+• Agent speed — We optimize for reliability, not raw speed
+• Skill count — We optimize for skill quality, not quantity
+8. Risk Register
+Risk Probability Impact Mitigation
+LLM API price 
+increases
+High High Multi-provider routing, 
+local model fallback, 
+caching
+Regulatory changes (AI 
+code liability)
+Medium High Audit trails, HITL 
+gates, compliance 
+framework
+Competitor launches 
+similar product
+High Medium Speed to market, 
+community moat, 
+proprietary skill graph
+Agent generates 
+insecure code
+Medium Critical Security scanning skill, 
+sandboxed execution, 
+code review
+Marketplace quality 
+control
+Medium High Automated testing, 
+community ratings, 
+human curation
+Single-point-of-failure 
+in routing
+Low Critical Multi-provider failover, 
+circuit breakers, health 
+checks
+
+--- PAGE 7 ---
+
+9. Team & Hiring Plan
+9.1 Founding Team (Months 1-6)
+• Technical Co-founder / CTO — Go + ML expertise
+• Product Co-founder — Developer tools experience
+• Founding Engineer — Full-stack, DevOps
+9.2 Growth Team (Months 6-12)
+• 2 Backend Engineers (Go)
+• 1 ML/AI Engineer
+• 1 Designer (developer tools experience)
+• 1 Developer Advocate
+9.3 Scale Team (Months 12-24)
+• 3-5 additional engineers across backend, AI, infrastructure
+• 2 Developer Advocates
+• 1 Security Engineer
+• 1 Sales/Enterprise lead
+10. Open Questions & Decisions Needed
+Decision Options Recommendation Status
+Primary LLM provider OpenAI vs Anthropic 
+vs multi
+Multi-provider with 
+Anthropic as default
+Pending
+Self-hosted vs cloud-
+first
+On-prem vs SaaS vs 
+hybrid
+Cloud-first, on-prem 
+for enterprise
+Pending
+Marketplace revenue 
+share
+15% vs 20% vs tiered Tiered: 0-15% based 
+on volume
+Pending
+CLI distribution Homebrew vs npm vs 
+standalone binary
+Homebrew + 
+standalone binary
+Pending
+Database hosting Self-managed vs 
+managed (Neon/RDS)
+Managed PostgreSQL 
+(Neon for dev, RDS for 
+prod)
+Pending
+
+--- PAGE 8 ---
+
+Appendix A: Glossary
+Term Definition
+Agent An AI entity that autonomously performs coding 
+tasks using tools and context
+Skill A packaged, versioned unit of agent behavior 
+(e.g., "lint-and-fix", "write-tests")
+HITL Human-in-the-Loop — checkpoints where agent 
+pauses for human approval
+Token Budget Maximum tokens an agent can consume for a 
+given task
+Semantic Cache Redis-backed cache that matches similar queries 
+to serve cached LLM responses
+Model Router Component that selects the optimal LLM for 
+each task based on complexity, cost, and latency
+Skill Graph Knowledge graph built from user interactions, 
+mapping codebase patterns to effective agent 
+behaviors
+Task A single unit of work assigned to an agent (e.g., 
+"add error handling to UserService")
+Appendix B: Reference Architecture Diagrams
+B.1 Agent Execution Flow
+User Prompt
+    │
+    ▼
+┌─────────────┐
+│  Parse &    │  Tokenize, classify intent, extract parameters
+│  Classify   │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Route to   │  Select model based on task complexity
+│  Model      │  Check cache for similar past executions
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Execute    │  Run agent loop: think → act → observe → decide
+│  Loop       │  Max iterations: configurable (default: 20)
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  HITL Gate  │  If action requires approval → pause & notify
+│  (if needed)│  User approves/rejects/modifies
+└──────┬──────┘
+
+--- PAGE 9 ---
+
+       │
+       ▼
+┌─────────────┐
+│  Validate   │  Run tests, lint, typecheck on generated code
+│  Output     │  Auto-fix common issues
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Deliver    │  Apply changes, update memory, return results
+│  Results    │  Track cost, update metrics
+└─────────────┘
+B.2 Multi-Provider Failover
+Primary Request
+    │
+    ├─► Try Provider A (e.g., Claude)
+    │     │
+    │     ├─► Success → Return response, update routing weights
+    │     │
+    │     └─► Failure (rate limit / timeout)
+    │           │
+    │           ▼
+    │     Try Provider B (e.g., GPT-4o)
+    │           │
+    │           ├─► Success → Return response, update routing weights
+    │           │
+    │           └─► Failure
+    │                 │
+    │                 ▼
+    │           Try Provider C (e.g., Gemini)
+    │                 │
+    │                 ├─► Success → Return response
+    │                 │
+    │                 └─► Failure → Return cached response / queued retry
+This document serves as the single source of truth for all VigilAgent project decisions. All other 
+project documents (PRD, Architecture, Schema, API Contract, etc.) derive from and must remain 
+consistent with this master prompt.

@@ -1,0 +1,1003 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — Go Build Guide
+Version: 3.0 | Date: June 2026 | Status: Final
+1. Project Structure
+1.1 Standard Layout
+vigilagent/
+├── cmd/                        # Application entry points
+│   ├── api/                    # API server
+│   │   └── main.go
+│   ├── cli/                    # CLI tool
+│   │   └── main.go
+│   ├── worker/                 # Background workers
+│   │   └── main.go
+│   └── migration/              # Database migrations
+│       └── main.go
+│
+├── internal/                   # Private application code
+│   ├── agent/                  # Agent orchestration
+│   │   ├── agent.go
+│   │   ├── state.go
+│   │   ├── executor.go
+│   │   └── agent_test.go
+│   ├── api/                    # HTTP handlers
+│   │   ├── handler.go
+│   │   ├── middleware.go
+│   │   └── routes.go
+│   ├── auth/                   # Authentication
+│   │   ├── jwt.go
+│   │   ├── apikey.go
+│   │   └── middleware.go
+│   ├── billing/                # Billing & usage
+│   │   ├── tracker.go
+│   │   ├── budget.go
+│   │   └── billing_test.go
+│   ├── config/                 # Configuration
+│   │   ├── config.go
+│   │   └── config_test.go
+│   ├── database/               # Database layer
+│   │   ├── postgres.go
+│   │   ├── redis.go
+│   │   └── migrations/
+│   ├── llm/                    # LLM providers
+│   │   ├── provider.go
+│   │   ├── router.go
+│   │   ├── openai.go
+│   │   ├── anthropic.go
+│   │   ├── google.go
+│   │   └── ollama.go
+│   ├── memory/                 # Memory system
+│   │   ├── episodic.go
+│   │   ├── semantic.go
+│   │   └── working.go
+│   ├── skills/                 # Skills system
+│   │   ├── registry.go
+│   │   ├── installer.go
+
+--- PAGE 2 ---
+
+│   │   ├── executor.go
+│   │   └── validator.go
+│   ├── tools/                  # Tool implementations
+│   │   ├── tool.go
+│   │   ├── file.go
+│   │   ├── terminal.go
+│   │   ├── search.go
+│   │   └── git.go
+│   └── web/                    # Web dashboard
+│       ├── handler.go
+│       └── static/
+│
+├── pkg/                        # Public library code
+│   ├── sdk/                    # Go SDK for external use
+│   │   ├── client.go
+│   │   └── types.go
+│   └── telemetry/              # OpenTelemetry setup
+│       ├── tracer.go
+│       └── metrics.go
+│
+├── migrations/                 # Database migrations
+│   ├── 000001_create_users.up.sql
+│   ├── 000001_create_users.down.sql
+│   └── ...
+│
+├── scripts/                    # Build & deploy scripts
+│   ├── build.sh
+│   ├── test.sh
+│   └── deploy.sh
+│
+├── deployments/                # Infrastructure
+│   ├── docker/
+│   │   ├── Dockerfile
+│   │   └── Dockerfile.cli
+│   ├── k8s/
+│   │   ├── api.yaml
+│   │   └── worker.yaml
+│   └── terraform/
+│
+├── docs/                       # Documentation
+│   ├── architecture.md
+│   ├── api.md
+│   └── contributing.md
+│
+├── .github/                    # GitHub Actions
+│   └── workflows/
+│       ├── ci.yml
+│       ├── release.yml
+│       └── security.yml
+│
+├── go.mod                      # Go module definition
+├── go.sum                      # Dependency checksums
+├── .golangci.yml               # Linter configuration
+├── Makefile                    # Build commands
+└── README.md
+1.2 Module Structure
+// go.mod
+module github.com/vigilagent/vigilagent
+go 1.22
+
+--- PAGE 3 ---
+
+require (
+    // Web framework
+    github.com/go-chi/chi/v5 v5.0.12
+    
+    // Database
+    github.com/jackc/pgx/v5 v5.5.5
+    github.com/redis/go-redis/v9 v9.5.1
+    
+    // LLM providers
+    github.com/sashabaranov/go-openai v1.20.4
+    github.com/anthropics/anthropic-sdk-go v0.2.0
+    
+    // Observability
+    go.opentelemetry.io/otel v1.24.0
+    go.opentelemetry.io/otel/sdk v1.24.0
+    
+    // Utilities
+    github.com/google/uuid v1.6.0
+    github.com/joho/godotenv v1.5.1
+    github.com/spf13/cobra v1.8.0
+    
+    // Testing
+    github.com/stretchr/testify v1.9.0
+    github.com/testcontainers/testcontainers-go v0.30.0
+)
+2. Build System
+2.1 Makefile
+# Makefile
+# Variables
+VERSION := $(shell git describe --tags --always --dirty)
+BUILD_TIME := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+GOFLAGS := -ldflags "-X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)"
+BINARY_DIR := ./bin
+# Default target
+.PHONY: all
+all: build
+# Build all binaries
+.PHONY: build
+build:
+    @echo "Building API server..."
+    @go build $(GOFLAGS) -o $(BINARY_DIR)/vigil-api ./cmd/api
+    @echo "Building CLI..."
+    @go build $(GOFLAGS) -o $(BINARY_DIR)/vigil ./cmd/cli
+    @echo "Building worker..."
+    @go build $(GOFLAGS) -o $(BINARY_DIR)/vigil-worker ./cmd/worker
+# Development build (with race detector)
+.PHONY: dev
+dev:
+    @go build -race $(GOFLAGS) -o $(BINARY_DIR)/vigil-api ./cmd/api
+    @go build -race $(GOFLAGS) -o $(BINARY_DIR)/vigil ./cmd/cli
+# Run tests
+.PHONY: test
+
+--- PAGE 4 ---
+
+test:
+    @go test -short -race -coverprofile=coverage.out ./...
+# Run integration tests
+.PHONY: test-integration
+test-integration:
+    @go test -run Integration -v ./...
+# Run all tests with coverage
+.PHONY: test-all
+test-all: test test-integration
+    @go tool cover -html=coverage.out -o coverage.html
+    @echo "Coverage report: coverage.html"
+# Lint code
+.PHONY: lint
+lint:
+    @golangci-lint run ./...
+# Format code
+.PHONY: fmt
+fmt:
+    @gofmt -s -w .
+    @goimports -w .
+# Tidy dependencies
+.PHONY: tidy
+tidy:
+    @go mod tidy
+    @go mod verify
+# Generate code
+.PHONY: generate
+generate:
+    @go generate ./...
+# Run database migrations
+.PHONY: migrate
+migrate:
+    @migrate -path migrations -database "$(DATABASE_URL)" up
+# Build Docker images
+.PHONY: docker
+docker:
+    @docker build -t vigilagent/api:$(VERSION) -f 
+deployments/docker/Dockerfile .
+    @docker build -t vigilagent/cli:$(VERSION) -f 
+deployments/docker/Dockerfile.cli .
+# Clean build artifacts
+.PHONY: clean
+clean:
+    @rm -rf $(BINARY_DIR)
+    @rm -f coverage.out coverage.html
+# Security scan
+.PHONY: security
+security:
+    @gosec ./...
+    @go vuln check ./...
+# All checks (CI)
+.PHONY: check
+check: fmt lint test security
+
+--- PAGE 5 ---
+
+    @echo "All checks passed!"
+2.2 Docker Build
+# deployments/docker/Dockerfile
+# Build stage
+FROM golang:1.22-alpine AS builder
+WORKDIR /app
+# Copy dependencies first (for caching)
+COPY go.mod go.sum ./
+RUN go mod download
+# Copy source code
+COPY . .
+# Build with version info
+ARG VERSION=dev
+ARG BUILD_TIME
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags "-X main.version=${VERSION} -X main.buildTime=$
+{BUILD_TIME}" \
+    -o /app/bin/vigil-api ./cmd/api
+# Runtime stage
+FROM alpine:3.19
+RUN apk --no-cache add ca-certificates tzdata
+WORKDIR /app
+# Copy binary
+COPY --from=builder /app/bin/vigil-api .
+# Copy migrations
+COPY --from=builder /app/migrations ./migrations
+# Run as non-root
+RUN addgroup -g 1001 -S vigil && \
+    adduser -S vigil -u 1001
+USER vigil
+EXPOSE 8080
+ENTRYPOINT ["/app/vigil-api"]
+2.3 CLI Distribution
+# deployments/docker/Dockerfile.cli
+FROM golang:1.22-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+
+--- PAGE 6 ---
+
+    go build -o /app/bin/vigil ./cmd/cli
+FROM alpine:3.19
+RUN apk --no-cache add git
+COPY --from=builder /app/bin/vigil /usr/local/bin/vigil
+ENTRYPOINT ["/usr/local/bin/vigil"]
+3. Code Organization Patterns
+3.1 Interface-Driven Design
+// internal/llm/provider.go
+// Provider defines the interface for LLM providers
+type Provider interface {
+    // Chat sends a chat request and returns a response
+    Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
+    
+    // Stream sends a chat request and returns a stream of chunks
+    Stream(ctx context.Context, req *ChatRequest) (<-chan *ChatChunk, error)
+    
+    // HealthCheck verifies the provider is available
+    HealthCheck(ctx context.Context) error
+    
+    // Name returns the provider name
+    Name() string
+}
+// ChatRequest represents a request to an LLM
+type ChatRequest struct {
+    Model       string
+    Messages    []Message
+    MaxTokens   int
+    Temperature float64
+    Tools       []Tool
+}
+// ChatResponse represents a response from an LLM
+type ChatResponse struct {
+    Content      string
+    ToolCalls    []ToolCall
+    InputTokens  int
+    OutputTokens int
+    Cost         float64
+    Latency      time.Duration
+}
+// Message represents a chat message
+type Message struct {
+    Role       string
+    Content    string
+    ToolCallID string
+}
+// ToolCall represents a tool invocation
+type ToolCall struct {
+    ID       string
+    Name     string
+    Arguments map[string]interface{}
+}
+
+--- PAGE 7 ---
+
+3.2 Dependency Injection
+// internal/api/server.go
+type Server struct {
+    router     *chi.Mux
+    agent      *agent.Agent
+    auth       *auth.Service
+    metrics    *telemetry.Metrics
+    logger     *slog.Logger
+}
+func NewServer(
+    cfg *config.Config,
+    db *pgxpool.Pool,
+    redis *redis.Client,
+    llmRouter *llm.Router,
+) *Server {
+    // Initialize services
+    authSvc := auth.NewService(db, cfg.Auth)
+    agentSvc := agent.NewAgent(llmRouter, db, redis)
+    metrics := telemetry.NewMetrics()
+    logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+    
+    // Create server
+    s := &Server{
+        router:  chi.NewRouter(),
+        agent:   agentSvc,
+        auth:    authSvc,
+        metrics: metrics,
+        logger:  logger,
+    }
+    
+    // Setup routes
+    s.setupRoutes()
+    
+    return s
+}
+func (s *Server) setupRoutes() {
+    // Middleware
+    s.router.Use(middleware.RequestID)
+    s.router.Use(middleware.RealIP)
+    s.router.Use(NewLoggerMiddleware(s.logger))
+    s.router.Use(middleware.Recoverer)
+    
+    // Public routes
+    s.router.Group(func(r chi.Router) {
+        r.Post("/api/v1/auth/login", s.handleLogin)
+        r.Post("/api/v1/auth/register", s.handleRegister)
+        r.Get("/api/v1/health", s.handleHealth)
+    })
+    
+    // Protected routes
+    s.router.Group(func(r chi.Router) {
+        r.Use(s.auth.Middleware())
+        
+        r.Route("/api/v1", func(r chi.Router) {
+            r.Post("/tasks", s.handleCreateTask)
+            r.Get("/tasks/{id}", s.handleGetTask)
+            r.Post("/tasks/{id}/cancel", s.handleCancelTask)
+            r.Get("/tasks/{id}/stream", s.handleStreamTask)
+        })
+    })
+
+--- PAGE 8 ---
+
+}
+func (s *Server) ListenAndServe(addr string) error {
+    return http.ListenAndServe(addr, s.router)
+}
+3.3 Error Handling
+// internal/errors/errors.go
+// AppError represents an application error
+type AppError struct {
+    Code    string
+    Message string
+    Details map[string]interface{}
+    Err     error
+}
+func (e *AppError) Error() string {
+    if e.Err != nil {
+        return fmt.Sprintf("%s: %s: %v", e.Code, e.Message, e.Err)
+    }
+    return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+func (e *AppError) Unwrap() error {
+    return e.Err
+}
+// Predefined errors
+var (
+    ErrNotFound = &AppError{
+        Code:    "RESOURCE_NOT_FOUND",
+        Message: "Resource not found",
+    }
+    
+    ErrUnauthorized = &AppError{
+        Code:    "UNAUTHORIZED",
+        Message: "Authentication required",
+    }
+    
+    ErrForbidden = &AppError{
+        Code:    "FORBIDDEN",
+        Message: "Insufficient permissions",
+    }
+    
+    ErrValidation = &AppError{
+        Code:    "VALIDATION_ERROR",
+        Message: "Invalid request",
+    }
+    
+    ErrRateLimit = &AppError{
+        Code:    "RATE_LIMIT_EXCEEDED",
+        Message: "Rate limit exceeded",
+    }
+    
+    ErrBudgetExceeded = &AppError{
+        Code:    "BUDGET_EXCEEDED",
+        Message: "Budget limit exceeded",
+    }
+)
+// NewValidationError creates a validation error with details
+
+--- PAGE 9 ---
+
+func NewValidationError(message string, details map[string]interface{}) 
+*AppError {
+    return &AppError{
+        Code:    "VALIDATION_ERROR",
+        Message: message,
+        Details: details,
+    }
+}
+// WrapError wraps an error with context
+func WrapError(err error, code string, message string) *AppError {
+    return &AppError{
+        Code:    code,
+        Message: message,
+        Err:     err,
+    }
+}
+3.4 Configuration Management
+// internal/config/config.go
+type Config struct {
+    Server   ServerConfig
+    Database DatabaseConfig
+    Redis    RedisConfig
+    LLM      LLMConfig
+    Auth     AuthConfig
+    Billing  BillingConfig
+}
+type ServerConfig struct {
+    Addr         string
+    ReadTimeout  time.Duration
+    WriteTimeout time.Duration
+    IdleTimeout  time.Duration
+}
+type DatabaseConfig struct {
+    URL             string
+    MaxConns        int32
+    MinConns        int32
+    MaxConnLifetime time.Duration
+    MaxConnIdleTime time.Duration
+}
+type LLMConfig struct {
+    Providers []ProviderConfig
+    Default   string
+    Budget    float64
+}
+type ProviderConfig struct {
+    Name    string
+    APIKey  string
+    Enabled bool
+    Weight  float64
+}
+// Load reads configuration from environment and files
+func Load() (*Config, error) {
+    cfg := &Config{}
+    
+
+--- PAGE 10 ---
+
+    // Load from environment
+    if err := envconfig.Process("", cfg); err != nil {
+        return nil, fmt.Errorf("loading config: %w", err)
+    }
+    
+    // Apply defaults
+    cfg.applyDefaults()
+    
+    // Validate
+    if err := cfg.Validate(); err != nil {
+        return nil, fmt.Errorf("validating config: %w", err)
+    }
+    
+    return cfg, nil
+}
+func (c *Config) applyDefaults() {
+    if c.Server.Addr == "" {
+        c.Server.Addr = ":8080"
+    }
+    if c.Server.ReadTimeout == 0 {
+        c.Server.ReadTimeout = 30 * time.Second
+    }
+    if c.Server.WriteTimeout == 0 {
+        c.Server.WriteTimeout = 60 * time.Second
+    }
+    if c.Database.MaxConns == 0 {
+        c.Database.MaxConns = 25
+    }
+    if c.Database.MinConns == 0 {
+        c.Database.MinConns = 5
+    }
+}
+func (c *Config) Validate() error {
+    if c.Server.Addr == "" {
+        return errors.New("server address is required")
+    }
+    if c.Database.URL == "" {
+        return errors.New("database URL is required")
+    }
+    return nil
+}
+4. Testing Patterns
+4.1 Table-Driven Tests
+// internal/agent/agent_test.go
+func TestClassifyComplexity(t *testing.T) {
+    tests := []struct {
+        name     string
+        task     *Task
+        expected Complexity
+    }{
+        {
+            name: "simple formatting task",
+            task: &Task{
+                Description: "Format the code",
+
+--- PAGE 11 ---
+
+                Type:        "formatting",
+            },
+            expected: ComplexitySimple,
+        },
+        {
+            name: "complex refactoring task",
+            task: &Task{
+                Description: "Refactor the entire authentication system",
+                Type:        "refactoring",
+                FilesChanged: 15,
+            },
+            expected: ComplexityComplex,
+        },
+    }
+    router := NewModelRouter(defaultConfig())
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            got := router.classifyComplexity(tt.task)
+            if got != tt.expected {
+                t.Errorf("classifyComplexity() = %v, want %v", got, tt.expected)
+            }
+        })
+    }
+}
+4.2 Integration Tests with Testcontainers
+// internal/database/postgres_test.go
+func TestPostgresIntegration(t *testing.T) {
+    if testing.Short() {
+        t.Skip("skipping integration test")
+    }
+    ctx := context.Background()
+    
+    // Start PostgreSQL container
+    pg, err := postgres.Run(ctx,
+        "pgvector/pgvector:pg16",
+        postgres.WithDatabase("testdb"),
+        postgres.WithUsername("test"),
+        postgres.WithPassword("test"),
+    )
+    require.NoError(t, err)
+    defer pg.Terminate(ctx)
+    
+    // Connect
+    connStr, _ := pg.ConnectionString(ctx)
+    db, err := pgx.Connect(ctx, connStr)
+    require.NoError(t, err)
+    defer db.Close(ctx)
+    
+    // Run migrations
+    err = runMigrations(ctx, db)
+    require.NoError(t, err)
+    
+    // Test repository
+    repo := NewTaskRepository(db)
+    
+    task := &Task{
+        UserID:      uuid.New(),
+
+--- PAGE 12 ---
+
+        Title:       "Test task",
+        Description: "Test description",
+    }
+    
+    created, err := repo.Create(ctx, task)
+    require.NoError(t, err)
+    assert.NotEmpty(t, created.ID)
+    
+    fetched, err := repo.Get(ctx, created.ID)
+    require.NoError(t, err)
+    assert.Equal(t, task.Title, fetched.Title)
+}
+4.3 Mock Implementations
+// internal/llm/mock_provider.go
+type MockProvider struct {
+    mock.Mock
+}
+func (m *MockProvider) Chat(ctx context.Context, req *ChatRequest) 
+(*ChatResponse, error) {
+    args := m.Called(ctx, req)
+    return args.Get(0).(*ChatResponse), args.Error(1)
+}
+func (m *MockProvider) Stream(ctx context.Context, req *ChatRequest) (<-chan 
+*ChatChunk, error) {
+    args := m.Called(ctx, req)
+    return args.Get(0).(<-chan *ChatChunk), args.Error(1)
+}
+func (m *MockProvider) HealthCheck(ctx context.Context) error {
+    args := m.Called(ctx)
+    return args.Error(0)
+}
+func (m *MockProvider) Name() string {
+    return "mock"
+}
+// Usage example
+func TestAgentWithMockLLM(t *testing.T) {
+    mockLLM := new(MockProvider)
+    mockLLM.On("Chat", mock.Anything, mock.Anything).Return(&ChatResponse{
+        Content: "Task completed successfully",
+        InputTokens:  100,
+        OutputTokens: 50,
+        Cost:         0.01,
+    }, nil)
+    
+    agent := NewAgent(mockLLM, nil, nil)
+    
+    task := &Task{
+        ID:          "task-123",
+        Description: "Add error handling",
+    }
+    
+    result, err := agent.ExecuteTask(context.Background(), task)
+    
+    assert.NoError(t, err)
+    assert.Equal(t, TaskCompleted, result.Status)
+
+--- PAGE 13 ---
+
+    mockLLM.AssertExpectations(t)
+}
+5. Performance Optimization
+5.1 Connection Pooling
+// internal/database/postgres.go
+func NewPostgresPool(ctx context.Context, cfg DatabaseConfig) (*pgxpool.Pool, 
+error) {
+    config, err := pgxpool.ParseConfig(cfg.URL)
+    if err != nil {
+        return nil, fmt.Errorf("parsing config: %w", err)
+    }
+    
+    config.MaxConns = cfg.MaxConns
+    config.MinConns = cfg.MinConns
+    config.MaxConnLifetime = cfg.MaxConnLifetime
+    config.MaxConnIdleTime = cfg.MaxConnIdleTime
+    
+    // Health check interval
+    config.HealthCheckPeriod = 30 * time.Second
+    
+    pool, err := pgxpool.NewWithConfig(ctx, config)
+    if err != nil {
+        return nil, fmt.Errorf("creating pool: %w", err)
+    }
+    
+    // Verify connection
+    if err := pool.Ping(ctx); err != nil {
+        return nil, fmt.Errorf("pinging database: %w", err)
+    }
+    
+    return pool, nil
+}
+5.2 Caching Layer
+// internal/cache/cache.go
+type Cache struct {
+    redis *redis.Client
+    ttl   time.Duration
+}
+func NewCache(redis *redis.Client, ttl time.Duration) *Cache {
+    return &Cache{
+        redis: redis,
+        ttl:   ttl,
+    }
+}
+func (c *Cache) Get(ctx context.Context, key string, dest interface{}) error {
+    data, err := c.redis.Get(ctx, key).Bytes()
+    if err != nil {
+        if errors.Is(err, redis.Nil) {
+            return ErrCacheMiss
+        }
+
+--- PAGE 14 ---
+
+        return err
+    }
+    
+    return json.Unmarshal(data, dest)
+}
+func (c *Cache) Set(ctx context.Context, key string, value interface{}) error {
+    data, err := json.Marshal(value)
+    if err != nil {
+        return err
+    }
+    
+    return c.redis.Set(ctx, key, data, c.ttl).Err()
+}
+func (c *Cache) Delete(ctx context.Context, key string) error {
+    return c.redis.Del(ctx, key).Err()
+}
+// Cache-aside pattern
+func (c *Cache) GetOrCreate(ctx context.Context, key string, ttl time.Duration, 
+create func() (interface{}, error)) (interface{}, error) {
+    var result interface{}
+    
+    err := c.Get(ctx, key, &result)
+    if err == nil {
+        return result, nil
+    }
+    
+    if !errors.Is(err, ErrCacheMiss) {
+        return nil, err
+    }
+    
+    // Create and cache
+    result, err = create()
+    if err != nil {
+        return nil, err
+    }
+    
+    if err := c.Set(ctx, key, result); err != nil {
+        // Log but don't fail
+        slog.Warn("failed to cache", "key", key, "error", err)
+    }
+    
+    return result, nil
+}
+5.3 Rate Limiting
+// internal/middleware/ratelimit.go
+type RateLimiter struct {
+    redis    *redis.Client
+    limits   map[string]RateLimit
+}
+type RateLimit struct {
+    Requests int
+    Window   time.Duration
+}
+func NewRateLimiter(redis *redis.Client) *RateLimiter {
+    return &RateLimiter{
+
+--- PAGE 15 ---
+
+        redis: redis,
+        limits: map[string]RateLimit{
+            "default": {Requests: 60, Window: time.Minute},
+            "tasks":   {Requests: 30, Window: time.Minute},
+        },
+    }
+}
+func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        key := fmt.Sprintf("ratelimit:%s:%s", getUserID(r), r.URL.Path)
+        
+        limit := rl.limits["default"]
+        
+        allowed, err := rl.checkLimit(r.Context(), key, limit)
+        if err != nil {
+            http.Error(w, "Internal server error", 
+http.StatusInternalServerError)
+            return
+        }
+        
+        if !allowed {
+            w.Header().Set("Retry-After", fmt.Sprintf("%d", 
+int(limit.Window.Seconds())))
+            http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+            return
+        }
+        
+        next.ServeHTTP(w, r)
+    })
+}
+func (rl *RateLimiter) checkLimit(ctx context.Context, key string, limit 
+RateLimit) (bool, error) {
+    pipe := rl.redis.Pipeline()
+    
+    incr := pipe.Incr(ctx, key)
+    pipe.Expire(ctx, key, limit.Window)
+    
+    _, err := pipe.Exec(ctx)
+    if err != nil {
+        return false, err
+    }
+    
+    count := incr.Val()
+    return count <= int64(limit.Requests), nil
+}
+6. CI/CD Pipeline
+6.1 GitHub Actions
+# .github/workflows/ci.yml
+name: CI
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+--- PAGE 16 ---
+
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+      
+      - name: Run tests
+        run: make test
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Run linter
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+  build:
+    runs-on: ubuntu-latest
+    needs: [test, lint]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Build
+        run: make build
+      
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: bin/
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+
+--- PAGE 17 ---
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Run security scan
+        uses: securego/gosec@master
+        with:
+          args: ./...
+  release:
+    runs-on: ubuntu-latest
+    needs: [test, lint, build, security]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Build release binaries
+        run: make build
+      
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: bin/*
+7. Linter Configuration
+# .golangci.yml
+run:
+  timeout: 5m
+  skip-dirs:
+    - vendor
+    - testdata
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - gocritic
+    - revive
+    - gosec
+linters-settings:
+  errcheck:
+    check-blank: true
+  
+  govet:
+    enable-all: true
+  
+
+--- PAGE 18 ---
+
+  gosec:
+    excludes:
+      - G104  # Unhandled errors
+  
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: exported
+      - name: increment-decrement
+      - name: var-naming
+      - name: var-declaration
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: indent-error-flow
+      - name: errorf
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+    - path: _test\.go
+      linters:
+        - errcheck
+This Go build guide ensures VigilAgent follows production-grade Go patterns for maintainability, 
+performance, and reliability.

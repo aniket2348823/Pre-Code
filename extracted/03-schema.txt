@@ -1,0 +1,853 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — Database Schema
+Version: 3.0 | Date: June 2026 | Status: Final
+1. Schema Design Principles
+1. UUID Primary Keys — All entities use UUIDs for distributed-safe, non-sequential IDs
+2. Soft Deletes — Never hard-delete; use deleted_at timestamp for recoverability
+3. Audit Columns — Every table has created_at, updated_at, deleted_at
+4. JSONB for Flexibility — Use PostgreSQL JSONB for extensible metadata fields
+5. Vector Columns — Embeddings stored alongside business data via pgvector
+6. Partitioning Ready — High-volume tables designed for time-based partitioning
+2. Core Schema
+2.1 Users
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "vector";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+-- Users table
+CREATE TABLE users (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email           VARCHAR(255) NOT NULL UNIQUE,
+    email_verified  BOOLEAN NOT NULL DEFAULT FALSE,
+    password_hash   VARCHAR(255) NOT NULL,
+    display_name    VARCHAR(100),
+    avatar_url      TEXT,
+    role            VARCHAR(20) NOT NULL DEFAULT 'developer',
+    -- role: viewer, developer, admin, super_admin
+    
+    -- Subscription
+    subscription_tier   VARCHAR(20) NOT NULL DEFAULT 'free',
+    -- tier: free, pro, team, enterprise
+    subscription_id     VARCHAR(255), -- Stripe subscription ID
+    subscription_status VARCHAR(20) DEFAULT 'active',
+    
+    -- Usage quotas
+    monthly_task_limit  INT NOT NULL DEFAULT 100,
+    monthly_tokens_used BIGINT NOT NULL DEFAULT 0,
+    monthly_cost_used   DECIMAL(10,4) NOT NULL DEFAULT 0.00,
+    
+    -- Metadata
+    metadata        JSONB DEFAULT '{}',
+    preferences     JSONB DEFAULT '{}',
+    
+    -- Timestamps
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+--- PAGE 2 ---
+
+    deleted_at      TIMESTAMPTZ,
+    last_login_at   TIMESTAMPTZ
+);
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_subscription ON users(subscription_tier, 
+subscription_status);
+CREATE INDEX idx_users_metadata ON users USING gin(metadata);
+2.2 Organizations (Teams)
+CREATE TABLE organizations (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name            VARCHAR(255) NOT NULL,
+    slug            VARCHAR(100) NOT NULL UNIQUE,
+    owner_id        UUID NOT NULL REFERENCES users(id),
+    
+    -- Settings
+    settings        JSONB DEFAULT '{}',
+    -- settings includes: default_model, budget_limit, allowed_models, etc.
+    
+    -- Billing
+    billing_email   VARCHAR(255),
+    stripe_customer_id VARCHAR(255),
+    
+    -- Limits
+    member_limit    INT NOT NULL DEFAULT 5,
+    task_limit      INT NOT NULL DEFAULT 10000,
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMPTZ
+);
+CREATE TABLE organization_members (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id          UUID NOT NULL REFERENCES organizations(id) ON DELETE 
+CASCADE,
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role            VARCHAR(20) NOT NULL DEFAULT 'member',
+    -- role: member, admin, owner
+    
+    joined_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    invited_by      UUID REFERENCES users(id),
+    
+    UNIQUE(org_id, user_id)
+);
+CREATE INDEX idx_org_members_org ON organization_members(org_id);
+CREATE INDEX idx_org_members_user ON organization_members(user_id);
+2.3 Projects
+CREATE TABLE projects (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    org_id          UUID REFERENCES organizations(id),
+    
+    name            VARCHAR(255) NOT NULL,
+    description     TEXT,
+    slug            VARCHAR(100) NOT NULL,
+    
+
+--- PAGE 3 ---
+
+    -- Repository
+    repo_url        TEXT,
+    repo_branch     VARCHAR(255) DEFAULT 'main',
+    repo_provider   VARCHAR(50), -- github, gitlab, bitbucket
+    
+    -- Configuration
+    config          JSONB DEFAULT '{}',
+    -- config includes: allowed_tools, model_preferences, budget limits
+    
+    -- Statistics
+    total_tasks     INT NOT NULL DEFAULT 0,
+    total_tokens    BIGINT NOT NULL DEFAULT 0,
+    total_cost      DECIMAL(10,4) NOT NULL DEFAULT 0.00,
+    
+    -- Context
+    context_summary TEXT, -- AI-generated project summary
+    context_embedding vector(1536), -- For semantic search
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMPTZ,
+    
+    UNIQUE(user_id, slug)
+);
+CREATE INDEX idx_projects_user ON projects(user_id);
+CREATE INDEX idx_projects_org ON projects(org_id) WHERE org_id IS NOT NULL;
+CREATE INDEX idx_projects_context_embedding ON projects USING 
+ivfflat(context_embedding vector_cosine_ops) WITH (lists = 100);
+2.4 Tasks
+-- Tasks table (high-volume, partition-ready)
+CREATE TABLE tasks (
+    id              UUID NOT NULL DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    project_id      UUID REFERENCES projects(id),
+    
+    -- Task details
+    title           VARCHAR(500) NOT NULL,
+    description     TEXT NOT NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending',
+    -- status: pending, planning, executing, waiting_hitl, reviewing, completed, 
+failed, cancelled
+    
+    priority        VARCHAR(10) NOT NULL DEFAULT 'normal',
+    -- priority: low, normal, high, critical
+    
+    -- Execution
+    plan            JSONB, -- Execution plan: {"steps": [{"tool", "description", 
+"params"}], "total_steps": N}
+    steps           JSONB DEFAULT '[]', -- Array of step results: [{"step", 
+"tool", "status", "result", "duration_ms"}]
+    current_step    INT DEFAULT 0,
+    max_iterations  INT NOT NULL DEFAULT 20, -- Max agent loop iterations 
+(configurable per task)
+    result          TEXT, -- Final output
+    
+    -- LLM details
+    model_used      VARCHAR(100),
+    provider        VARCHAR(50),
+    complexity      VARCHAR(20),
+    
+
+--- PAGE 4 ---
+
+    -- Token tracking
+    input_tokens    INT NOT NULL DEFAULT 0,
+    output_tokens   INT NOT NULL DEFAULT 0,
+    total_tokens    INT NOT NULL DEFAULT 0,
+    cost            DECIMAL(10,6) NOT NULL DEFAULT 0.00,
+    
+    -- HITL
+    hitl_required   BOOLEAN NOT NULL DEFAULT FALSE,
+    hitl_checkpoint JSONB, -- {"checkpoint_id", "description", "options", 
+"waiting_since"}
+    
+    -- Error handling
+    error           TEXT,
+    retry_count     INT NOT NULL DEFAULT 0,
+    max_retries     INT NOT NULL DEFAULT 3,
+    
+    -- Metadata
+    metadata        JSONB DEFAULT '{}',
+    tags            TEXT[] DEFAULT '{}',
+    
+    -- Timestamps
+    started_at      TIMESTAMPTZ,
+    completed_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at      TIMESTAMPTZ,
+    
+    PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+-- Create partitions for current and next 3 months
+CREATE TABLE tasks_2026_07 PARTITION OF tasks
+    FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+CREATE TABLE tasks_2026_08 PARTITION OF tasks
+    FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE TABLE tasks_2026_09 PARTITION OF tasks
+    FOR VALUES FROM ('2026-09-01') TO ('2026-10-01');
+CREATE TABLE tasks_2026_10 PARTITION OF tasks
+    FOR VALUES FROM ('2026-10-01') TO ('2026-11-01');
+CREATE INDEX idx_tasks_user ON tasks(user_id, created_at DESC);
+CREATE INDEX idx_tasks_project ON tasks(project_id, created_at DESC) WHERE 
+project_id IS NOT NULL;
+CREATE INDEX idx_tasks_status ON tasks(status, created_at DESC);
+CREATE INDEX idx_tasks_model ON tasks(model_used, created_at DESC);
+CREATE INDEX idx_tasks_tags ON tasks USING gin(tags);
+2.5 Sessions & Conversations
+CREATE TABLE sessions (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    project_id      UUID REFERENCES projects(id),
+    
+    title           VARCHAR(255),
+    status          VARCHAR(20) NOT NULL DEFAULT 'active',
+    -- status: active, archived, deleted
+    
+    -- Context window management
+    total_tokens    INT NOT NULL DEFAULT 0,
+    message_count   INT NOT NULL DEFAULT 0,
+    context_summary TEXT, -- Summarized context for long sessions
+    
+
+--- PAGE 5 ---
+
+    -- Session lifecycle
+    timeout_seconds INT DEFAULT 1800, -- 30 min default, configurable
+    expires_at      TIMESTAMPTZ, -- When session auto-checkpoints
+    
+    -- Metadata
+    metadata        JSONB DEFAULT '{}',
+    
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at        TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE messages (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id      UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    
+    role            VARCHAR(20) NOT NULL,
+    -- role: user, assistant, system, tool
+    
+    content         TEXT NOT NULL,
+    
+    -- Token tracking
+    input_tokens    INT NOT NULL DEFAULT 0,
+    output_tokens   INT NOT NULL DEFAULT 0,
+    cost            DECIMAL(10,6) NOT NULL DEFAULT 0.00,
+    
+    -- Tool calls
+    tool_calls      JSONB, -- Array of tool invocations
+    tool_results    JSONB, -- Array of tool outputs
+    
+    -- Metadata
+    model           VARCHAR(100),
+    provider        VARCHAR(50),
+    latency_ms      INT,
+    metadata        JSONB DEFAULT '{}',
+    
+    -- For semantic search
+    embedding       vector(1536),
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_messages_session ON messages(session_id, created_at);
+CREATE INDEX idx_messages_role ON messages(role, created_at DESC);
+CREATE INDEX idx_messages_embedding ON messages USING ivfflat(embedding 
+vector_cosine_ops) WITH (lists = 50);
+3. Memory System Schema
+3.1 Episodic Memory
+CREATE TABLE memory_episodes (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    project_id      UUID REFERENCES projects(id),
+    
+    -- Content
+    episode_type    VARCHAR(50) NOT NULL,
+
+--- PAGE 6 ---
+
+    -- type: task_completed, decision_made, error_occurred, learning_acquired
+    title           VARCHAR(500) NOT NULL,
+    content         TEXT NOT NULL,
+    summary         TEXT,
+    
+    -- Context
+    task_id         UUID REFERENCES tasks(id),
+    session_id      UUID REFERENCES sessions(id),
+    
+    -- Importance & decay
+    importance      DECIMAL(3,2) NOT NULL DEFAULT 0.50,
+    -- importance: 0.0 (trivial) to 1.0 (critical)
+    access_count    INT NOT NULL DEFAULT 0,
+    last_accessed   TIMESTAMPTZ,
+    
+    -- Embedding for semantic search
+    embedding       vector(1536) NOT NULL,
+    
+    -- Metadata
+    tags            TEXT[] DEFAULT '{}',
+    metadata        JSONB DEFAULT '{}',
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at      TIMESTAMPTZ -- NULL means never expires
+);
+CREATE INDEX idx_memory_episodes_user ON memory_episodes(user_id, importance 
+DESC);
+CREATE INDEX idx_memory_episodes_project ON memory_episodes(project_id, 
+importance DESC) WHERE project_id IS NOT NULL;
+CREATE INDEX idx_memory_episodes_type ON memory_episodes(episode_type, 
+created_at DESC);
+CREATE INDEX idx_memory_episodes_embedding ON memory_episodes USING 
+ivfflat(embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX idx_memory_episodes_tags ON memory_episodes USING gin(tags);
+3.2 Semantic Memory (Codebase Patterns)
+CREATE TABLE memory_patterns (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    project_id      UUID NOT NULL REFERENCES projects(id),
+    
+    -- Pattern details
+    pattern_type    VARCHAR(50) NOT NULL,
+    -- type: naming_convention, code_structure, error_handling, testing_pattern,
+    --       deployment_pattern, architectural_decision
+    
+    name            VARCHAR(255) NOT NULL,
+    description     TEXT NOT NULL,
+    examples        JSONB DEFAULT '[]', -- Array of code examples
+    
+    -- Confidence
+    confidence      DECIMAL(3,2) NOT NULL DEFAULT 0.50,
+    -- confidence: 0.0 (tentative) to 1.0 (confirmed)
+    observation_count INT NOT NULL DEFAULT 1,
+    
+    -- Embedding
+    embedding       vector(1536) NOT NULL,
+    
+    -- Applicability
+    file_patterns   TEXT[] DEFAULT '{}', -- File globs where pattern applies
+
+--- PAGE 7 ---
+
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_memory_patterns_project ON memory_patterns(project_id, 
+confidence DESC);
+CREATE INDEX idx_memory_patterns_type ON memory_patterns(pattern_type, 
+confidence DESC);
+CREATE INDEX idx_memory_patterns_embedding ON memory_patterns USING 
+ivfflat(embedding vector_cosine_ops) WITH (lists = 50);
+3.3 Procedural Memory (Learned Workflows)
+CREATE TABLE memory_workflows (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    project_id      UUID REFERENCES projects(id),
+    
+    -- Workflow details
+    name            VARCHAR(255) NOT NULL,
+    description     TEXT NOT NULL,
+    steps           JSONB NOT NULL, -- Ordered array of workflow steps
+    
+    -- Performance
+    success_rate    DECIMAL(3,2) NOT NULL DEFAULT 0.50,
+    avg_duration_ms INT,
+    usage_count     INT NOT NULL DEFAULT 0,
+    
+    -- Embedding
+    embedding       vector(1536) NOT NULL,
+    
+    -- Sharing
+    is_shared       BOOLEAN NOT NULL DEFAULT FALSE,
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_memory_workflows_user ON memory_workflows(user_id, success_rate 
+DESC);
+CREATE INDEX idx_memory_workflows_shared ON memory_workflows(is_shared, 
+success_rate DESC) WHERE is_shared = TRUE;
+4. Skills Marketplace Schema
+4.1 Skills Registry
+CREATE TABLE skills (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    author_id       UUID NOT NULL REFERENCES users(id),
+    
+    -- Identity
+    name            VARCHAR(100) NOT NULL, -- Unique within author namespace
+    slug            VARCHAR(150) NOT NULL UNIQUE,
+    display_name    VARCHAR(255) NOT NULL,
+    description     TEXT NOT NULL,
+    long_description TEXT,
+    
+
+--- PAGE 8 ---
+
+    -- Versioning
+    version         VARCHAR(20) NOT NULL, -- Semver
+    version_major   INT NOT NULL,
+    version_minor   INT NOT NULL,
+    version_patch   INT NOT NULL,
+    
+    -- Category & tags
+    category        VARCHAR(50) NOT NULL,
+    -- category: code_quality, testing, deployment, documentation,
+    --           security, performance, refactoring, custom
+    tags            TEXT[] DEFAULT '{}',
+    
+    -- Package
+    package_url     TEXT NOT NULL, -- S3 URL to skill package
+    package_size    INT NOT NULL, -- Size in bytes
+    checksum        VARCHAR(64) NOT NULL, -- SHA-256
+    
+    -- Configuration
+    config_schema   JSONB, -- JSON Schema for skill parameters
+    required_tools  TEXT[] DEFAULT '{}', -- Tools skill depends on
+    required_permissions TEXT[] DEFAULT '{}', -- Permissions skill needs
+    
+    -- Quality
+    is_verified     BOOLEAN NOT NULL DEFAULT FALSE,
+    is_featured     BOOLEAN NOT NULL DEFAULT FALSE,
+    is_published    BOOLEAN NOT NULL DEFAULT FALSE,
+    
+    -- Statistics
+    install_count   INT NOT NULL DEFAULT 0,
+    rating_avg      DECIMAL(3,2) NOT NULL DEFAULT 0.00,
+    rating_count    INT NOT NULL DEFAULT 0,
+    
+    -- License
+    license         VARCHAR(50) DEFAULT 'MIT',
+    
+    -- Metadata
+    metadata        JSONB DEFAULT '{}',
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at    TIMESTAMPTZ,
+    deleted_at      TIMESTAMPTZ,
+    
+    UNIQUE(author_id, slug)
+);
+CREATE INDEX idx_skills_slug ON skills(slug);
+CREATE INDEX idx_skills_category ON skills(category, is_published DESC);
+CREATE INDEX idx_skills_author ON skills(author_id);
+CREATE INDEX idx_skills_tags ON skills USING gin(tags);
+CREATE INDEX idx_skills_rating ON skills(rating_avg DESC, rating_count DESC);
+CREATE INDEX idx_skills_installs ON skills(install_count DESC);
+CREATE INDEX idx_skills_search ON skills USING gin(to_tsvector('english', 
+display_name || ' ' || description));
+4.2 Skill Versions
+CREATE TABLE skill_versions (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    skill_id        UUID NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    
+    version         VARCHAR(20) NOT NULL,
+    changelog       TEXT,
+
+--- PAGE 9 ---
+
+    
+    -- Package
+    package_url     TEXT NOT NULL,
+    package_size    INT NOT NULL,
+    checksum        VARCHAR(64) NOT NULL,
+    
+    -- Compatibility
+    min_platform_version VARCHAR(20),
+    max_platform_version VARCHAR(20),
+    
+    -- Dependencies
+    dependencies    JSONB DEFAULT '[]', -- [{name, version_range}]
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    UNIQUE(skill_id, version)
+);
+CREATE INDEX idx_skill_versions_skill ON skill_versions(skill_id, created_at 
+DESC);
+4.3 User Skill Installations
+CREATE TABLE user_skills (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    skill_id        UUID NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    version_id      UUID NOT NULL REFERENCES skill_versions(id),
+    
+    -- Configuration
+    config          JSONB DEFAULT '{}', -- User-specific skill config
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    
+    -- Usage stats
+    usage_count     INT NOT NULL DEFAULT 0,
+    last_used_at    TIMESTAMPTZ,
+    
+    installed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    UNIQUE(user_id, skill_id)
+);
+CREATE INDEX idx_user_skills_user ON user_skills(user_id, enabled);
+CREATE INDEX idx_user_skills_skill ON user_skills(skill_id);
+4.4 Skill Reviews & Ratings
+CREATE TABLE skill_reviews (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    skill_id        UUID NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    user_id         UUID NOT NULL REFERENCES users(id),
+    
+    rating          INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
+    title           VARCHAR(255),
+    content         TEXT,
+    
+    -- Moderation
+    is_published    BOOLEAN NOT NULL DEFAULT TRUE,
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+--- PAGE 10 ---
+
+    
+    UNIQUE(skill_id, user_id) -- One review per user per skill
+);
+CREATE INDEX idx_skill_reviews_skill ON skill_reviews(skill_id, is_published, 
+created_at DESC);
+5. Audit & Compliance Schema
+5.1 Audit Log
+CREATE TABLE audit_log (
+    id              BIGSERIAL,
+    event_time      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    -- Actor
+    user_id         UUID REFERENCES users(id),
+    org_id          UUID REFERENCES organizations(id),
+    session_id      UUID,
+    
+    -- Action
+    action          VARCHAR(100) NOT NULL,
+    -- action: user.login, task.create, task.execute, skill.install,
+    --         code.write, code.delete, config.update, etc.
+    
+    -- Target
+    resource_type   VARCHAR(50),
+    resource_id     UUID,
+    
+    -- Details
+    details         JSONB DEFAULT '{}',
+    -- details includes: file_path, command, model_used, tokens, cost, etc.
+    
+    -- Request context
+    ip_address      INET,
+    user_agent      TEXT,
+    
+    -- Security
+    risk_level      VARCHAR(10) NOT NULL DEFAULT 'low',
+    -- risk_level: low, medium, high, critical
+    
+    PRIMARY KEY (id, event_time)
+) PARTITION BY RANGE (event_time);
+-- Monthly partitions
+CREATE TABLE audit_log_2026_07 PARTITION OF audit_log
+    FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+CREATE TABLE audit_log_2026_08 PARTITION OF audit_log
+    FOR VALUES FROM ('2026-08-01') TO ('2026-09-01');
+CREATE INDEX idx_audit_log_user ON audit_log(user_id, event_time DESC);
+CREATE INDEX idx_audit_log_org ON audit_log(org_id, event_time DESC) WHERE 
+org_id IS NOT NULL;
+CREATE INDEX idx_audit_log_action ON audit_log(action, event_time DESC);
+CREATE INDEX idx_audit_log_resource ON audit_log(resource_type, resource_id);
+CREATE INDEX idx_audit_log_risk ON audit_log(risk_level, event_time DESC) WHERE 
+risk_level IN ('high', 'critical');
+
+--- PAGE 11 ---
+
+5.2 Code Provenance
+CREATE TABLE code_provenance (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    task_id         UUID REFERENCES tasks(id),
+    
+    -- File details
+    file_path       TEXT NOT NULL,
+    action          VARCHAR(20) NOT NULL,
+    -- action: created, modified, deleted
+    
+    -- Content
+    content_before  TEXT, -- Previous content (for modifications)
+    content_after   TEXT, -- New content
+    diff            TEXT, -- Unified diff
+    
+    -- AI attribution
+    model_used      VARCHAR(100),
+    provider        VARCHAR(50),
+    prompt_tokens   INT,
+    completion_tokens INT,
+    cost            DECIMAL(10,6),
+    
+    -- Review
+    reviewed_by     UUID REFERENCES users(id),
+    reviewed_at     TIMESTAMPTZ,
+    review_status   VARCHAR(20) DEFAULT 'pending',
+    -- review_status: pending, approved, rejected
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_provenance_user ON code_provenance(user_id, created_at DESC);
+CREATE INDEX idx_provenance_task ON code_provenance(task_id) WHERE task_id IS 
+NOT NULL;
+CREATE INDEX idx_provenance_file ON code_provenance(file_path, created_at DESC);
+6. Billing & Usage Schema
+6.1 Usage Tracking
+CREATE TABLE usage_records (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    
+    -- Resource
+    resource_type   VARCHAR(50) NOT NULL,
+    -- resource_type: task, skill_install, api_call, storage
+    
+    resource_id     UUID,
+    
+    -- Usage
+    quantity        DECIMAL(10,4) NOT NULL,
+    unit            VARCHAR(20) NOT NULL,
+    -- unit: task, token, byte, request
+    
+    -- Cost
+    cost            DECIMAL(10,6) NOT NULL DEFAULT 0.00,
+    
+
+--- PAGE 12 ---
+
+    -- LLM-specific
+    model           VARCHAR(100),
+    provider        VARCHAR(50),
+    input_tokens    INT,
+    output_tokens   INT,
+    
+    -- Metadata
+    metadata        JSONB DEFAULT '{}',
+    
+    recorded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+) PARTITION BY RANGE (recorded_at);
+-- Monthly partitions
+CREATE TABLE usage_records_2026_07 PARTITION OF usage_records
+    FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+CREATE INDEX idx_usage_records_user ON usage_records(user_id, recorded_at DESC);
+CREATE INDEX idx_usage_records_resource ON usage_records(resource_type, 
+recorded_at DESC);
+CREATE INDEX idx_usage_records_model ON usage_records(model, recorded_at DESC) 
+WHERE model IS NOT NULL;
+6.2 Budget Tracking
+CREATE TABLE budgets (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id),
+    
+    -- Budget scope
+    scope           VARCHAR(20) NOT NULL,
+    -- scope: user, project, organization
+    scope_id        UUID NOT NULL, -- user_id, project_id, or org_id
+    
+    -- Limits
+    period          VARCHAR(20) NOT NULL,
+    -- period: daily, weekly, monthly, total
+    limit_amount    DECIMAL(10,4) NOT NULL,
+    
+    -- Current usage
+    current_usage   DECIMAL(10,4) NOT NULL DEFAULT 0.00,
+    last_reset_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    -- Alerts
+    alert_threshold DECIMAL(3,2) NOT NULL DEFAULT 0.80, -- 80% default
+    alert_sent_at   TIMESTAMPTZ,
+    
+    -- Actions
+    hard_limit      BOOLEAN NOT NULL DEFAULT TRUE,
+    -- If hard_limit: stop tasks when exceeded; else just alert
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    UNIQUE(user_id, scope, scope_id, period)
+);
+CREATE INDEX idx_budgets_user ON budgets(user_id, scope, scope_id);
+
+--- PAGE 13 ---
+
+7. Analytics Schema
+7.1 Daily Aggregates
+CREATE TABLE daily_user_stats (
+    user_id         UUID NOT NULL REFERENCES users(id),
+    date            DATE NOT NULL,
+    
+    -- Task metrics
+    tasks_created   INT NOT NULL DEFAULT 0,
+    tasks_completed INT NOT NULL DEFAULT 0,
+    tasks_failed    INT NOT NULL DEFAULT 0,
+    tasks_hitl      INT NOT NULL DEFAULT 0,
+    
+    -- Token metrics
+    input_tokens    BIGINT NOT NULL DEFAULT 0,
+    output_tokens   BIGINT NOT NULL DEFAULT 0,
+    total_tokens    BIGINT NOT NULL DEFAULT 0,
+    
+    -- Cost metrics
+    total_cost      DECIMAL(10,4) NOT NULL DEFAULT 0.00,
+    
+    -- Model distribution
+    model_usage     JSONB DEFAULT '{}',
+    -- {"claude-sonnet": 45, "gpt-4o": 30, "haiku": 25}
+    
+    -- Performance
+    avg_task_duration_ms INT,
+    success_rate    DECIMAL(3,2),
+    
+    PRIMARY KEY (user_id, date)
+);
+CREATE INDEX idx_daily_user_stats_date ON daily_user_stats(date DESC);
+7.2 Model Performance Tracking
+CREATE TABLE model_performance (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    model           VARCHAR(100) NOT NULL,
+    provider        VARCHAR(50) NOT NULL,
+    
+    -- Performance metrics
+    total_requests  INT NOT NULL DEFAULT 0,
+    successful_requests INT NOT NULL DEFAULT 0,
+    failed_requests INT NOT NULL DEFAULT 0,
+    
+    -- Latency
+    avg_latency_ms  INT,
+    p50_latency_ms  INT,
+    p95_latency_ms  INT,
+    p99_latency_ms  INT,
+    
+    -- Tokens
+    avg_input_tokens  INT,
+    avg_output_tokens INT,
+    
+    -- Cost
+    cost_per_1k_input  DECIMAL(10,6),
+    cost_per_1k_output DECIMAL(10,6),
+    
+    -- Quality
+
+--- PAGE 14 ---
+
+    avg_rating      DECIMAL(3,2),
+    task_success_rate DECIMAL(3,2),
+    
+    -- Time window
+    window_start    TIMESTAMPTZ NOT NULL,
+    window_end      TIMESTAMPTZ NOT NULL,
+    
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_model_performance_model ON model_performance(model, 
+window_start DESC);
+CREATE INDEX idx_model_performance_provider ON model_performance(provider, 
+window_start DESC);
+8. Migration Strategy
+8.1 Migration Tool
+Use golang-migrate/migrate for schema migrations:
+# Create new migration
+migrate create -ext sql -dir migrations -seq create_users_table
+# Run migrations
+migrate -path migrations -database "postgres://localhost:5432/vigilagent?
+sslmode=disable" up
+# Rollback
+migrate -path migrations -database "postgres://localhost:5432/vigilagent?
+sslmode=disable" down 1
+8.2 Migration Naming Convention
+000001_create_users_table.up.sql
+000001_create_users_table.down.sql
+000002_create_projects_table.up.sql
+000002_create_projects_table.down.sql
+8.3 Data Migration Strategy
+1. Zero-Downtime Migrations — Use CREATE TABLE without locks, then ALTER TABLE 
+with NOT VALID constraints
+2. Backfill Data — Run data migrations as background jobs, not in migration files
+3. Rollback Safety — Every migration must have a down migration that restores the previous 
+state
+4. Test Migrations — Run migrations against a copy of production data before deploying
+
+--- PAGE 15 ---
+
+9. Performance Optimization
+9.1 Connection Pooling
+// Using pgxpool for connection pooling
+config, err := pgxpool.ParseConfig(databaseURL)
+config.MaxConns = 25
+config.MinConns = 5
+config.MaxConnLifetime = time.Hour
+config.MaxConnIdleTime = 30 * time.Minute
+pool, err := pgxpool.NewWithConfig(ctx, config)
+9.2 Query Optimization
+-- Use partial indexes for frequently filtered queries
+CREATE INDEX idx_tasks_active ON tasks(user_id, created_at DESC) 
+WHERE status NOT IN ('completed', 'failed', 'cancelled');
+-- Use covering indexes for common queries
+CREATE INDEX idx_tasks_list ON tasks(user_id, status, created_at DESC) 
+INCLUDE (title, model_used, cost);
+-- Use BRIN indexes for time-series data
+CREATE INDEX idx_audit_log_time ON audit_log USING brin(event_time);
+9.3 Read Replicas
+// Primary for writes, replicas for reads
+type DBPool struct {
+    primary  *pgxpool.Pool
+    replicas []*pgxpool.Pool
+    counter  uint64
+}
+func (p *DBPool) Read() *pgxpool.Pool {
+    idx := atomic.AddUint64(&p.counter, 1) % uint64(len(p.replicas))
+    return p.replicas[idx]
+}
+func (p *DBPool) Write() *pgxpool.Pool {
+    return p.primary
+}
+10. Backup & Recovery
+10.1 Backup Schedule
+Component Method Frequency Retention
+PostgreSQL pg_dump + WAL 
+archiving
+Continuous 30 days
+Redis RDB snapshots + AOF Every 15 min 7 days
+S3/MinIO Cross-region 
+replication
+Real-time Indefinite
+
+--- PAGE 16 ---
+
+10.2 Recovery Procedures
+Scenario RTO RPO Procedure
+Single table corruption < 5 min 0 Restore from backup, 
+replay WAL
+Full database failure < 15 min 1 min Promote replica, restore 
+from backup
+Region failure < 30 min 5 min DNS failover, restore 
+from cross-region 
+backup
+This schema document defines the complete data model for VigilAgent. All database changes must 
+be submitted as migrations with corresponding schema updates.

@@ -1,0 +1,962 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — LLM Strategy
+Version: 3.0 | Date: June 2026 | Status: Final
+1. LLM Strategy Overview
+VigilAgent's LLM strategy is built on three pillars: Multi-Provider Resilience, Cost-Aware 
+Routing, and Quality-Optimized Prompting. The goal is to deliver maximum output quality at 
+minimum cost by intelligently selecting the right model for each task.
+1.1 Strategic Principles
+1. No Single Point of Failure — Never depend on one LLM provider
+2. Cost-Performance Optimization — Route simple tasks to cheap models, complex tasks to 
+powerful models
+3. Graceful Degradation — Always have a fallback path when providers fail
+4. Continuous Learning — Track provider performance and adjust routing dynamically
+5. User Transparency — Always show which model was used and why
+2. Provider Landscape (2026)
+2.1 Provider Comparison Matrix
+Provider Model Strengths Weaknesses Cost (per 1M 
+tokens)
+Anthropic Claude Opus 4 Best reasoning, 
+large context
+Expensive, slower $15 input / $75 
+output
+Anthropic Claude Sonnet 4 Balanced 
+cost/quality
+Less powerful 
+than Opus
+$3 input / $15 
+output
+Anthropic Claude Haiku 3.5 Fast, cheap Less capable $0.80 input / $4 
+output
+OpenAI GPT-4.5 Strong general 
+capability
+Very expensive $15 input / $60 
+output
+OpenAI GPT-4o Fast, multimodal Moderate 
+reasoning
+$2.50 input / $10 
+output
+OpenAI GPT-4o-mini Very cheap, fast Limited reasoning $0.15 input / 
+$0.60 output
+Google Gemini 2.5 Pro Long context, fast Less coding focus $1.25 input / $10 
+output
+Google Gemini 2.0 Flash Ultra-fast, free tier Lower quality $0.075 input / 
+$0.30 output
+
+--- PAGE 2 ---
+
+Provider Model Strengths Weaknesses Cost (per 1M 
+tokens)
+DeepSeek R1 Strong reasoning, 
+cheap
+Rate limits $0.55 input / 
+$2.19 output
+Local Llama 3.1 405B No API cost, 
+private
+Requires GPU Hardware cost 
+only
+2.2 Provider Selection Criteria
+┌─────────────────────────────────────────────────────────────┐
+│              LLM PROVIDER SELECTION MATRIX                   │
+│                                                              │
+│  Task Type          │ Best Model      │ Why                  │
+│  ─────────────────  │ ──────────────  │ ──────────────────── │
+│  Code formatting    │ GPT-4o-mini     │ Fast, cheap, exact   │
+│  Simple bug fix     │ Claude Haiku    │ Good code, low cost  │
+│  Feature addition   │ Claude Sonnet   │ Balanced quality     │
+│  Architecture refac │ Claude Opus     │ Best reasoning       │
+│  Security fix       │ Claude Opus     │ Must be correct      │
+│  Code review        │ GPT-4o          │ Fast, comprehensive  │
+│  Documentation      │ Claude Haiku    │ Good prose, cheap    │
+│  Test generation    │ Claude Sonnet   │ Good test patterns   │
+│  Debugging          │ Claude Opus     │ Deep analysis        │
+│  Learning/tutorial  │ GPT-4o-mini     │ Cheap, explanatory   │
+└─────────────────────────────────────────────────────────────┘
+3. Model Routing Architecture
+3.1 Routing Algorithm
+type ModelRouter struct {
+    providers    map[string]LLMProvider
+    costTracker  *CostTracker
+    healthMon    *HealthMonitor
+    perfTracker  *PerformanceTracker
+    config       *RouterConfig
+}
+type RoutingDecision struct {
+    Provider     string
+    Model        string
+    Reason       string
+    EstCost      float64
+    EstLatency   time.Duration
+    Confidence   float64
+    Fallbacks    []FallbackOption
+}
+type FallbackOption struct {
+    Provider string
+    Model    string
+    EstCost  float64
+}
+func (r *ModelRouter) Route(ctx context.Context, task *Task) (*RoutingDecision, 
+
+--- PAGE 3 ---
+
+error) {
+    // Step 1: Classify task complexity
+    complexity := r.classifyComplexity(task)
+    
+    // Step 2: Get healthy providers
+    healthy := r.healthMon.GetHealthyProviders()
+    
+    // Step 3: Filter by capabilities
+    capable := r.filterByCapabilities(healthy, task.RequiredCapabilities)
+    
+    // Step 4: Get user preferences
+    prefs := r.getUserPreferences(ctx, task.UserID)
+    
+    // Step 5: Rank candidates
+    candidates := r.rankCandidates(capable, complexity, prefs)
+    
+    // Step 6: Select primary and fallbacks
+    primary := candidates[0]
+    fallbacks := candidates[1:4] // Top 3 fallbacks
+    
+    // Step 7: Check budget
+    if !r.costTracker.HasBudget(ctx, primary.EstCost) {
+        // Find cheaper alternative
+        primary, fallbacks = r.findCheaperAlternative(candidates, task)
+    }
+    
+    return &RoutingDecision{
+        Provider:   primary.Provider,
+        Model:      primary.Model,
+        Reason:     primary.Reason,
+        EstCost:    primary.EstCost,
+        EstLatency: primary.EstLatency,
+        Confidence: primary.Confidence,
+        Fallbacks:  fallbacks,
+    }, nil
+}
+3.2 Complexity Classification
+type Complexity float64
+const (
+    ComplexitySimple    Complexity = 0.2  // Formatting, renaming, docs
+    ComplexityModerate  Complexity = 0.5  // Bug fixes, small features
+    ComplexityComplex   Complexity = 0.8  // Architecture, multi-file
+    ComplexityCritical  Complexity = 1.0  // Security, production
+)
+func (r *ModelRouter) classifyComplexity(task *Task) Complexity {
+    score := 0.0
+    
+    // Factor 1: Task type
+    switch task.Type {
+    case "formatting", "rename", "documentation":
+        score += 0.1
+    case "bug_fix", "small_feature":
+        score += 0.3
+    case "refactoring", "feature":
+        score += 0.5
+    case "architecture", "security":
+        score += 0.7
+    }
+    
+
+--- PAGE 4 ---
+
+    // Factor 2: Scope (files affected)
+    fileCount := len(task.FilesChanged)
+    if fileCount > 10 {
+        score += 0.3
+    } else if fileCount > 5 {
+        score += 0.2
+    } else if fileCount > 1 {
+        score += 0.1
+    }
+    
+    // Factor 3: Reasoning depth
+    if task.RequiresReasoning {
+        score += 0.2
+    }
+    
+    // Factor 4: Novelty (new patterns vs. known patterns)
+    if task.IsNovel {
+        score += 0.15
+    }
+    
+    // Factor 5: Risk level
+    if task.Tags.Contains("security") || task.Tags.Contains("production") {
+        score += 0.3
+    }
+    
+    return Complexity(math.Min(1.0, score))
+}
+3.3 Provider Health Monitoring
+type HealthMonitor struct {
+    providers   map[string]*ProviderHealth
+    checkInterval time.Duration
+    mu          sync.RWMutex
+}
+type ProviderHealth struct {
+    Status        ProviderStatus
+    LatencyP50    time.Duration
+    LatencyP95    time.Duration
+    ErrorRate     float64
+    SuccessRate   float64
+    LastChecked   time.Duration
+    ConsecutiveFails int
+}
+type ProviderStatus int
+const (
+    StatusHealthy ProviderStatus = iota
+    StatusDegraded
+    StatusUnhealthy
+    StatusDown
+)
+func (h *HealthMonitor) GetHealthyProviders() []string {
+    h.mu.RLock()
+    defer h.mu.RUnlock()
+    
+    var healthy []string
+    for name, health := range h.providers {
+        if health.Status == StatusHealthy || health.Status == StatusDegraded {
+            healthy = append(healthy, name)
+
+--- PAGE 5 ---
+
+        }
+    }
+    return healthy
+}
+func (h *HealthMonitor) CheckHealth(ctx context.Context, provider string) {
+    start := time.Now()
+    
+    err := h.providers[provider].Provider.HealthCheck(ctx)
+    latency := time.Since(start)
+    
+    h.mu.Lock()
+    defer h.mu.Unlock()
+    
+    health := h.providers[provider]
+    health.LastChecked = time.Now()
+    
+    if err != nil {
+        health.ConsecutiveFails++
+        health.ErrorRate = math.Min(1.0, health.ErrorRate+0.1)
+        
+        if health.ConsecutiveFails >= 3 {
+            health.Status = StatusDown
+        } else if health.ConsecutiveFails >= 1 {
+            health.Status = StatusUnhealthy
+        }
+    } else {
+        health.ConsecutiveFails = 0
+        health.ErrorRate = math.Max(0, health.ErrorRate-0.05)
+        health.LatencyP50 = latency
+        
+        if health.ErrorRate < 0.1 {
+            health.Status = StatusHealthy
+        } else {
+            health.Status = StatusDegraded
+        }
+    }
+}
+4. Failover Strategy
+4.1 Failover Chain
+Primary Provider (e.g., Claude Sonnet)
+    │
+    ├── Success ────────────────────────────────  Return Response▶
+    │
+    └── Failure (rate limit / timeout / error)
+          │
+          ▼
+        Fallback 1 (e.g., GPT-4o)
+          │
+          ├── Success ──────────────────────────  Return Response▶
+          │
+          └── Failure
+                │
+                ▼
+              Fallback 2 (e.g., Gemini Pro)
+                │
+                ├── Success ────────────────────  Return Response▶
+
+--- PAGE 6 ---
+
+                │
+                └── Failure
+                      │
+                      ▼
+                    Fallback 3 (e.g., DeepSeek R1)
+                      │
+                      ├── Success ──────────────  Return Response▶
+                      │
+                      └── Failure
+                            │
+                            ▼
+                          Cache Lookup
+                            │
+                            ├── Hit ────────────  Return Cached Response▶
+                            │
+                            └── Miss
+                                  │
+                                  ▼
+                                Queue for Retry
+4.2 Failover Implementation
+func (r *ModelRouter) ExecuteWithFailover(ctx context.Context, task *Task) 
+(*LLMResponse, error) {
+    decision, err := r.Route(ctx, task)
+    if err != nil {
+        return nil, fmt.Errorf("routing failed: %w", err)
+    }
+    
+    // Try primary
+    resp, err := r.executeProvider(ctx, decision.Provider, decision.Model, task)
+    if err == nil {
+        r.recordSuccess(decision.Provider, decision.Model, resp)
+        return resp, nil
+    }
+    
+    r.recordFailure(decision.Provider, decision.Model, err)
+    
+    // Try fallbacks
+    for _, fallback := range decision.Fallbacks {
+        resp, err := r.executeProvider(ctx, fallback.Provider, fallback.Model, 
+task)
+        if err == nil {
+            r.recordSuccess(fallback.Provider, fallback.Model, resp)
+            return resp, nil
+        }
+        r.recordFailure(fallback.Provider, fallback.Model, err)
+    }
+    
+    // All providers failed — try cache
+    cached, err := r.cache.Get(ctx, task.CacheKey())
+    if err == nil && cached != nil {
+        return cached.ToLLMResponse(), nil
+    }
+    
+    // Queue for retry
+    return nil, ErrAllProvidersFailed
+}
+4.3 Circuit Breaker Pattern
+type CircuitBreaker struct {
+
+--- PAGE 7 ---
+
+    state       CircuitState
+    failCount   int
+    successCount int
+    lastFailure time.Time
+    threshold   int
+    timeout     time.Duration
+    mu          sync.RWMutex
+}
+type CircuitState int
+const (
+    CircuitClosed CircuitState = iota  // Normal operation
+    CircuitOpen                        // Failing, reject requests
+    CircuitHalfOpen                    // Testing if recovered
+)
+func (cb *CircuitBreaker) Execute(fn func() error) error {
+    cb.mu.RLock()
+    state := cb.state
+    cb.mu.RUnlock()
+    
+    if state == CircuitOpen {
+        if time.Since(cb.lastFailure) > cb.timeout {
+            cb.mu.Lock()
+            cb.state = CircuitHalfOpen
+            cb.mu.Unlock()
+        } else {
+            return ErrCircuitOpen
+        }
+    }
+    
+    err := fn()
+    
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+    
+    if err != nil {
+        cb.failCount++
+        cb.lastFailure = time.Now()
+        
+        if cb.failCount >= cb.threshold {
+            cb.state = CircuitOpen
+        }
+        return err
+    }
+    
+    cb.successCount++
+    if cb.state == CircuitHalfOpen {
+        cb.state = CircuitClosed
+        cb.failCount = 0
+    }
+    return nil
+}
+5. Prompt Engineering
+5.1 System Prompt Template
+const SystemPrompt = `You are VigilAgent, an expert AI coding assistant.
+
+--- PAGE 8 ---
+
+## Core Rules
+1. Always read relevant files before making changes
+2. Follow existing code conventions and patterns
+3. Make minimal, focused changes
+4. Include all necessary imports
+5. Remove unused code
+## Output Format
+- Use str_replace for targeted edits
+- Use write_file only for new files
+- Always explain your changes briefly
+## Safety Rules
+- Never delete files without explicit permission
+- Never run destructive commands
+- Always verify assumptions before acting
+- Ask for clarification if the task is ambiguous
+## Context
+Project: {{.ProjectName}}
+Language: {{.Language}}
+Framework: {{.Framework}}
+Conventions: {{.Conventions}}
+`
+func BuildSystemPrompt(project *Project, task *Task) string {
+    tmpl, err := template.New("system").Parse(SystemPrompt)
+    if err != nil {
+        return SystemPrompt // Fallback to raw template
+    }
+    
+    var buf bytes.Buffer
+    tmpl.Execute(&buf, map[string]interface{}{
+        "ProjectName":  project.Name,
+        "Language":     project.Language,
+        "Framework":    project.Framework,
+        "Conventions":  project.Conventions,
+    })
+    
+    return buf.String()
+}
+5.2 Context Window Management
+type ContextWindow struct {
+    MaxTokens    int
+    UsedTokens   int
+    Messages     []Message
+    SystemPrompt string
+    Compressor   *ContextCompressor
+}
+func (cw *ContextWindow) AddMessage(msg Message) error {
+    msgTokens := estimateTokens(msg.Content)
+    
+    if cw.UsedTokens+msgTokens > cw.MaxTokens {
+        // Compress older messages
+        compressed, err := cw.Compressor.Compress(cw.Messages)
+        if err != nil {
+            return fmt.Errorf("compression failed: %w", err)
+        }
+        cw.Messages = compressed
+
+--- PAGE 9 ---
+
+        cw.UsedTokens = estimateMessagesTokens(cw.Messages)
+    }
+    
+    cw.Messages = append(cw.Messages, msg)
+    cw.UsedTokens += msgTokens
+    return nil
+}
+type ContextCompressor struct {
+    LLM LLMProvider
+}
+func (cc *ContextCompressor) Compress(messages []Message) ([]Message, error) {
+    // Keep system prompt and last N messages
+    keepCount := 10
+    if len(messages) <= keepCount {
+        return messages, nil
+    }
+    
+    toCompress := messages[:len(messages)-keepCount]
+    toKeep := messages[len(messages)-keepCount:]
+    
+    // Summarize old messages
+    summary, err := cc.LLM.Chat(context.Background(), &LLMRequest{
+        Messages: []Message{
+            {Role: "system", Content: "Summarize the following conversation 
+concisely, preserving key decisions and context:"},
+            {Role: "user", Content: formatMessages(toCompress)},
+        },
+        MaxTokens: 500,
+    })
+    if err != nil {
+        return messages, nil // Return original on failure
+    }
+    
+    // Prepend summary
+    compressed := []Message{
+        {Role: "system", Content: fmt.Sprintf("Previous conversation summary:
+\n%s", summary.Content)},
+    }
+    compressed = append(compressed, toKeep...)
+    
+    return compressed, nil
+}
+5.3 Prompt Caching Strategy
+type PromptCache struct {
+    redis    *redis.Client
+    ttl      time.Duration
+    hitCount prometheus.Counter
+    missCount prometheus.Counter
+}
+func (pc *PromptCache) Get(ctx context.Context, prompt string) (*CachedResponse, 
+bool) {
+    key := pc.cacheKey(prompt)
+    
+    data, err := pc.redis.Get(ctx, key).Bytes()
+    if err != nil {
+        pc.missCount.Inc()
+        return nil, false
+    }
+
+--- PAGE 10 ---
+
+    
+    var resp CachedResponse
+    json.Unmarshal(data, &resp)
+    
+    pc.hitCount.Inc()
+    return &resp, true
+}
+func (pc *PromptCache) Set(ctx context.Context, prompt string, response 
+*CachedResponse) {
+    key := pc.cacheKey(prompt)
+    
+    data, _ := json.Marshal(response)
+    pc.redis.Set(ctx, key, data, pc.ttl)
+}
+func (pc *PromptCache) cacheKey(prompt string) string {
+    hash := sha256.Sum256([]byte(prompt))
+    return fmt.Sprintf("llm:cache:%x", hash[:16])
+}
+// Semantic cache for similar queries
+func (pc *PromptCache) SemanticSearch(ctx context.Context, query string) 
+(*CachedResponse, bool) {
+    embedding := generateEmbedding(query)
+    
+    // Search for similar cached responses
+    results, err := pc.redis.VectorSearch(ctx, "llm:semantic", embedding, 1, 
+0.85)
+    if err != nil || len(results) == 0 {
+        return nil, false
+    }
+    
+    // Found a similar response
+    var resp CachedResponse
+    json.Unmarshal([]byte(results[0].Payload), &resp)
+    return &resp, true
+}
+6. Token Optimization
+6.1 Token Counting
+type TokenCounter struct {
+    provider TokenCounterProvider
+}
+func (tc *TokenCounter) Count(model string, messages []Message) *TokenCount {
+    // Use model-specific tokenizer
+    tokenizer, ok := tokenizers[model]
+    if !ok {
+        tokenizer = tokenizers["default"]
+    }
+    
+    inputTokens := 0
+    for _, msg := range messages {
+        inputTokens += tokenizer.Count(msg.Content)
+    }
+    
+    return &TokenCount{
+
+--- PAGE 11 ---
+
+        InputTokens:  inputTokens,
+        MaxOutputTokens: getMaxTokens(model),
+    }
+}
+func getMaxTokens(model string) int {
+    maxTokens := map[string]int{
+        "claude-opus-4":    8192,
+        "claude-sonnet-4":  8192,
+        "claude-haiku-3.5": 8192,
+        "gpt-4.5":         16384,
+        "gpt-4o":          16384,
+        "gpt-4o-mini":     16384,
+        "gemini-2.5-pro":  8192,
+    }
+    return maxTokens[model]
+}
+6.2 Response Parsing
+type ResponseParser struct {
+    codeBlockRegex *regexp.Regexp
+    toolCallRegex  *regexp.Regexp
+}
+func NewResponseParser() *ResponseParser {
+    return &ResponseParser{
+        codeBlockRegex: regexp.MustCompile("```(\\w+)?\\n(.*?)```"),
+        toolCallRegex:  regexp.MustCompile(`\{"tool":\s*"(\w+)",\s*"params":
+\s*(.*?)\}`),
+    }
+}
+func (rp *ResponseParser) ParseResponse(content string) *ParsedResponse {
+    resp := &ParsedResponse{
+        Content:     content,
+        CodeBlocks:  rp.extractCodeBlocks(content),
+        ToolCalls:   rp.extractToolCalls(content),
+        HasDecision: rp.detectDecision(content),
+        HasQuestion: rp.detectQuestion(content),
+    }
+    
+    // Calculate complexity for routing
+    resp.Complexity = rp.estimateComplexity(resp)
+    
+    return resp
+}
+func (rp *ResponseParser) extractCodeBlocks(content string) []CodeBlock {
+    matches := rp.codeBlockRegex.FindAllStringSubmatch(content, -1)
+    
+    var blocks []CodeBlock
+    for _, match := range matches {
+        blocks = append(blocks, CodeBlock{
+            Language: match[1],
+            Code:     match[2],
+        })
+    }
+    return blocks
+}
+
+--- PAGE 12 ---
+
+7. Cost Optimization Strategies
+7.1 Cost-Aware Execution
+type CostOptimizer struct {
+    budgetManager *BudgetManager
+    priceTable    *PriceTable
+}
+func (co *CostOptimizer) OptimizeExecution(task *Task, decision 
+*RoutingDecision) *ExecutionPlan {
+    plan := &ExecutionPlan{
+        Primary: decision,
+        Steps:   []ExecutionStep{},
+    }
+    
+    // Estimate total cost
+    estimatedCost := co.estimateCost(task, decision)
+    
+    // Check if we can use a cheaper model
+    if estimatedCost > task.Budget {
+        cheaper := co.findCheaperAlternative(task, decision)
+        if cheaper != nil {
+            plan.Primary = cheaper
+            estimatedCost = co.estimateCost(task, cheaper)
+        }
+    }
+    
+    // Add caching step if applicable
+    if co.canCache(task) {
+        plan.Steps = append(plan.Steps, ExecutionStep{
+            Type: "cache_lookup",
+            Description: "Check semantic cache for similar past tasks",
+        })
+    }
+    
+    // Add compression step if context is large
+    if task.ContextSize > 10000 {
+        plan.Steps = append(plan.Steps, ExecutionStep{
+            Type: "context_compression",
+            Description: "Compress context to reduce token usage",
+        })
+    }
+    
+    plan.EstimatedCost = estimatedCost
+    return plan
+}
+func (co *CostOptimizer) estimateCost(task *Task, decision *RoutingDecision) 
+float64 {
+    price := co.priceTable.GetPrice(decision.Provider, decision.Model)
+    
+    inputTokens := estimateInputTokens(task)
+    outputTokens := estimateOutputTokens(task)
+    
+    inputCost := float64(inputTokens) / 1_000_000 * price.InputPrice
+    outputCost := float64(outputTokens) / 1_000_000 * price.OutputPrice
+    
+    return inputCost + outputCost
+}
+
+--- PAGE 13 ---
+
+7.2 Batch Processing
+type BatchProcessor struct {
+    queue    *TaskQueue
+    batchSize int
+    interval time.Duration
+}
+func (bp *BatchProcessor) ProcessBatch(ctx context.Context) error {
+    tasks, err := bp.queue.DequeueBatch(bp.batchSize)
+    if err != nil {
+        return fmt.Errorf("dequeue failed: %w", err)
+    }
+    
+    if len(tasks) == 0 {
+        return nil
+    }
+    
+    // Group by model for efficient batching
+    groups := groupByModel(tasks)
+    
+    for model, batch := range groups {
+        // Use batch API for 50% discount
+        err := bp.processBatchWithModel(ctx, model, batch)
+        if err != nil {
+            // Fall back to individual processing
+            for _, task := range batch {
+                bp.queue.Requeue(task)
+            }
+        }
+    }
+    
+    return nil
+}
+func (bp *BatchProcessor) processBatchWithModel(ctx context.Context, model 
+string, tasks []*Task) error {
+    // Build batch request
+    requests := make([]BatchRequest, len(tasks))
+    for i, task := range tasks {
+        requests[i] = BatchRequest{
+            ID:      task.ID,
+            Prompt:  task.BuildPrompt(),
+            MaxTokens: 4096,
+        }
+    }
+    
+    // Submit to batch API
+    results, err := bp.submitBatch(ctx, model, requests)
+    if err != nil {
+        return err
+    }
+    
+    // Process results
+    for _, result := range results {
+        bp.processResult(result)
+    }
+    
+    return nil
+}
+
+--- PAGE 14 ---
+
+8. Provider-Specific Optimizations
+8.1 Anthropic (Claude)
+type AnthropicAdapter struct {
+    client  *anthropic.Client
+    cache   *PromptCache
+}
+func (a *AnthropicAdapter) Chat(ctx context.Context, req *LLMRequest) 
+(*LLMResponse, error) {
+    // Use extended thinking for complex tasks
+    if req.Complexity > 0.7 {
+        req.Messages = append(req.Messages, Message{
+            Role:    "user",
+            Content: "Think step by step before responding.",
+        })
+    }
+    
+    // Use prompt caching for static content
+    if a.cache.IsEnabled() {
+        req.System = a.cache.CacheSystemPrompt(req.System)
+    }
+    
+    resp, err := a.client.Messages.Create(ctx, &anthropic.MessageRequest{
+        Model:     req.Model,
+        MaxTokens: req.MaxTokens,
+        System:    req.System,
+        Messages:  req.Messages,
+    })
+    if err != nil {
+        return nil, err
+    }
+    
+    return &LLMResponse{
+        Content:    resp.Content[0].Text,
+        InputTokens:  resp.Usage.InputTokens,
+        OutputTokens: resp.Usage.OutputTokens,
+        Cost:       a.calculateCost(resp.Usage),
+    }, nil
+}
+8.2 OpenAI (GPT)
+type OpenAIAdapter struct {
+    client *openai.Client
+}
+func (o *OpenAIAdapter) Chat(ctx context.Context, req *LLMRequest) 
+(*LLMResponse, error) {
+    // Use structured outputs for JSON responses
+    if req.ResponseFormat == "json" {
+        req.Messages = append(req.Messages, Message{
+            Role:    "system",
+            Content: "You must respond with valid JSON only.",
+        })
+    }
+    
+    // Use function calling for tool use
+    if len(req.Tools) > 0 {
+        return o.chatWithTools(ctx, req)
+    }
+
+--- PAGE 15 ---
+
+    
+    resp, err := o.client.Chat.Create(ctx, &openai.ChatRequest{
+        Model:    req.Model,
+        Messages: o.convertMessages(req.Messages),
+        MaxTokens: req.MaxTokens,
+    })
+    if err != nil {
+        return nil, err
+    }
+    
+    return &LLMResponse{
+        Content:    resp.Choices[0].Message.Content,
+        InputTokens:  resp.Usage.PromptTokens,
+        OutputTokens: resp.Usage.CompletionTokens,
+        Cost:       o.calculateCost(resp.Usage),
+    }, nil
+}
+8.3 Local Models (Ollama)
+type OllamaAdapter struct {
+    client *ollama.Client
+}
+func (o *OllamaAdapter) Chat(ctx context.Context, req *LLMRequest) 
+(*LLMResponse, error) {
+    // Local models: no API cost, but slower
+    // Use for:
+    // - Simple tasks (formatting, renaming)
+    // - Offline mode
+    // - Privacy-sensitive code
+    //
+    // NOTE: Ollama embedding models (e.g., all-minilm) use 384 dimensions,
+    // while the main schema uses 1536 (OpenAI text-embedding-3-small).
+    // If using Ollama for embeddings, ensure dimension compatibility or
+    // maintain a separate vector index for local model embeddings.
+    
+    resp, err := o.client.Chat(ctx, &ollama.ChatRequest{
+        Model:    req.Model,
+        Messages: o.convertMessages(req.Messages),
+    })
+    if err != nil {
+        return nil, err
+    }
+    
+    return &LLMResponse{
+        Content:      resp.Message.Content,
+        InputTokens:  resp EvalCount, // Ollama provides token counts
+        OutputTokens: resp.EvalCount,
+        Cost:         0, // Free!
+    }, nil
+}
+9. Monitoring & Observability
+9.1 Key Metrics
+var (
+    // Request metrics
+
+--- PAGE 16 ---
+
+    llmRequestsTotal = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "vigilagent_llm_requests_total",
+            Help: "Total LLM requests",
+        },
+        []string{"provider", "model", "status"},
+    )
+    
+    // Latency metrics
+    llmLatencyHistogram = prometheus.NewHistogramVec(
+        prometheus.HistogramOpts{
+            Name:    "vigilagent_llm_latency_seconds",
+            Help:    "LLM request latency",
+            Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30},
+        },
+        []string{"provider", "model"},
+    )
+    
+    // Token metrics
+    llmTokensTotal = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "vigilagent_llm_tokens_total",
+            Help: "Total tokens consumed",
+        },
+        []string{"provider", "model", "type"},
+    )
+    
+    // Cost metrics
+    llmCostTotal = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "vigilagent_llm_cost_dollars_total",
+            Help: "Total cost in dollars",
+        },
+        []string{"provider", "model"},
+    )
+    
+    // Cache metrics
+    llmCacheHits = prometheus.NewCounter(
+        prometheus.CounterOpts{
+            Name: "vigilagent_llm_cache_hits_total",
+            Help: "Total cache hits",
+        },
+    )
+)
+9.2 Dashboard Queries (Grafana)
+-- Cost by model (last 24h)
+SELECT 
+    model,
+    SUM(cost) as total_cost,
+    COUNT(*) as request_count,
+    AVG(cost) as avg_cost_per_request
+FROM llm_usage
+WHERE recorded_at > NOW() - INTERVAL '24 hours'
+GROUP BY model
+ORDER BY total_cost DESC;
+-- Latency percentiles by provider
+SELECT 
+    provider,
+    percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms) as p50,
+    percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) as p95,
+
+--- PAGE 17 ---
+
+    percentile_cont(0.99) WITHIN GROUP (ORDER BY latency_ms) as p99
+FROM llm_requests
+WHERE recorded_at > NOW() - INTERVAL '1 hour'
+GROUP BY provider;
+-- Error rate by provider
+SELECT 
+    provider,
+    COUNT(CASE WHEN status = 'error' THEN 1 END) * 100.0 / COUNT(*) as 
+error_rate
+FROM llm_requests
+WHERE recorded_at > NOW() - INTERVAL '1 hour'
+GROUP BY provider;
+10. Future Considerations
+10.1 Model Fine-Tuning
+Once we have sufficient usage data:
+1. Fine-tune a small model on our most common task patterns
+2. Use fine-tuned model for simple tasks (formatting, basic fixes)
+3. Keep frontier models for complex reasoning tasks
+10.2 Self-Hosted Models
+For enterprise customers with strict data requirements:
+1. Deploy Llama 3.1 405B on dedicated GPU instances
+2. Use Ollama for smaller, faster models
+3. Implement model routing based on data sensitivity
+10.3 Multi-Modal Support
+Future capabilities:
+1. Screenshot analysis for UI-related tasks
+2. Video understanding for debugging
+3. Audio transcription for meeting notes
+This LLM strategy ensures VigilAgent delivers maximum quality at minimum cost while 
+maintaining reliability through multi-provider resilience.

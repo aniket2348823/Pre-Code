@@ -1,0 +1,771 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — 6-Month Project Roadmap
+Version: 1.0 | Date: June 2026 | Status: Final Based on: All 12 optimized project documents
+1. Roadmap Overview
+1.1 Timeline Summary
+Month 1        Month 2        Month 3        Month 4        Month 5        Month 6
+│              │              │              │              │              │
+├──────────────┴──────────────┴──────────────┴──────────────┴──────────────┤
+│                                                                          │
+│  PHASE 1: FOUNDATION & MVP (Weeks 1-16)                                 │
+│  ├─ Weeks 1-4:   Infrastructure & Core Engine                           │
+│  ├─ Weeks 5-8:   Agent Execution & LLM Routing                          │
+│  ├─ Weeks 9-12:  Memory, Skills Foundation, API                         │
+│  └─ Weeks 13-16: CLI, Testing, Beta Launch                              │
+│                                                                          │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  PHASE 2: TEAM FEATURES & GROWTH (Months 3-6)                           │
+│  ├─ Months 3-4:  Dashboard, GitHub Integration                          │
+│  ├─ Months 5-6:  Shared Memory, Team Controls, Public Launch            │
+│  └─ Month 6:     First paying customers, $50K MRR target                │
+│                                                                          │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  PHASE 3: ENTERPRISE PREP (Month 6)                                     │
+│  └─ SSO foundations, Compliance framework, Enterprise pipeline           │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+--- PAGE 2 ---
+
+1.2 Key Milestones
+Milestone Target Date Success Criteria
+M1: Project scaffold &
+CI/CD
+End of Week
+2
+Go project builds, tests pass, CI green
+M2: Core agent engine End of Week
+6
+Agent can execute single-step tasks end-to-end
+M3: Multi-model routing End of Week
+8
+3+ LLM providers, failover working
+M4: Memory system End of Week
+10
+All 4 memory layers (Working, Episodic, Semantic, Procedural)
+persist and recall
+M5: Skills foundation End of Week
+12
+Install, execute, sandbox skills
+M6: API complete End of Week
+12
+All v1 endpoints functional and documented
+M7: CLI v1.0 End of Week
+14
+vigil init , vigil chat , vigil task  working
+M8: Beta launch End of Week
+16
+100 beta users onboarded
+M9: Team dashboard End of Month
+4
+Web dashboard with usage analytics
+M10: GitHub integration End of Month
+5
+Automated PR review working
+M11: Public launch End of Month
+6
+1,000 signups, Product Hunt launch
+M12: First revenue End of Month
+6
+50 paying teams, $50K MRR target
+2. Phase 1: Foundation & MVP (Weeks 1-16)
+2.1 Sprint 1 — Infrastructure & Core Engine (Weeks 1-4)
+Goal: Set up the project skeleton, database, and basic agent loop.
+
+--- PAGE 3 ---
+
+Week 1-2: Project Scaffold
+Task Owner Priority Dependencies Deliverable
+Initialize Go module (github.
+com/vigilagent/vigilagent )
+Founding
+Engineer
+P0 None go.mod , project structure
+Set up project layout (cmd/,
+internal/, pkg/, migrations/)
+Founding
+Engineer
+P0 None Directory structure per 09-
+golang-build-guide.md
+Configure .golangci.yml
+and linter
+Founding
+Engineer
+P0 None Linting passes on empty
+project
+Set up PostgreSQL + pgvector
+locally (Docker Compose)
+CTO P0 None docker-compose.dev.yml
+working
+Set up Redis locally (Docker
+Compose)
+CTO P0 None Redis accessible
+Set up NATS JetStream locally CTO P0 None NATS accessible
+Create initial database
+migrations (users, projects)
+Founding
+Engineer
+P0 PostgreSQL
+running
+000001_create_users.up.
+sql
+Set up GitHub Actions CI (test,
+lint, build)
+Founding
+Engineer
+P0 None .github/workflows/ci.ym
+l
+Create Makefile  with build,
+test, lint targets
+Founding
+Engineer
+P0 None make build , make test
+work
+Write CLAUDE.md  for AI-
+assisted development
+Product Co-
+founder
+P1 None Claude Code context file
+Milestone M1: ✅  Project builds, tests pass, CI green, database accessible.
+
+--- PAGE 4 ---
+
+Week 3-4: Configuration & Auth
+Task Owner Priority Dependencies Deliverable
+Implement internal/config/
+(env-based config)
+Founding
+Engineer
+P0 Project scaffold Config loads from
+env vars
+Implement internal/auth/  (JWT
++ API key)
+CTO P0 Users table Login, register,
+token refresh
+Implement auth middleware for chi
+router
+CTO P0 Auth service Protected routes
+work
+Create internal/database/postgre
+s.go  (connection pool)
+Founding
+Engineer
+P0 PostgreSQL
+running
+pgxpool with health
+check
+Create internal/database/redis.g
+o  (client setup)
+Founding
+Engineer
+P0 Redis running Redis client with
+pool
+Set up OpenTelemetry tracing +
+metrics
+Founding
+Engineer
+P1 None Spans visible in logs
+Implement rate limiting middleware
+(Redis-backed)
+Founding
+Engineer
+P1 Redis running 429 responses on
+limit
+Create basic health endpoint (/v1/he
+alth )
+Founding
+Engineer
+P0 Router Returns 200 OK
+2.2 Sprint 2 — Agent Execution & LLM Routing (Weeks 5-8)
+Goal: Core agent can receive tasks, route to LLMs, execute tools, and return results.
+
+--- PAGE 5 ---
+
+Week 5-6: Agent Core
+Task Owner Priority Dependencies Deliverable
+Define LLMProvider
+interface (internal/llm/
+provider.go )
+CTO P0 None Interface with Chat, Stream,
+HealthCheck
+Implement OpenAI
+adapter
+CTO P0 Interface defined internal/llm/openai.go
+Implement Anthropic
+adapter
+CTO P0 Interface defined internal/llm/anthropic.go
+Implement basic model
+router (complexity
+classification)
+CTO P0 Providers
+implemented
+Routes simple/moderate/complex
+tasks
+Create Tool  interface
+and ToolRegistry
+Founding
+Engineer
+P0 None internal/tools/tool.go
+Implement read_file
+tool
+Founding
+Engineer
+P0 Tool interface Reads file contents
+Implement write_file
+tool
+Founding
+Engineer
+P0 Tool interface Writes files (with HITL)
+Implement edit_file
+tool (str_replace)
+Founding
+Engineer
+P0 Tool interface Targeted string replacement
+Implement list_direct
+ory  tool
+Founding
+Engineer
+P0 Tool interface Lists directory contents
+Implement search_code
+tool (ripgrep)
+Founding
+Engineer
+P1 Tool interface Code search
+Implement run_command
+tool (gVisor sandbox)
+Founding
+Engineer
+P1 Tool interface Sandboxed execution
+Create agent state
+machine (internal/agen
+t/state.go )
+CTO P0 None 8 states, transitions
+Implement classifyCom
+plexity()  with 5-factor
+scoring
+CTO P0 None Canonical complexity
+classification per LLM Strategy
+doc
+Implement agent
+execution loop (max 20
+iterations)
+CTO P0 State machine,
+tools, LLM
+Agent executes multi-step tasks
+Implement HITL
+checkpoint system
+CTO P1 Agent loop Pause/resume with approval
+Milestone M2: ✅  Agent can execute single-step tasks (read file, write file) end-to-end.
+
+--- PAGE 6 ---
+
+Week 7-8: Routing & Failover
+Task Owner Priority Dependencies Deliverable
+Implement provider health
+monitoring
+CTO P0 Providers Health status dashboard
+Implement failover chain (3
+providers)
+CTO P0 Health
+monitoring
+Auto-fallback on failure
+Implement circuit breaker
+pattern
+CTO P1 Failover Prevents cascade failures
+Implement cost tracker per task CTO P0 Providers Token + cost attribution
+Implement budget manager
+(per-user limits)
+CTO P0 Cost tracker Hard-stop at budget limit
+Create task database table (with
+partitions, max_iterations)
+Founding
+Engineer
+P0 PostgreSQL tasks  table with indexes,
+max_iterations  column
+Implement task repository
+(CRUD)
+Founding
+Engineer
+P0 Tasks table Create, Get, List, Cancel
+Implement task creation
+endpoint (POST /v1/tasks )
+Founding
+Engineer
+P0 Task repo, auth Returns 201 with task
+Implement task status endpoint
+(GET /v1/tasks/{id} )
+Founding
+Engineer
+P0 Task repo Returns task details
+Implement task streaming
+(SSE)
+Founding
+Engineer
+P1 Agent Real-time step updates
+Implement Gemini adapter CTO P2 Interface 4th provider option
+Implement Ollama adapter
+(local models)
+CTO P2 Interface Offline fallback
+Milestone M3: ✅  Multi-model routing with 3+ providers and failover working.
+2.3 Sprint 3 — Memory, Skills, API (Weeks 9-12)
+Goal: Persistent memory, skill installation/execution, and complete API surface.
+
+--- PAGE 7 ---
+
+Week 9-10: Memory System
+Task Owner Priority Dependencies Deliverable
+Create memory database tables
+(episodes, patterns, workflows)
+Founding
+Engineer
+P0 PostgreSQL Schema per 03-schema.
+md
+Implement episodic memory store Founding
+Engineer
+P0 Memory tables Store + recall past
+interactions
+Implement semantic memory
+(pgvector embeddings)
+Founding
+Engineer
+P0 pgvector Vector search for
+codebase patterns
+Implement procedural memory
+(learned workflows)
+Founding
+Engineer
+P0 PostgreSQL Store and recall workflow
+patterns
+Implement working memory (in-
+memory, per-session)
+CTO P0 None Current task context
+Implement semantic cache (Redis) Founding
+Engineer
+P1 Redis Similar query caching
+Create memory manager (multi-
+layer recall)
+CTO P0 All memory
+layers
+Cascading recall: working
+→  cache →  pgvector
+Implement memory compaction
+(LLM summarization)
+CTO P1 LLM provider Old sessions summarized
+Implement memory search
+endpoint (POST /v1/memory/sear
+ch )
+Founding
+Engineer
+P0 Memory
+manager
+Semantic search API
+Implement memory episode
+creation endpoint
+Founding
+Engineer
+P0 Memory store Store new episodes via
+API
+Milestone M4: ✅  Episodic + semantic memory persist and recall correctly.
+
+--- PAGE 8 ---
+
+Week 11-12: Skills Foundation & API Completion
+Task Owner Priority Dependencies Deliverable
+Create skills database tables (skills,
+versions, installations)
+Founding
+Engineer
+P0 PostgreSQL Schema per 03-schem
+a.md
+Implement skill registry (install, list,
+uninstall)
+Founding
+Engineer
+P0 Skills tables vigil skill instal
+l  works
+Implement skill executor
+(sandboxed)
+Founding
+Engineer
+P0 gVisor sandbox Skills run in isolation
+Implement skill validator (manifest,
+tests, security)
+CTO P1 None Quality gates
+Create 10 "hero" skills (lint, test, doc,
+deploy, etc.)
+CTO +
+Founding Eng
+P0 Skill executor Publishable skills
+Implement project endpoints
+(CRUD)
+Founding
+Engineer
+P0 Auth, DB POST /v1/projects
+Implement usage/billing endpoints Founding
+Engineer
+P1 Cost tracker GET /v1/usage
+Implement organization endpoints Founding
+Engineer
+P2 Auth, DB Team management
+Implement webhook endpoints Founding
+Engineer
+P2 Auth Event notifications
+Write OpenAPI 3.1 specification Product Co-
+founder
+P1 All endpoints openapi.json
+Implement all SDK examples (Go,
+Python)
+Founding
+Engineer
+P1 API complete Working SDKs
+Milestone M5: ✅  Install, execute, and sandbox skills successfully. Milestone M6: ✅  All v1 API
+endpoints functional and documented.
+2.4 Sprint 4 — CLI, Testing, Beta Launch (Weeks 13-16)
+Goal: Ship the CLI tool, comprehensive tests, and launch beta.
+
+--- PAGE 9 ---
+
+Week 13-14: CLI Tool
+Task Owner Priority Dependencies Deliverable
+Implement CLI scaffold (cobra) Founding
+Engineer
+P0 None vigil  binary
+builds
+Implement vigil init  (project
+context)
+Founding
+Engineer
+P0 API client Project initialized
+Implement vigil chat  (interactive
+session)
+CTO P0 API, streaming Real-time chat
+Implement vigil task  (create,
+stream, list)
+Founding
+Engineer
+P0 API Task management
+Implement vigil skill  (install,
+list, create)
+Founding
+Engineer
+P0 API Skill management
+Implement vigil usage  and vigil 
+cost
+Founding
+Engineer
+P1 API Cost visibility
+Implement vigil config  (set
+model, budget)
+Founding
+Engineer
+P1 API Configuration
+Create CLI installation script
+(curl/brew)
+Founding
+Engineer
+P0 Binary builds get.vigilagent.c
+om
+Write CLI documentation Product Co-
+founder
+P1 CLI complete README, examples
+Milestone M7: ✅  vigil init , vigil chat , vigil task  all working.
+
+--- PAGE 10 ---
+
+Week 15-16: Testing & Beta Launch
+Task Owner Priority Dependencies Deliverable
+Write unit tests for all packages
+(80%+ coverage)
+All P0 All code go test -cover  >
+80%
+Write integration tests
+(testcontainers)
+Founding
+Engineer
+P0 PostgreSQL,
+Redis
+DB + Redis tests
+pass
+Write E2E tests (CLI →  API →  Agent
+→  LLM)
+CTO P0 CLI, API Full flow tests pass
+Performance benchmarks (agent
+execution, routing)
+CTO P1 Agent, Router Benchmark results
+Security audit (SQL injection, XSS,
+sandbox escape)
+CTO P1 All code No critical findings
+Load testing (50 concurrent users) Founding
+Engineer
+P1 API running < 2s p95 latency
+Set up Grafana dashboards (metrics,
+costs, latency)
+Founding
+Engineer
+P1 Prometheus Dashboards visible
+Configure production deployment
+(Kubernetes)
+CTO P0 Docker images K8s manifests ready
+Deploy to staging environment CTO P0 K8s manifests Staging URL
+accessible
+Beta user onboarding (100 users) Product Co-
+founder
+P0 Staging deployed 100 beta signups
+Beta feedback collection (Discord,
+surveys)
+Product Co-
+founder
+P0 Beta live Feedback pipeline
+Milestone M8: ✅  100 beta users onboarded, core features working.
+3. Phase 2: Team Features & Growth (Months 3-6)
+3.1 Month 3-4: Dashboard & Integration
+Goal: Team management, usage analytics, and GitHub integration.
+
+--- PAGE 11 ---
+
+Task Owner Priority Dependencies Deliverable
+Build web dashboard
+(React/Next.js)
+Founding
+Engineer
+P0 API complete Dashboard deployed
+Implement real-time activity
+feed
+Founding
+Engineer
+P0 SSE/WebSocket Live agent activity
+Implement usage analytics page Founding
+Engineer
+P0 Usage data Cost breakdown charts
+Implement skill library browser Founding
+Engineer
+P1 Skills API Browse, install skills
+Implement audit log viewer Founding
+Engineer
+P1 Audit log table Filterable audit trail
+GitHub integration (PR review) CTO P0 Agent engine vigil review --pr 
+42
+GitHub webhook handler CTO P0 GitHub
+integration
+Auto-review on PR
+create
+Team management (invite,
+roles)
+Founding
+Engineer
+P1 Organizations API Team admin panel
+Shared skill library (team-
+scoped)
+Founding
+Engineer
+P1 Skills, Orgs Team skill configs
+Implement Google adapter
+(Gemini)
+CTO P1 Provider interface 4th cloud provider
+3.2 Month 5-6: Shared Memory & Public Launch
+Goal: Team knowledge sharing, public launch, and first revenue.
+
+--- PAGE 12 ---
+
+Task Owner Priority Dependencies Deliverable
+Implement shared memory (cross-
+team)
+CTO P0 Memory system Team knowledge base
+Implement team convention
+enforcement
+CTO P1 Memory, Skills Auto-enforce patterns
+Implement billing system (Stripe) Founding
+Engineer
+P0 Billing API Subscription
+management
+Implement tiered pricing
+(Free/Pro/Team)
+Founding
+Engineer
+P0 Billing Price enforcement
+Content marketing (blog posts,
+tutorials)
+Product Co-
+founder
+P0 Features
+complete
+10+ published articles
+YouTube tutorials (CLI
+walkthrough)
+Product Co-
+founder
+P1 CLI stable 5+ video tutorials
+Product Hunt launch Product Co-
+founder
+P0 Public ready PH listing live
+Hacker News launch Product Co-
+founder
+P0 Public ready HN post
+Developer conference talks Product Co-
+founder
+P1 Public ready 2+ talks
+Open-source core agent framework CTO P0 Code stable GitHub repo public
+Community Discord server Product Co-
+founder
+P0 Beta live Active community
+First 50 paying teams Sales/BD P0 Billing live $50K MRR target
+Milestone M9: ✅  Team dashboard with usage analytics. Milestone M10: ✅  GitHub integration for
+automated PR review. Milestone M11: ✅  Public launch with 1,000 signups. Milestone M12: ✅  50
+paying teams, $50K MRR.
+4. Phase 3: Enterprise Prep (Month 6)
+Goal: Lay groundwork for enterprise sales in Months 7-12.
+
+--- PAGE 13 ---
+
+Task Owner Priority Dependencies Deliverable
+SSO foundation (SAML 2.0 /
+OIDC)
+CTO P0 Auth system SSO login flow
+RBAC implementation (4 roles) Founding
+Engineer
+P0 Auth system Granular permissions
+Compliance scanning skill CTO P1 Skills system OWASP/SOC2 patterns
+Audit log immutable storage Founding
+Engineer
+P1 Audit log Append-only guarantee
+Data residency controls CTO P2 Architecture Region-aware storage
+Enterprise API documentation Product Co-
+founder
+P1 API stable Enterprise API docs
+On-premises deployment
+package
+CTO P1 Docker/K8s Air-gapped support
+Enterprise sales materials Product Co-
+founder
+P1 Features
+complete
+Pitch deck, ROI
+calculator
+5. Team & Resource Allocation
+5.1 Founding Team (Months 1-6)
+Role Focus Key Responsibilities
+CTO / Technical Co-
+founder
+Architecture, LLM, Security LLM routing, agent engine, failover, security,
+testing
+Product Co-founder Product, Marketing, Growth PRD, documentation, content, community,
+launch
+Founding Engineer Backend, Infrastructure,
+DevOps
+Database, API, CLI, deployment, CI/CD
+5.2 Hiring Triggers
+Trigger Hire Timeline
+Beta reaches 500 users 1 Backend Engineer (Go) Month 3-4
+10+ GitHub issues/week 1 Developer Advocate Month 4
+Enterprise pilot signed 1 ML/AI Engineer Month 5
+Revenue > $20K MRR 1 Designer (DevTools) Month 5-6
+
+--- PAGE 14 ---
+
+5.3 Infrastructure Costs (Estimated Monthly)
+Component Dev Staging Production (Small)
+Compute (Go API) $0 (local) $50 $200
+PostgreSQL (managed) $0 (local) $25 $100
+Redis (managed) $0 (local) $15 $50
+NATS (self-hosted) $0 (local) $25 $50
+S3/MinIO $0 (local) $10 $50
+LLM API costs $100 $500 $2,000
+Monitoring (Grafana Cloud) $0 $0 $50
+Domain + SSL $10 $10 $10
+Total $110 $635 $2,510
+6. Risk Mitigation Timeline
+Risk Mitigation Owner Deadline
+LLM API price increase Multi-provider routing + local fallback CTO Week 8
+Slow beta adoption Generous free tier + open-source core Product Week 16
+Agent generates insecure code Security scanning skill + sandboxed
+execution
+CTO Week 12
+Database performance issues Connection pooling + read replicas Founding
+Eng
+Week 10
+Competitor launches similar
+product
+Speed to market + community moat All Ongoing
+Token cost spiraling Budget limits + cost tracking + caching CTO Week 8
+
+--- PAGE 15 ---
+
+7. Success Metrics by Phase
+Phase 1 (Months 1-2): Foundation
+Metric Target How to Measure
+Core task execution 90% success rate Automated test suite
+Cost efficiency 50% cheaper than raw API Cost comparison benchmark
+Test coverage 80%+ go test -cover
+CI/CD pipeline Green on every PR GitHub Actions
+Phase 2 (Months 3-4): Team Features
+Metric Target How to Measure
+Beta users 500 active DAU tracking
+Task success rate 85% without human fix Task completion tracking
+PR review time Reduced by 60% Before/after comparison
+Convention violations Reduced by 80% Lint reports
+Phase 3 (Months 5-6): Public Launch
+Metric Target How to Measure
+Signups 1,000 in first month Auth analytics
+Paying teams 50 Stripe dashboard
+MRR $50,000 Billing system
+Skills published 50 Marketplace analytics
+Monthly retention 70% Cohort analysis
+NPS 50+ Quarterly surveys
+Cost per task < $0.50 Cost analytics
+
+--- PAGE 16 ---
+
+8. Dependencies & Critical Path
+Week 1-2:  [Project Scaffold] ─────────────────────────┐
+            │                                           │
+Week 3-4:  [Config & Auth] ────────────────────────────┤
+            │                                           │
+Week 5-6:  [Agent Core + LLM Providers] ──────────────┤
+            │                                           ▼
+Week 7-8:  [Routing + Failover] ───────────► [M3: Multi-model routing]
+            │                                           │
+Week 9-10: [Memory System] ────────────────► [M4: Memory working]
+            │                                           │
+Week 11-12:[Skills + API Complete] ────────► [M6: API v1 complete]
+            │                                           │
+Week 13-14:[CLI Tool] ─────────────────────► [M7: CLI v1.0]
+            │                                           │
+Week 15-16:[Testing + Beta] ───────────────► [M8: Beta launched]
+            │                                           │
+Month 3-4: [Dashboard + GitHub] ───────────► [M9-M10: Team features]
+            │                                           │
+Month 5-6: [Shared Memory + Launch] ───────► [M11-M12: Public + Revenue]
+Critical Path: Project Scaffold →  Agent Core →  Routing →  Memory →  Skills →  API →  CLI →  Beta →
+Public Launch
+Blockers to Watch:
+1. LLM provider API access (keys, rate limits)
+2. pgvector performance at scale
+3. gVisor sandbox compatibility
+4. Beta user feedback quality
+9. Definition of Done
+A feature is "done" when:
+1. ✅  Code is implemented and passes all tests
+2. ✅  Test coverage is ≥ 80% for new code
+3. ✅  Documentation is updated (API docs, README)
+4. ✅  Security review is complete (for auth/sensitive features)
+5. ✅  Performance benchmarks meet targets
+
+--- PAGE 17 ---
+
+6. ✅  Deployed to staging and verified
+7. ✅  Product owner has reviewed and approved
+10. Communication Cadence
+Meeting Frequency Duration Attendees Purpose
+Standup Daily 15 min All Progress, blockers
+Sprint planning Bi-weekly 1 hour All Next sprint goals
+Sprint review Bi-weekly 30 min All Demo completed work
+Architecture review Weekly 1 hour CTO + Founding Eng Technical decisions
+Product sync Weekly 30 min Product + CTO Feature prioritization
+Retrospective Monthly 1 hour All Process improvements
+This roadmap is a living document. Updated weekly based on progress, feedback, and market
+conditions. All estimates assume a founding team of 3 working full-time.
