@@ -1,0 +1,51 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - unparam
+    - bodyclose
+    - makezero
+    - nilerr
+    - prealloc
+    - wastedassign
+  disable:
+    - deadcode
+    - varcheck
+    - structcheck
+
+linters-settings:
+  govet:
+    check-shadowing: true
+    enable-all: true
+  goimports:
+    local-prefixes: github.com/vigilagent/vigilagent
+  misspell:
+    locale: US
+  nakedret:
+    max-func-lines: 30
+  unparam:
+    check-exported: false
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - unparam
+        - bodyclose
+    - path: internal/config/
+      linters:
+        - unparam
