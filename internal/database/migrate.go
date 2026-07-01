@@ -45,12 +45,8 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	for _, file := range matches {
 		// Extract version number from filename (e.g., 000001_init.up.sql -> 1)
 		base := filepath.Base(file)
-		parts := strings.SplitN(base, "_", 2)
-		if len(parts) < 2 {
-			continue
-		}
-		var version int
-		if _, err := fmt.Sscanf(parts[0], "%d", &version); err != nil {
+		version, ok := migrationVersion(base)
+		if !ok {
 			continue
 		}
 
@@ -95,4 +91,36 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 
 	slog.Info("database migrations complete", "applied", len(matches))
 	return nil
+}
+
+// migrationVersion extracts the leading numeric version from a migration file
+// base name such as "000001_init_schema.up.sql" -> (1, true). It returns
+// (0, false) when the name does not start with an underscore-delimited number.
+func migrationVersion(base string) (int, bool) {
+	parts := strings.SplitN(base, "_", 2)
+	if len(parts) < 2 {
+		return 0, false
+	}
+	var version int
+	if _, err := fmt.Sscanf(parts[0], "%d", &version); err != nil {
+		return 0, false
+	}
+	return version, true
+}
+
+// CurrentVersion returns the highest applied migration version, or 0 when no
+// migrations have been applied yet (or the tracking table does not exist).
+func CurrentVersion(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	var version int
+	err := pool.QueryRow(ctx, `
+		SELECT COALESCE(MAX(version), 0) FROM schema_migrations
+	`).Scan(&version)
+	if err != nil {
+		// Missing table means nothing has been applied yet.
+		if strings.Contains(err.Error(), "does not exist") {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to read current migration version: %w", err)
+	}
+	return version, nil
 }

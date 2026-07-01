@@ -8,56 +8,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/go-redis/redis/v8"
 	"github.com/vigilagent/vigilagent/internal/auth"
-	"github.com/vigilagent/vigilagent/internal/config"
-	"github.com/vigilagent/vigilagent/internal/database"
-	ratelimit "github.com/vigilagent/vigilagent/internal/middleware"
-	"github.com/vigilagent/vigilagent/internal/queue"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
-type Router struct {
-	*chi.Mux
-	cfg   *config.Config
-	db    *database.Postgres
-	rds   *database.Redis
-	nats  *queue.NATS
-	auth  *auth.JWT
-	apiKM *auth.APIKeyService
-	rl    *ratelimit.RateLimiter
-	users     *repository.UserRepository
-	orgs       *repository.OrganizationRepository
-	projects   *repository.ProjectRepository
-	agents      *repository.AgentRepository
-	sessions    *repository.SessionRepository
-	events      *repository.EventRepository
-}
 
-func New(cfg *config.Config, db *database.Postgres, rds *database.Redis, natsConn *queue.NATS, jwtSvc *auth.JWT, apiKM *auth.APIKeyService, rdsClient *redis.Client, users *repository.UserRepository, orgs *repository.OrganizationRepository, projects *repository.ProjectRepository, agents *repository.AgentRepository, sessions *repository.SessionRepository, events *repository.EventRepository) *Router {
-	rl := ratelimit.NewRateLimiter(rdsClient, 100, time.Minute)
-	r := &Router{
-		Mux:   chi.NewMux(),
-		cfg:   cfg,
-		db:    db,
-		rds:   rds,
-		nats:  natsConn,
-		auth:  jwtSvc,
-		apiKM: apiKM,
-		rl:    rl,
-		users:     users,
-		orgs:       orgs,
-		projects:   projects,
-		agents:      agents,
-		sessions:    sessions,
-		events:      events,
-	}
-	r.setupMiddleware()
-	r.setupRoutes()
-	return r
-}
 
 func (r *Router) setupMiddleware() {
 	r.Use(middleware.RequestID)
@@ -127,6 +84,15 @@ func (r *Router) setupRoutes() {
 			protected.Get("/sessions/{sessionID}", r.getSessionHandler)
 			protected.Put("/sessions/{sessionID}", r.updateSessionHandler)
 
+			protected.Post("/tasks", r.createTaskHandler)
+			protected.Get("/tasks", r.listTasksHandler)
+			protected.Get("/tasks/{taskID}", r.getTaskHandler)
+			protected.Post("/tasks/{taskID}/cancel", r.cancelTaskHandler)
+			protected.Get("/tasks/{taskID}/stream", r.streamTaskHandler)
+
+			protected.Post("/memory/search", r.searchMemoryHandler)
+			protected.Post("/memory", r.createMemoryHandler)
+
 			events := protected.Group(nil)
 			events.Use(r.eventsRateLimitMiddleware)
 			{
@@ -182,9 +148,6 @@ func (r *Router) setupRoutes() {
 	})
 }
 
-func notImplemented(w http.ResponseWriter) {
-	response.JSON(w, http.StatusNotImplemented, map[string]string{"error": "not implemented"})
-}
 
 func (r *Router) healthHandler(w http.ResponseWriter, req *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]string{"status": "healthy"})
@@ -259,8 +222,8 @@ func (r *Router) registerHandler(w http.ResponseWriter, req *http.Request) {
 		response.BadRequest(w, "email and password are required")
 		return
 	}
-	if len(input.Password) < 8 {
-		response.BadRequest(w, "password must be at least 8 characters")
+	if len(input.Password) < 12 {
+		response.BadRequest(w, "password must be at least 12 characters")
 		return
 	}
 
@@ -1257,74 +1220,27 @@ func parseTimeRange(req *http.Request) (time.Time, time.Time) {
 	return from, to
 }
 
-func (r *Router) listSkillsHandler(w http.ResponseWriter, req *http.Request)  { notImplemented(w) }
-func (r *Router) getSkillHandler(w http.ResponseWriter, req *http.Request)    { notImplemented(w) }
-func (r *Router) createSkillHandler(w http.ResponseWriter, req *http.Request) { notImplemented(w) }
-func (r *Router) updateSkillHandler(w http.ResponseWriter, req *http.Request) { notImplemented(w) }
-func (r *Router) deleteSkillHandler(w http.ResponseWriter, req *http.Request) { notImplemented(w) }
-func (r *Router) rateSkillHandler(w http.ResponseWriter, req *http.Request)   { notImplemented(w) }
-func (r *Router) listSkillRatingsHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) installSkillHandler(w http.ResponseWriter, req *http.Request) { notImplemented(w) }
-func (r *Router) listAlertsHandler(w http.ResponseWriter, req *http.Request)  { notImplemented(w) }
-func (r *Router) createAlertHandler(w http.ResponseWriter, req *http.Request) { notImplemented(w) }
-func (r *Router) getAlertHandler(w http.ResponseWriter, req *http.Request)    { notImplemented(w) }
-func (r *Router) updateAlertHandler(w http.ResponseWriter, req *http.Request) { notImplemented(w) }
-func (r *Router) deleteAlertHandler(w http.ResponseWriter, req *http.Request) { notImplemented(w) }
-func (r *Router) listInvoicesHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) getInvoiceHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) createCheckoutHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) getSubscriptionHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) createBillingPortalHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) createAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) listAPIKeysHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) deleteAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) adminStatsHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) adminListUsersHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) adminUpdateUserRoleHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
-func (r *Router) adminDeleteUserHandler(w http.ResponseWriter, req *http.Request) {
-	notImplemented(w)
-}
+// Skills, Alerts, Billing, Admin, Memory handlers are implemented in:
+// skills_handlers.go, alerts_handlers.go, billing_handlers.go, admin_handlers.go, memory_handlers.go
 
 // authMiddleware validates JWT tokens or API keys on protected routes.
 func (r *Router) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		apiKey := req.Header.Get("X-API-Key")
-		if apiKey != "" {
-			// Validate API key prefix
-			if r.cfg.Auth.APIKeyPrefix != "" && !strings.HasPrefix(apiKey, r.cfg.Auth.APIKeyPrefix+"_") {
-				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid API key format"})
+		// Try API key auth first (X-API-Key header or Bearer vga_... token)
+		if r.apiKeyAuth != nil {
+			claims, err := r.apiKeyAuth.Authenticate(req)
+			if err != nil {
+				response.Unauthorized(w, err.Error())
 				return
 			}
-			// TODO: In production, verify the API key hash against the database
-			claims := &auth.Claims{UserID: "api-key-user", Role: "user"}
-			ctx := auth.ContextWithClaims(req.Context(), claims)
-			next.ServeHTTP(w, req.WithContext(ctx))
-			return
+			if claims != nil {
+				ctx := auth.ContextWithClaims(req.Context(), claims)
+				next.ServeHTTP(w, req.WithContext(ctx))
+				return
+			}
 		}
+
+		// Fall back to JWT auth
 		authHeader := req.Header.Get("Authorization")
 		if authHeader == "" {
 			response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authorization header"})

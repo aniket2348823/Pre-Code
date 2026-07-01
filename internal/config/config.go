@@ -13,6 +13,7 @@ type Config struct {
 	Redis    RedisConfig
 	NATS     NATSConfig
 	Auth     AuthConfig
+	LLM      LLMConfig
 	Stripe   StripeConfig
 	Log      LogConfig
 }
@@ -54,6 +55,15 @@ type AuthConfig struct {
 	JWTSecret     string
 	JWTExpiration time.Duration
 	APIKeyPrefix  string
+}
+
+// LLMConfig holds LLM provider API keys and routing config.
+type LLMConfig struct {
+	OpenAIKey      string
+	AnthropicKey   string
+	DefaultModel   string
+	BudgetPerTask  float64
+	MaxTokens      int
 }
 
 type StripeConfig struct {
@@ -104,6 +114,11 @@ func Load() (*Config, error) {
 	viper.SetDefault("auth.jwt_expiration", 24*time.Hour)
 	viper.SetDefault("auth.api_key_prefix", "va_")
 
+	// LLM defaults
+	viper.SetDefault("llm.default_model", "claude-sonnet-4-20250514")
+	viper.SetDefault("llm.budget_per_task", 1.0)
+	viper.SetDefault("llm.max_tokens", 8192)
+
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("log.format", "json")
 
@@ -147,12 +162,18 @@ func Load() (*Config, error) {
 		NATS: NATSConfig{
 			URL:    viper.GetString("nats.url"),
 			Stream: viper.GetString("nats.stream"),
-		},
-		Auth: AuthConfig{
-			JWTSecret:     viper.GetString("auth.jwt_secret"),
-			JWTExpiration: viper.GetDuration("auth.jwt_expiration"),
-			APIKeyPrefix:  viper.GetString("auth.api_key_prefix"),
-		},
+		},			Auth: AuthConfig{
+				JWTSecret:     viper.GetString("auth.jwt_secret"),
+				JWTExpiration: viper.GetDuration("auth.jwt_expiration"),
+				APIKeyPrefix:  viper.GetString("auth.api_key_prefix"),
+			},
+			LLM: LLMConfig{
+				OpenAIKey:     viper.GetString("llm.openai_key"),
+				AnthropicKey:  viper.GetString("llm.anthropic_key"),
+				DefaultModel:  viper.GetString("llm.default_model"),
+				BudgetPerTask: viper.GetFloat64("llm.budget_per_task"),
+				MaxTokens:     viper.GetInt("llm.max_tokens"),
+			},
 		Stripe: StripeConfig{
 			SecretKey:     viper.GetString("stripe.secret_key"),
 			WebhookSecret: viper.GetString("stripe.webhook_secret"),
@@ -171,6 +192,91 @@ func Load() (*Config, error) {
 func (c *DatabaseConfig) DSN() string {
 	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		c.Host, c.Port, c.User, c.Password, c.Name, c.SSLMode)
+}
+
+// Validate checks the configuration for required fields and security constraints.
+func (c *Config) Validate() error {
+	// Server
+	if c.Server.Port < 1 || c.Server.Port > 65535 {
+		return fmt.Errorf("server.port must be between 1 and 65535, got %d", c.Server.Port)
+	}
+	if c.Server.ReadTimeout <= 0 {
+		return fmt.Errorf("server.read_timeout must be positive")
+	}
+	if c.Server.WriteTimeout <= 0 {
+		return fmt.Errorf("server.write_timeout must be positive")
+	}
+
+	// Database
+	if c.Database.Host == "" {
+		return fmt.Errorf("database.host is required")
+	}
+	if c.Database.User == "" {
+		return fmt.Errorf("database.user is required")
+	}
+	if c.Database.Name == "" {
+		return fmt.Errorf("database.name is required")
+	}
+	if c.Database.Port < 1 || c.Database.Port > 65535 {
+		return fmt.Errorf("database.port must be between 1 and 65535")
+	}
+	if c.Database.MaxOpenConns < 1 {
+		return fmt.Errorf("database.max_open_conns must be at least 1")
+	}
+
+	// Redis
+	if c.Redis.Host == "" {
+		return fmt.Errorf("redis.host is required")
+	}
+	if c.Redis.Port < 1 || c.Redis.Port > 65535 {
+		return fmt.Errorf("redis.port must be between 1 and 65535")
+	}
+
+	// NATS
+	if c.NATS.URL == "" {
+		return fmt.Errorf("nats.url is required")
+	}
+	if c.NATS.Stream == "" {
+		return fmt.Errorf("nats.stream is required")
+	}
+
+	// Auth
+	if c.Auth.JWTSecret == "" {
+		return fmt.Errorf("auth.jwt_secret is required")
+	}
+	if c.Auth.JWTSecret == "change-me-in-production" && c.Server.Env == "production" {
+		return fmt.Errorf("auth.jwt_secret must be changed in production")
+	}
+	if len(c.Auth.JWTSecret) < 32 && c.Server.Env == "production" {
+		return fmt.Errorf("auth.jwt_secret should be at least 32 characters in production")
+	}
+	if c.Auth.JWTExpiration <= 0 {
+		return fmt.Errorf("auth.jwt_expiration must be positive")
+	}
+
+	// LLM
+	if c.LLM.DefaultModel == "" {
+		return fmt.Errorf("llm.default_model is required")
+	}
+	if c.LLM.BudgetPerTask < 0 {
+		return fmt.Errorf("llm.budget_per_task must be non-negative")
+	}
+	if c.LLM.MaxTokens < 0 {
+		return fmt.Errorf("llm.max_tokens must be non-negative")
+	}
+	if c.Server.Env == "production" && c.LLM.OpenAIKey == "" && c.LLM.AnthropicKey == "" {
+		return fmt.Errorf("at least one LLM API key is required in production")
+	}
+
+	// Log
+	if c.Log.Level != "" {
+		validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+		if !validLevels[c.Log.Level] {
+			return fmt.Errorf("log.level must be one of: debug, info, warn, error")
+		}
+	}
+
+	return nil
 }
 
 func (c *RedisConfig) Address() string {

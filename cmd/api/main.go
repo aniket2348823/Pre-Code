@@ -1,3 +1,4 @@
+// Command vigil-api starts the VigilAgent HTTP API server.
 package main
 
 import (

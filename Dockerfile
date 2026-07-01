@@ -1,41 +1,49 @@
-# Build stage
+# ── Build stage ──────────────────────────────────────────
 FROM golang:1.26-alpine AS builder
 
-# Install git (required for fetching dependencies)
 RUN apk add --no-cache git
 
-# Set working directory
 WORKDIR /app
 
-# Copy go mod files
+# Cache dependency downloads
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
 
-# Copy source code
+# Copy source
 COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o vigilagent .
+# Build both binaries
+ARG VERSION=dev
+ARG BUILD_TIME
 
-# Runtime stage
-FROM alpine:latest
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags "-X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}" \
+    -o /app/bin/vigil-api ./cmd/api
 
-# Install ca-certificates for HTTPS calls
-RUN apk --no-cache add ca-certificates
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags "-X main.version=${VERSION}" \
+    -o /app/bin/vigil-migrate ./cmd/migrate
 
-# Set working directory
-WORKDIR /root/
+# ── Runtime stage ────────────────────────────────────────
+FROM alpine:3.20
 
-# Copy the binary from builder
-COPY --from=builder /app/vigilagent .
+RUN apk --no-cache add ca-certificates tzdata
 
-# Copy config files
+# Non-root user
+RUN addgroup -g 1001 -S vigil && \
+    adduser -S vigil -u 1001 -G vigil
+
+WORKDIR /app
+
+COPY --from=builder /app/bin/vigil-api .
+COPY --from=builder /app/bin/vigil-migrate .
+COPY --from=builder /app/migrations ./migrations
 COPY --from=builder /app/configs ./configs
 
-# Expose port
+RUN chown -R vigil:vigil /app
+
+USER vigil
+
 EXPOSE 8080
 
-# Run the binary
-CMD ["./vigilagent"]
+ENTRYPOINT ["./vigil-api"]
