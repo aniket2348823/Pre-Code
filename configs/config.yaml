@@ -1,0 +1,47 @@
+# VigilAgent Configuration
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  env: development
+  read_timeout: 10s
+  write_timeout: 10s
+  idle_timeout: 120s
+
+database:
+  host: localhost
+  port: 5432
+  user: vigilagent
+  password: vigilagent
+  name: vigilagent
+  sslmode: disable
+  max_open_conns: 25
+  max_idle_conns: 10
+  max_lifetime: 5m
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+
+auth:
+  jwt_secret: change-me-in-production
+  jwt_expiration: 24h
+  api_key_prefix: va_
+
+stripe:
+  secret_key: ""
+  webhook_secret: ""
+  success_url: http://localhost:8080/success
+  cancel_url: http://localhost:8080/cancel
+
+log:
+  level: info
+  format: json
+
+nats:
+  url: "nats://localhost:4222"
+  stream: "vigilagent"
+  max_reconnect: 5
+  reconnect_wait: 2s

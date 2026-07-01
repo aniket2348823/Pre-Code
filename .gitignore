@@ -1,3 +1,51 @@
-coverage
-coverage.out
-.agents/
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.html
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Build
+/bin/
+/dist/
+
+# Logs
+*.log
+logs/
+
+# Docker
+.docker/
+
+# Air (hot reload)
+tmp/
+
+# Migrations (local development)
+migrations/*.sql
+!migrations/*.up.sql
+!migrations/*.down.sql
