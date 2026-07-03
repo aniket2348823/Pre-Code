@@ -1,0 +1,10 @@
+{
+  "sequence": ["s1", "s2", "m1", "s1", "c1", "m1", "s3"],
+  "tasks": [
+    { "id": "s1", "prompt": "Rename the variable `usr` to `user` across this function and return the updated code.", "type": "rename", "files_changed": 1 },
+    { "id": "s2", "prompt": "Add a one-line docstring to this Go function describing what it returns.", "type": "documentation", "files_changed": 1 },
+    { "id": "s3", "prompt": "Reformat this JSON to two-space indentation.", "type": "formatting", "files_changed": 1 },
+    { "id": "m1", "prompt": "Refactor this handler to extract validation into a separate function.", "type": "refactoring", "files_changed": 3 },
+    { "id": "c1", "prompt": "Design a secure multi-tenant authentication scheme with token rotation and per-org isolation.", "type": "architecture", "files_changed": 8, "requires_reasoning": true, "is_novel": true, "tags": ["security", "production"] }
+  ]
+}
