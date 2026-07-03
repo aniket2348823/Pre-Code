@@ -10,6 +10,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/agent"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/config"
+	"github.com/vigilagent/vigilagent/internal/cost"
 	"github.com/vigilagent/vigilagent/internal/database"
 	"github.com/vigilagent/vigilagent/internal/llm"
 	mw "github.com/vigilagent/vigilagent/internal/middleware"
