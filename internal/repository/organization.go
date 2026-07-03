@@ -184,3 +184,8 @@ func (r *OrganizationRepository) IsOwner(ctx context.Context, orgID, userID stri
 	).Scan(&exists)
 	return exists, err
 }
+
+// Count returns the total number of organizations.
+func (r *OrganizationRepository) Count(ctx context.Context, count *int) error {
+	return r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM organizations`).Scan(count)
+}

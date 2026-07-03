@@ -16,6 +16,12 @@ import (
 	"github.com/vigilagent/vigilagent/internal/server"
 )
 
+var (
+	version   = "dev"
+	gitCommit = "unknown"
+	buildDate = "unknown"
+)
+
 func main() {
 	// Load configuration
 	cfg, err := config.Load()
@@ -24,11 +30,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Validate configuration
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+
 	// Setup logger
 	setupLogger(cfg.Log.Level, cfg.Log.Format)
 
 	slog.Info("starting VigilAgent server",
-		"version", "0.1.0",
+		"version", version,
+		"git_commit", gitCommit,
+		"build_date", buildDate,
 		"environment", cfg.Server.Env,
 	)
 

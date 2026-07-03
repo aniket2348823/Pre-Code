@@ -63,6 +63,30 @@ func (h *HealthMonitor) GetHealthyProviders() []string {
 	return healthy
 }
 
+// Confidence returns a 0..1 score for a provider based on its current health:
+// 1.0 when fully healthy, degrading with error rate, and low when unhealthy or
+// unknown. Used by the router to rank candidates on reliability rather than an
+// arbitrary cost formula.
+func (h *HealthMonitor) Confidence(name string) float64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	health, ok := h.providers[name]
+	if !ok {
+		return 0.5 // unknown provider: neutral
+	}
+	switch health.Status {
+	case StatusHealthy:
+		return maxf(0.5, 1.0-health.ErrorRate)
+	case StatusDegraded:
+		return maxf(0.3, 0.8-health.ErrorRate)
+	case StatusUnhealthy:
+		return 0.2
+	default: // StatusDown
+		return 0.0
+	}
+}
+
 // RecordFailure records a failure for a provider.
 func (h *HealthMonitor) RecordFailure(name string) {
 	h.mu.Lock()

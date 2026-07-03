@@ -3,9 +3,11 @@ package router
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/vigilagent/vigilagent/internal/auth"
+	"github.com/vigilagent/vigilagent/internal/memory"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -14,6 +16,11 @@ func (r *Router) searchMemoryHandler(w http.ResponseWriter, req *http.Request) {
 	_, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
 		response.Unauthorized(w, "missing authentication")
+		return
+	}
+
+	if r.memory == nil {
+		response.InternalError(w, "memory system not configured")
 		return
 	}
 
@@ -39,22 +46,32 @@ func (r *Router) searchMemoryHandler(w http.ResponseWriter, req *http.Request) {
 		input.Limit = 100
 	}
 
-	// Return empty results — memory system integration is a placeholder
+	results, err := r.memory.SearchMemory(req.Context(), input.Query, input.Types, input.Limit, 0)
+	if err != nil {
+		response.InternalError(w, "memory search failed")
+		return
+	}
+	if results == nil {
+		results = []memory.MemoryResult{}
+	}
+
 	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"results": []interface{}{},
-		"page": map[string]interface{}{
-			"total":       0,
-			"total_pages": 0,
-		},
-		"query": input.Query,
+		"results": results,
+		"total":   len(results),
+		"query":   input.Query,
 	})
 }
 
 // createMemoryHandler creates a memory episode (POST /v1/memory).
 func (r *Router) createMemoryHandler(w http.ResponseWriter, req *http.Request) {
-	_, ok := auth.ClaimsFromContext(req.Context())
+	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
 		response.Unauthorized(w, "missing authentication")
+		return
+	}
+
+	if r.memory == nil {
+		response.InternalError(w, "memory system not configured")
 		return
 	}
 
@@ -82,13 +99,49 @@ func (r *Router) createMemoryHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Derive a title from metadata or first line of content
+	title := input.Content
+	if len(title) > 80 {
+		title = title[:80]
+	}
+	if name, ok := input.Metadata["name"].(string); ok && name != "" {
+		title = name
+	}
+
+	// Store the memory based on type
+	switch input.Type {
+	case "episodic":
+		importance := 0.5
+		if imp, ok := input.Metadata["importance"]; ok {
+			switch v := imp.(type) {
+			case float64:
+				importance = v
+			case string:
+				if f, err := strconv.ParseFloat(v, 64); err == nil {
+					importance = f
+				}
+			}
+		}
+		if err := r.memory.StoreEpisode(req.Context(), claims.UserID, input.Type, title, input.Content, importance); err != nil {
+			response.InternalError(w, "failed to store memory")
+			return
+		}
+	case "semantic":
+		if input.ProjectID == "" {
+			response.BadRequest(w, "project_id is required for semantic memory")
+			return
+		}
+		if err := r.memory.StorePattern(req.Context(), claims.UserID, input.ProjectID, "codebase", title, input.Content); err != nil {
+			response.InternalError(w, "failed to store memory")
+			return
+		}
+	case "procedural":
+		r.memory.AddWorkingMessage("system", input.Content, 0)
+	}
+
 	response.Created(w, map[string]interface{}{
-		"memory": map[string]interface{}{
-			"type":       input.Type,
-			"content":    input.Content,
-			"project_id": input.ProjectID,
-			"metadata":   input.Metadata,
-		},
-		"message": "memory created (placeholder - memory persistence coming soon)",
+		"type":       input.Type,
+		"content":    input.Content,
+		"project_id": input.ProjectID,
 	})
 }

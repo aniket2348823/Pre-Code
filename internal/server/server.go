@@ -31,6 +31,11 @@ type Server struct {
 }
 
 func New(cfg *config.Config) (*Server, error) {
+	// Validate config before proceeding
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	srv := &Server{cfg: cfg}
 
 	db, err := database.NewPostgres(context.Background(), &cfg.Database)
@@ -62,7 +67,7 @@ func New(cfg *config.Config) (*Server, error) {
 	jwtSvc := auth.NewJWT(&cfg.Auth)
 	apiKeySvc := auth.NewAPIKeyService(cfg.Auth.APIKeyPrefix)
 
-	cleanup, err := telemetry.Setup(context.Background(), "vigilagent", "0.1.0")
+	cleanup, err := telemetry.Setup(context.Background(), "vigilagent", version)
 	if err != nil {
 		slog.Warn("opentelemetry setup failed, continuing without tracing", "error", err)
 	} else {
@@ -100,6 +105,13 @@ func New(cfg *config.Config) (*Server, error) {
 		slog.Info("registered Anthropic provider")
 	}
 
+	// Enforce a hard per-task budget (risk R31) with restart-safe persistence,
+	// and cache identical responses to cut spend (docs 06/07 core cost levers).
+	budgetMgr := cost.NewBudgetManager(db.Pool, 0, cfg.LLM.BudgetPerTask)
+	modelRouter.SetBudgetGuard(budgetMgr)
+	modelRouter.SetCache(llm.NewInMemoryCache(time.Hour))
+	slog.Info("router budget enforcement + response cache enabled", "budget_per_task", cfg.LLM.BudgetPerTask)
+
 	// Initialize tool registry with all built-in tools
 	toolRegistry := tools.NewToolRegistry()
 	toolRegistry.Register(&tools.ReadFileTool{})
@@ -112,8 +124,19 @@ func New(cfg *config.Config) (*Server, error) {
 	// Initialize agent engine
 	agentExec := agent.NewAgent(modelRouter, toolRegistry)
 
-	// Initialize memory manager
-	memMgr := memory.NewManager(db.Pool)
+	// Initialize memory manager. When an OpenAI key is configured, use real
+	// embeddings so semantic recall works; otherwise fall back to zero vectors.
+	var memMgr *memory.Manager
+	if cfg.LLM.OpenAIKey != "" {
+		memMgr = memory.NewManagerWithEmbedder(db.Pool, memory.NewOpenAIEmbedder(cfg.LLM.OpenAIKey))
+		slog.Info("memory manager using OpenAI embeddings")
+	} else {
+		memMgr = memory.NewManager(db.Pool)
+		slog.Warn("no OpenAI key; memory recall running without embeddings (zero vectors)")
+	}
+
+	// Start periodic health checks for LLM providers
+	go modelRouter.StartHealthChecks(context.Background(), 2*time.Minute)
 
 	r := router.New(router.Options{
 		Config:     cfg,
@@ -146,7 +169,8 @@ func New(cfg *config.Config) (*Server, error) {
 
 func (s *Server) Router() *router.Router {
 	return s.router
-}
+}// version is set via ldflags at build time.
+var version = "dev"
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	slog.Info("cleaning up server resources")

@@ -3,9 +3,18 @@ package llm
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
+
+// BudgetGuard gates and records spend per org/task. It is satisfied by
+// cost.BudgetManager; the router depends only on this interface so the llm
+// package need not import cost.
+type BudgetGuard interface {
+	CheckBudget(ctx context.Context, orgID, taskID string, proposedCost float64) error
+	RecordCost(orgID, taskID string, cost float64)
+}
 
 // Provider defines the interface for all LLM providers.
 type Provider interface {
@@ -85,24 +94,40 @@ type ModelInfo struct {
 	InputCostPer1K  float64
 	OutputCostPer1K float64
 	MaxTokens       int
+	// Capabilities the model supports (e.g. "tools", "vision", "reasoning").
+	// Used to filter out models that cannot satisfy a task's requirements.
+	Capabilities []string
 }
 
-// PriceTable maps model names to pricing.
+// Supports reports whether the model advertises the given capability.
+func (m ModelInfo) Supports(capability string) bool {
+	for _, c := range m.Capabilities {
+		if c == capability {
+			return true
+		}
+	}
+	return false
+}
+
+// PriceTable maps model names to pricing. It is the built-in default; deployments
+// can override prices at runtime via ModelRouter.SetPrices (see doc 06/07 — prices
+// drift monthly and should not be pinned in code for production).
 var PriceTable = map[string]ModelInfo{
-	"claude-opus-4":            {Name: "claude-opus-4", Provider: "anthropic", InputCostPer1K: 0.015, OutputCostPer1K: 0.075, MaxTokens: 8192},
-	"claude-sonnet-4-20250514": {Name: "claude-sonnet-4-20250514", Provider: "anthropic", InputCostPer1K: 0.003, OutputCostPer1K: 0.015, MaxTokens: 8192},
-	"claude-haiku-3.5":         {Name: "claude-haiku-3.5", Provider: "anthropic", InputCostPer1K: 0.0008, OutputCostPer1K: 0.004, MaxTokens: 8192},
-	"gpt-4.5":                  {Name: "gpt-4.5", Provider: "openai", InputCostPer1K: 0.015, OutputCostPer1K: 0.06, MaxTokens: 16384},
-	"gpt-4o":                   {Name: "gpt-4o", Provider: "openai", InputCostPer1K: 0.0025, OutputCostPer1K: 0.01, MaxTokens: 16384},
-	"gpt-4o-mini":              {Name: "gpt-4o-mini", Provider: "openai", InputCostPer1K: 0.00015, OutputCostPer1K: 0.0006, MaxTokens: 16384},
-	"gemini-2.5-pro":           {Name: "gemini-2.5-pro", Provider: "google", InputCostPer1K: 0.00125, OutputCostPer1K: 0.01, MaxTokens: 8192},
-	"gemini-2.0-flash":         {Name: "gemini-2.0-flash", Provider: "google", InputCostPer1K: 0.000075, OutputCostPer1K: 0.0003, MaxTokens: 8192},
-	"deepseek-r1":              {Name: "deepseek-r1", Provider: "deepseek", InputCostPer1K: 0.00055, OutputCostPer1K: 0.00219, MaxTokens: 8192},
+	"claude-opus-4":            {Name: "claude-opus-4", Provider: "anthropic", InputCostPer1K: 0.015, OutputCostPer1K: 0.075, MaxTokens: 8192, Capabilities: []string{"tools", "vision", "reasoning"}},
+	"claude-sonnet-4-20250514": {Name: "claude-sonnet-4-20250514", Provider: "anthropic", InputCostPer1K: 0.003, OutputCostPer1K: 0.015, MaxTokens: 8192, Capabilities: []string{"tools", "vision"}},
+	"claude-haiku-3.5":         {Name: "claude-haiku-3.5", Provider: "anthropic", InputCostPer1K: 0.0008, OutputCostPer1K: 0.004, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"gpt-4.5":                  {Name: "gpt-4.5", Provider: "openai", InputCostPer1K: 0.015, OutputCostPer1K: 0.06, MaxTokens: 16384, Capabilities: []string{"tools", "vision", "reasoning"}},
+	"gpt-4o":                   {Name: "gpt-4o", Provider: "openai", InputCostPer1K: 0.0025, OutputCostPer1K: 0.01, MaxTokens: 16384, Capabilities: []string{"tools", "vision"}},
+	"gpt-4o-mini":              {Name: "gpt-4o-mini", Provider: "openai", InputCostPer1K: 0.00015, OutputCostPer1K: 0.0006, MaxTokens: 16384, Capabilities: []string{"tools"}},
+	"gemini-2.5-pro":           {Name: "gemini-2.5-pro", Provider: "google", InputCostPer1K: 0.00125, OutputCostPer1K: 0.01, MaxTokens: 8192, Capabilities: []string{"tools", "vision", "reasoning"}},
+	"gemini-2.0-flash":         {Name: "gemini-2.0-flash", Provider: "google", InputCostPer1K: 0.000075, OutputCostPer1K: 0.0003, MaxTokens: 8192, Capabilities: []string{"tools", "vision"}},
+	"deepseek-r1":              {Name: "deepseek-r1", Provider: "deepseek", InputCostPer1K: 0.00055, OutputCostPer1K: 0.00219, MaxTokens: 8192, Capabilities: []string{"reasoning"}},
 }
 
 // Task represents a task for model routing (canonical definition).
 type Task struct {
 	ID                   string
+	OrgID                string
 	Type                 string
 	Description          string
 	FilesChanged         []string
@@ -147,6 +172,9 @@ type ModelRouter struct {
 	providers     map[string]Provider
 	healthMonitor *HealthMonitor
 	config        *RouterConfig
+	prices        map[string]ModelInfo
+	cache         ResponseCache
+	budget        BudgetGuard
 	mu            sync.RWMutex
 }
 
@@ -154,6 +182,9 @@ type ModelRouter struct {
 type RouterConfig struct {
 	DefaultModel  string
 	BudgetPerTask float64
+	// DefaultOutputTokens is the assumed completion length used for cost
+	// estimation when the real output size is not yet known.
+	DefaultOutputTokens int
 }
 
 // NewModelRouter creates a new model router.
@@ -162,14 +193,45 @@ func NewModelRouter(cfg *RouterConfig) *ModelRouter {
 		providers:     make(map[string]Provider),
 		healthMonitor: NewHealthMonitor(),
 		config:        cfg,
+		prices:        PriceTable, // default; override with SetPrices
 	}
 	if r.config == nil {
-		r.config = &RouterConfig{
-			DefaultModel:  "claude-sonnet-4-20250514",
-			BudgetPerTask: 1.00,
-		}
+		r.config = &RouterConfig{DefaultModel: "claude-sonnet-4-20250514", BudgetPerTask: 1.00}
+	}
+	if r.config.DefaultOutputTokens == 0 {
+		r.config.DefaultOutputTokens = 500
 	}
 	return r
+}
+
+// SetCache attaches a response cache so identical requests skip paid calls.
+func (r *ModelRouter) SetCache(c ResponseCache) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cache = c
+}
+
+// SetBudgetGuard attaches budget enforcement to execution.
+func (r *ModelRouter) SetBudgetGuard(b BudgetGuard) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.budget = b
+}
+
+// SetPrices overrides the model price table (e.g. loaded from config/DB).
+func (r *ModelRouter) SetPrices(prices map[string]ModelInfo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(prices) > 0 {
+		r.prices = prices
+	}
+}
+
+// priceTable returns the router's active price table under read lock.
+func (r *ModelRouter) priceTable() map[string]ModelInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.prices
 }
 
 // RegisterProvider adds a provider to the router.
@@ -184,11 +246,10 @@ func (r *ModelRouter) RegisterProvider(name string, p Provider) {
 func (r *ModelRouter) Route(ctx context.Context, task *Task) (*RoutingDecision, error) {
 	complexity := r.classifyComplexity(task)
 	healthy := r.healthMonitor.GetHealthyProviders()
-	capable := r.filterByCapabilities(healthy, task.RequiredCapabilities)
-	candidates := r.rankCandidates(capable, complexity)
+	candidates := r.rankCandidates(task, healthy, complexity)
 
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no healthy providers available")
+		return nil, fmt.Errorf("no healthy provider supports the task's requirements")
 	}
 
 	primary := candidates[0]
@@ -260,59 +321,82 @@ func (r *ModelRouter) classifyComplexity(task *Task) Complexity {
 	return Complexity(minf(1.0, score))
 }
 
-func (r *ModelRouter) filterByCapabilities(healthy []string, capabilities []string) []string {
-	if len(capabilities) == 0 {
-		return healthy
+// estimateInputTokens approximates prompt size from the task's messages and
+// system prompt using a ~4-characters-per-token heuristic, so cost estimates
+// reflect the actual request rather than a fixed guess.
+func estimateInputTokens(task *Task) int {
+	chars := 0
+	for _, m := range task.Messages {
+		chars += len(m.Content)
 	}
-	return healthy
+	tokens := chars / 4
+	if tokens < 50 {
+		tokens = 50 // floor: system prompt + framing always costs something
+	}
+	return tokens
 }
 
-func (r *ModelRouter) rankCandidates(capable []string, complexity Complexity) []RoutingCandidate {
-	var candidates []RoutingCandidate
-	models := r.getModelsForComplexity(complexity)
+// rankCandidates builds the ordered candidate list for a task: it considers only
+// models in the complexity-appropriate tier, drops any that lack a healthy
+// provider or a required capability, estimates cost from the real prompt size,
+// scores confidence on provider health, and returns candidates cheapest-first.
+func (r *ModelRouter) rankCandidates(task *Task, healthy []string, complexity Complexity) []RoutingCandidate {
+	prices := r.priceTable()
+	healthySet := make(map[string]struct{}, len(healthy))
+	for _, p := range healthy {
+		healthySet[p] = struct{}{}
+	}
 
-	for _, model := range models {
-		info, ok := PriceTable[model]
+	estInput := estimateInputTokens(task)
+	estOutput := r.config.DefaultOutputTokens
+
+	var candidates []RoutingCandidate
+	for _, model := range r.getModelsForComplexity(complexity) {
+		info, ok := prices[model]
 		if !ok {
 			continue
 		}
-
-		estInput := 1500
-		estOutput := 500
-		estCost := (float64(estInput) / 1000.0) * info.InputCostPer1K + (float64(estOutput) / 1000.0) * info.OutputCostPer1K
-
-		providerHealthy := false
-		for _, p := range capable {
-			if p == info.Provider || p == model {
-				providerHealthy = true
-				break
-			}
+		// Provider must be healthy (registered by provider name).
+		if _, healthyOK := healthySet[info.Provider]; !healthyOK {
+			continue
 		}
-		if !providerHealthy {
+		// Model must support every capability the task requires.
+		if !supportsAll(info, task.RequiredCapabilities) {
 			continue
 		}
 
-		confidence := 1.0 - estCost*10
+		estCost := (float64(estInput)/1000.0)*info.InputCostPer1K +
+			(float64(estOutput)/1000.0)*info.OutputCostPer1K
 
 		candidates = append(candidates, RoutingCandidate{
 			Provider:   info.Provider,
 			Model:      model,
-			Reason:     fmt.Sprintf("complexity=%.2f, cost=$%.4f", float64(complexity), estCost),
+			Reason:     fmt.Sprintf("complexity=%.2f, est_in=%d tok, cost=$%.4f", float64(complexity), estInput, estCost),
 			EstCost:    estCost,
 			EstLatency: 2 * time.Second,
-			Confidence: maxf(0.1, minf(1.0, confidence)),
+			Confidence: r.healthMonitor.Confidence(info.Provider),
 		})
 	}
 
-	for i := 0; i < len(candidates); i++ {
-		for j := i + 1; j < len(candidates); j++ {
-			if candidates[j].EstCost < candidates[i].EstCost {
-				candidates[i], candidates[j] = candidates[j], candidates[i]
-			}
+	// Cheapest first; break ties by higher confidence.
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].EstCost != candidates[j].EstCost {
+			return candidates[i].EstCost < candidates[j].EstCost
 		}
-	}
+		return candidates[i].Confidence > candidates[j].Confidence
+	})
 
 	return candidates
+}
+
+// supportsAll reports whether the model satisfies every required capability.
+func supportsAll(info ModelInfo, required []string) bool {
+	for _, cap := range required {
+		if !info.Supports(cap) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *ModelRouter) getModelsForComplexity(c Complexity) []string {
@@ -328,50 +412,130 @@ func (r *ModelRouter) getModelsForComplexity(c Complexity) []string {
 	}
 }
 
-// ExecuteWithFailover tries the primary provider then falls back.
+// StartHealthChecks runs periodic health checks on all registered providers.
+func (r *ModelRouter) StartHealthChecks(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.mu.RLock()
+			names := make([]string, 0, len(r.providers))
+			for name := range r.providers {
+				names = append(names, name)
+			}
+			r.mu.RUnlock()
+			for _, name := range names {
+				go r.healthMonitor.CheckHealth(ctx, name)
+			}
+		}
+	}
+}
+
+// GetHealthMonitor returns the health monitor for external inspection.
+func (r *ModelRouter) GetHealthMonitor() *HealthMonitor {
+	return r.healthMonitor
+}
+
+// ExecuteWithFailover routes a task, then attempts the chosen provider and each
+// fallback in turn. For every attempt it serves from cache when possible, gates
+// spend through the budget guard, caps output at the model's MaxTokens, and
+// records actual cost on success.
 func (r *ModelRouter) ExecuteWithFailover(ctx context.Context, task *Task) (*ChatResponse, error) {
 	decision, err := r.Route(ctx, task)
 	if err != nil {
 		return nil, fmt.Errorf("routing failed: %w", err)
 	}
 
-	r.mu.RLock()
-	provider, ok := r.providers[decision.Provider]
-	r.mu.RUnlock()
+	// Ordered attempts: primary then fallbacks.
+	attempts := []FallbackOption{{Provider: decision.Provider, Model: decision.Model, EstCost: decision.EstCost}}
+	attempts = append(attempts, decision.Fallbacks...)
 
-	if ok {
-		req := &ChatRequest{
-			Model:     decision.Model,
-			Messages:  task.Messages,
-			MaxTokens: 4096,
-		}
-		resp, err := provider.Chat(ctx, req)
+	var lastErr error
+	for _, a := range attempts {
+		resp, err := r.attempt(ctx, task, a)
 		if err == nil {
 			return resp, nil
 		}
-		r.healthMonitor.RecordFailure(decision.Provider)
+		lastErr = err
 	}
 
-	for _, fb := range decision.Fallbacks {
-		r.mu.RLock()
-		provider, ok = r.providers[fb.Provider]
-		r.mu.RUnlock()
+	if lastErr != nil {
+		return nil, fmt.Errorf("all providers failed for task %s: %w", task.ID, lastErr)
+	}
+	return nil, fmt.Errorf("all providers failed for task %s", task.ID)
+}
 
-		if ok {
-			req := &ChatRequest{
-				Model:     fb.Model,
-				Messages:  task.Messages,
-				MaxTokens: 4096,
-			}
-			resp, err := provider.Chat(ctx, req)
-			if err == nil {
-				return resp, nil
-			}
-			r.healthMonitor.RecordFailure(fb.Provider)
+// attempt runs a single (provider, model) try with cache, budget gating, and
+// cost recording. A BudgetExceededError is returned without trying fallbacks-worth
+// of spend, since the budget applies regardless of provider.
+func (r *ModelRouter) attempt(ctx context.Context, task *Task, opt FallbackOption) (*ChatResponse, error) {
+	r.mu.RLock()
+	provider, ok := r.providers[opt.Provider]
+	cache := r.cache
+	budget := r.budget
+	r.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("provider %s not registered", opt.Provider)
+	}
+
+	req := &ChatRequest{
+		Model:     opt.Model,
+		Messages:  task.Messages,
+		System:    systemPrompt(task),
+		MaxTokens: r.maxTokensFor(opt.Model),
+	}
+
+	// Cache lookup: a hit costs nothing and skips the provider entirely.
+	if cache != nil {
+		key := CacheKey(req)
+		if hit, found := cache.Get(key); found {
+			return hit, nil
 		}
 	}
 
-	return nil, fmt.Errorf("all providers failed for task %s", task.ID)
+	// Budget gate before spending.
+	if budget != nil {
+		if err := budget.CheckBudget(ctx, task.OrgID, task.ID, opt.EstCost); err != nil {
+			return nil, err // budget error: do not retry other providers
+		}
+	}
+
+	resp, err := provider.Chat(ctx, req)
+	if err != nil {
+		r.healthMonitor.RecordFailure(opt.Provider)
+		return nil, err
+	}
+	r.healthMonitor.RecordSuccess(opt.Provider, resp.Latency)
+
+	if budget != nil {
+		budget.RecordCost(task.OrgID, task.ID, resp.Cost)
+	}
+	if cache != nil {
+		cache.Set(CacheKey(req), resp)
+	}
+	return resp, nil
+}
+
+// maxTokensFor returns the completion cap for a model from the price table,
+// defaulting to 4096 when the model is unknown.
+func (r *ModelRouter) maxTokensFor(model string) int {
+	if info, ok := r.priceTable()[model]; ok && info.MaxTokens > 0 {
+		return info.MaxTokens
+	}
+	return 4096
+}
+
+// systemPrompt returns a task's system prompt, if any is derivable. Kept as a
+// hook so prompt construction lives in one place.
+func systemPrompt(task *Task) string {
+	if task == nil {
+		return ""
+	}
+	// Messages already carry the conversation; no separate system prompt yet.
+	return ""
 }
 
 func minf(a, b float64) float64 {

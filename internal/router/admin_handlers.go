@@ -3,9 +3,11 @@ package router
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
+	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -17,16 +19,33 @@ func (r *Router) adminStatsHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	ctx := req.Context()
+
+	// Gather real stats from repositories
+	totalUsers, err := r.users.Count(ctx)
+	if err != nil {
+		response.InternalError(w, "failed to get user count")
+		return
+	}
+	activeUsers24h, err := r.users.CountActive24h(ctx)
+	if err != nil {
+		response.InternalError(w, "failed to get active user count")
+		return
+	}
+
+	// Get org count
+	var totalOrgs int
+	_ = r.orgs.Count(ctx, &totalOrgs)
+
+	// Get project count
+	var totalProjects int
+	_ = r.projects.Count(ctx, &totalProjects)
+
 	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"total_users":      0,
-		"total_orgs":       0,
-		"total_projects":   0,
-		"total_agents":     0,
-		"total_sessions":   0,
-		"total_tasks":      0,
-		"total_skills":     0,
-		"active_users_24h": 0,
-		"message":          "admin stats placeholder",
+		"total_users":      totalUsers,
+		"total_orgs":       totalOrgs,
+		"total_projects":   totalProjects,
+		"active_users_24h": activeUsers24h,
 	})
 }
 
@@ -38,9 +57,31 @@ func (r *Router) adminListUsersHandler(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
+	page, _ := strconv.Atoi(req.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(req.URL.Query().Get("page_size"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	users, err := r.users.List(req.Context(), offset, pageSize)
+	if err != nil {
+		response.InternalError(w, "failed to list users")
+		return
+	}
+	if users == nil {
+		users = []repository.User{}
+	}
+
 	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"users":   []interface{}{},
-		"message": "admin user listing placeholder",
+		"users": users,
+		"page": map[string]interface{}{
+			"page":      page,
+			"page_size": pageSize,
+		},
 	})
 }
 
@@ -70,16 +111,18 @@ func (r *Router) adminUpdateUserRoleHandler(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	// Verify user exists
-	if _, err := r.users.FindByID(req.Context(), userID); err != nil {
-		response.NotFound(w, "user not found")
+	if err := r.users.UpdateRole(req.Context(), userID, input.Role); err != nil {
+		if err.Error() == "user not found" {
+			response.NotFound(w, "user not found")
+			return
+		}
+		response.InternalError(w, "failed to update user role")
 		return
 	}
 
 	response.JSON(w, http.StatusOK, map[string]interface{}{
 		"user_id": userID,
 		"role":    input.Role,
-		"message": "role updated (placeholder - DB update not implemented)",
 	})
 }
 
@@ -98,13 +141,14 @@ func (r *Router) adminDeleteUserHandler(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	if _, err := r.users.FindByID(req.Context(), userID); err != nil {
-		response.NotFound(w, "user not found")
+	if err := r.users.Delete(req.Context(), userID); err != nil {
+		if err.Error() == "user not found" {
+			response.NotFound(w, "user not found")
+			return
+		}
+		response.InternalError(w, "failed to delete user")
 		return
 	}
 
-	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"user_id": userID,
-		"message": "user deleted (placeholder - DB delete not implemented)",
-	})
+	response.NoContent(w)
 }

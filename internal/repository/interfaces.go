@@ -12,6 +12,11 @@ type UserRepositoryInterface interface {
 	FindByEmail(ctx context.Context, email string) (*User, error)
 	UpdateProfile(ctx context.Context, userID, name, avatarURL string) error
 	UpdateLastLogin(ctx context.Context, userID string) error
+	UpdateRole(ctx context.Context, userID, role string) error
+	Delete(ctx context.Context, userID string) error
+	Count(ctx context.Context) (int, error)
+	CountActive24h(ctx context.Context) (int, error)
+	List(ctx context.Context, offset, limit int) ([]User, error)
 }
 
 // OrganizationRepositoryInterface defines the interface for organization data access.

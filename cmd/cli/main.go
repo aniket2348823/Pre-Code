@@ -35,12 +35,6 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&token, "token", "", "API token (or set VIGIL_API_TOKEN)")
 
 	rootCmd.AddCommand(
-		initCmd(),
-		chatCmd(),
-		taskCmd(),
-		skillCmd(),
-		usageCmd(),
-		costCmd(),
 		configCmd(),
 		versionCmd(),
 	)

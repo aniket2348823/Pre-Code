@@ -11,22 +11,50 @@ import (
 
 // Manager coordinates all memory layers for cascading recall.
 type Manager struct {
-	episodic    *EpisodicStore
-	semantic    *SemanticStore
-	procedural  *ProceduralStore
-	working     *WorkingMemory
-	pool        *pgxpool.Pool
+	episodic   *EpisodicStore
+	semantic   *SemanticStore
+	procedural *ProceduralStore
+	working    *WorkingMemory
+	embedder   Embedder
+	pool       *pgxpool.Pool
 }
 
 // NewManager creates a new memory manager with all layers.
+//
+// It defaults to a NoOpEmbedder (zero vectors) so semantic recall degrades
+// gracefully when no embedding provider is configured. Use
+// NewManagerWithEmbedder to enable real semantic search.
 func NewManager(pool *pgxpool.Pool) *Manager {
+	return NewManagerWithEmbedder(pool, NewNoOpEmbedder(1536))
+}
+
+// NewManagerWithEmbedder creates a memory manager that embeds queries and
+// stored content using the given Embedder, enabling real vector search.
+func NewManagerWithEmbedder(pool *pgxpool.Pool, embedder Embedder) *Manager {
+	if embedder == nil {
+		embedder = NewNoOpEmbedder(1536)
+	}
 	return &Manager{
 		episodic:   NewEpisodicStore(pool),
 		semantic:   NewSemanticStore(pool),
 		procedural: NewProceduralStore(),
 		working:    NewWorkingMemory(30 * time.Minute),
+		embedder:   embedder,
 		pool:       pool,
 	}
+}
+
+// embed converts text into a vector using the configured embedder. On any
+// failure (or when using the NoOpEmbedder) it returns a zero vector of the
+// embedder's dimension so callers can still run a degraded, non-semantic query
+// instead of failing outright.
+func (m *Manager) embed(ctx context.Context, text string) pgvector.Vector {
+	dims := m.embedder.Dimensions()
+	vec, err := m.embedder.Embed(ctx, text)
+	if err != nil || len(vec) != dims {
+		return pgvector.NewVector(make([]float32, dims))
+	}
+	return pgvector.NewVector(vec)
 }
 
 // Recall performs cascading memory recall: working -> episodic -> semantic.
@@ -47,11 +75,12 @@ func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]Memory
 		return results, nil
 	}
 
+	// Embed the query once and reuse across vector-backed layers.
+	queryVec := m.embed(ctx, query)
+
 	// Layer 2: Check episodic memory (past interactions)
 	if m.episodic != nil {
-		// Use a zero vector for text-based search (production would use embeddings)
-		zeroVec := pgvector.NewVector(make([]float32, 1536))
-		episodes, err := m.episodic.Search(ctx, "", zeroVec, limit-len(results))
+		episodes, err := m.episodic.Search(ctx, "", queryVec, limit-len(results))
 		if err == nil {
 			for _, ep := range episodes {
 				results = append(results, MemoryResult{
@@ -70,8 +99,7 @@ func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]Memory
 
 	// Layer 3: Check semantic memory (codebase patterns)
 	if m.semantic != nil {
-		zeroVec := pgvector.NewVector(make([]float32, 1536))
-		patterns, err := m.semantic.Search(ctx, "", zeroVec, limit-len(results))
+		patterns, err := m.semantic.Search(ctx, "", queryVec, limit-len(results))
 		if err == nil {
 			for _, p := range patterns {
 				results = append(results, MemoryResult{
@@ -96,7 +124,7 @@ func (m *Manager) StoreEpisode(ctx context.Context, userID, episodeType, title, 
 		Title:       title,
 		Content:     content,
 		Importance:  importance,
-		Embedding:   pgvector.NewVector(make([]float32, 1536)), // Placeholder
+		Embedding:   m.embed(ctx, title+"\n"+content),
 	}
 	return m.episodic.Store(ctx, mem)
 }
@@ -110,7 +138,7 @@ func (m *Manager) StorePattern(ctx context.Context, userID, projectID, patternTy
 		Name:        name,
 		Description: description,
 		Confidence:  0.5,
-		Embedding:   pgvector.NewVector(make([]float32, 1536)), // Placeholder
+		Embedding:   m.embed(ctx, name+"\n"+description),
 	}
 	return m.semantic.Store(ctx, pattern)
 }

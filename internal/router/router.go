@@ -22,15 +22,46 @@ func (r *Router) setupMiddleware() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Heartbeat("/health"))
+	r.Use(requestIDMiddleware)
 	r.Use(func(next http.Handler) http.Handler {
 		return http.TimeoutHandler(next, 30*time.Second, "request timeout")
 	})
+	r.useCORS()
+}
+
+// useCORS applies CORS middleware from configuration.
+func (r *Router) useCORS() {
+	allowedOrigins := r.cfg.CORS.AllowedOrigins
+	if len(allowedOrigins) == 0 {
+		allowedOrigins = []string{"*"}
+	}
+	allowedMethods := r.cfg.CORS.AllowedMethods
+	if len(allowedMethods) == 0 {
+		allowedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	}
+	allowedHeaders := r.cfg.CORS.AllowedHeaders
+	if len(allowedHeaders) == 0 {
+		allowedHeaders = []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"}
+	}
+
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-API-Key")
+			origin := req.Header.Get("Origin")
+			if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			} else {
+				for _, o := range allowedOrigins {
+					if o == origin {
+						w.Header().Set("Access-Control-Allow-Origin", origin)
+						break
+					}
+				}
+			}
+
+			w.Header().Set("Access-Control-Allow-Methods", joinStrings(allowedMethods, ", "))
+			w.Header().Set("Access-Control-Allow-Headers", joinStrings(allowedHeaders, ", "))
 			w.Header().Set("Access-Control-Max-Age", "86400")
+
 			if req.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -38,6 +69,28 @@ func (r *Router) setupMiddleware() {
 			next.ServeHTTP(w, req)
 		})
 	})
+}
+
+// requestIDMiddleware propagates the X-Request-ID header into the response.
+func requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// The chi RequestID middleware already sets this in context; just echo it in the response.
+		requestID := req.Header.Get("X-Request-ID")
+		w.Header().Set("X-Request-ID", requestID)
+		next.ServeHTTP(w, req)
+	})
+}
+
+// joinStrings joins a slice of strings with a separator.
+func joinStrings(ss []string, sep string) string {
+	result := ""
+	for i, s := range ss {
+		if i > 0 {
+			result += sep
+		}
+		result += s
+	}
+	return result
 }
 
 func (r *Router) setupRoutes() {
@@ -144,6 +197,9 @@ func (r *Router) setupRoutes() {
 				admin.Put("/admin/users/{userID}/role", r.adminUpdateUserRoleHandler)
 				admin.Delete("/admin/users/{userID}", r.adminDeleteUserHandler)
 			}
+
+			// WebSocket endpoint for real-time agent streaming (requires auth)
+			protected.Get("/ws", r.handleWebSocket)
 		}
 	})
 }
@@ -220,6 +276,10 @@ func (r *Router) registerHandler(w http.ResponseWriter, req *http.Request) {
 	input.Name = strings.TrimSpace(input.Name)
 	if input.Email == "" || input.Password == "" {
 		response.BadRequest(w, "email and password are required")
+		return
+	}
+	if !strings.Contains(input.Email, "@") || !strings.Contains(input.Email, ".") {
+		response.BadRequest(w, "invalid email address")
 		return
 	}
 	if len(input.Password) < 12 {

@@ -80,6 +80,11 @@ func (r *ProjectRepository) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+// Count returns the total number of projects.
+func (r *ProjectRepository) Count(ctx context.Context, count *int) error {
+	return r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM projects`).Scan(count)
+}
+
 // ListByOrg returns all projects for an organization.
 func (r *ProjectRepository) ListByOrg(ctx context.Context, orgID string) ([]Project, error) {
 	query := `

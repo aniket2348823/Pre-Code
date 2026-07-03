@@ -91,10 +91,12 @@ func TestRankCandidates(t *testing.T) {
 	router := &ModelRouter{
 		providers:     make(map[string]Provider),
 		healthMonitor: healthMonitor,
-		config:        &RouterConfig{DefaultModel: "gpt-4o", BudgetPerTask: 1.0},
+		config:        &RouterConfig{DefaultModel: "gpt-4o", BudgetPerTask: 1.0, DefaultOutputTokens: 500},
+		prices:        PriceTable,
 	}
 
-	candidates := router.rankCandidates([]string{"openai", "anthropic", "google"}, ComplexitySimple)
+	task := &Task{Messages: []Message{{Role: "user", Content: "rename a variable"}}}
+	candidates := router.rankCandidates(task, []string{"openai", "anthropic", "google"}, ComplexitySimple)
 	if len(candidates) == 0 {
 		t.Fatal("rankCandidates returned no candidates for simple complexity")
 	}
@@ -107,7 +109,7 @@ func TestRankCandidates(t *testing.T) {
 		}
 	}
 
-	complexCandidates := router.rankCandidates([]string{"openai", "anthropic"}, ComplexityComplex)
+	complexCandidates := router.rankCandidates(task, []string{"openai", "anthropic"}, ComplexityComplex)
 	if len(complexCandidates) == 0 {
 		t.Fatal("rankCandidates returned no candidates for complex complexity")
 	}

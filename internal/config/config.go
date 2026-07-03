@@ -15,6 +15,7 @@ type Config struct {
 	Auth     AuthConfig
 	LLM      LLMConfig
 	Stripe   StripeConfig
+	CORS     CORSConfig
 	Log      LogConfig
 }
 
@@ -71,6 +72,15 @@ type StripeConfig struct {
 	WebhookSecret string
 	SuccessURL    string
 	CancelURL     string
+}
+
+// CORSConfig holds CORS middleware configuration.
+type CORSConfig struct {
+	AllowedOrigins  []string
+	AllowedMethods  []string
+	AllowedHeaders  []string
+	AllowCredentials bool
+	MaxAge          int
 }
 
 type LogConfig struct {
@@ -162,28 +172,49 @@ func Load() (*Config, error) {
 		NATS: NATSConfig{
 			URL:    viper.GetString("nats.url"),
 			Stream: viper.GetString("nats.stream"),
-		},			Auth: AuthConfig{
-				JWTSecret:     viper.GetString("auth.jwt_secret"),
-				JWTExpiration: viper.GetDuration("auth.jwt_expiration"),
-				APIKeyPrefix:  viper.GetString("auth.api_key_prefix"),
-			},
-			LLM: LLMConfig{
-				OpenAIKey:     viper.GetString("llm.openai_key"),
-				AnthropicKey:  viper.GetString("llm.anthropic_key"),
-				DefaultModel:  viper.GetString("llm.default_model"),
-				BudgetPerTask: viper.GetFloat64("llm.budget_per_task"),
-				MaxTokens:     viper.GetInt("llm.max_tokens"),
-			},
+		},		Auth: AuthConfig{
+			JWTSecret:     viper.GetString("auth.jwt_secret"),
+			JWTExpiration: viper.GetDuration("auth.jwt_expiration"),
+			APIKeyPrefix:  viper.GetString("auth.api_key_prefix"),
+		},
+		LLM: LLMConfig{
+			OpenAIKey:     viper.GetString("llm.openai_key"),
+			AnthropicKey:  viper.GetString("llm.anthropic_key"),
+			DefaultModel:  viper.GetString("llm.default_model"),
+			BudgetPerTask: viper.GetFloat64("llm.budget_per_task"),
+			MaxTokens:     viper.GetInt("llm.max_tokens"),
+		},
 		Stripe: StripeConfig{
 			SecretKey:     viper.GetString("stripe.secret_key"),
 			WebhookSecret: viper.GetString("stripe.webhook_secret"),
 			SuccessURL:    viper.GetString("stripe.success_url"),
 			CancelURL:     viper.GetString("stripe.cancel_url"),
 		},
+		CORS: CORSConfig{
+			AllowedOrigins:  viper.GetStringSlice("cors.allowed_origins"),
+			AllowedMethods:  viper.GetStringSlice("cors.allowed_methods"),
+			AllowedHeaders:  viper.GetStringSlice("cors.allowed_headers"),
+			AllowCredentials: viper.GetBool("cors.allow_credentials"),
+			MaxAge:          viper.GetInt("cors.max_age"),
+		},
 		Log: LogConfig{
 			Level:  viper.GetString("log.level"),
 			Format: viper.GetString("log.format"),
 		},
+	}
+
+	// Apply CORS defaults if not configured
+	if len(cfg.CORS.AllowedOrigins) == 0 {
+		cfg.CORS.AllowedOrigins = []string{"*"}
+	}
+	if len(cfg.CORS.AllowedMethods) == 0 {
+		cfg.CORS.AllowedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	}
+	if len(cfg.CORS.AllowedHeaders) == 0 {
+		cfg.CORS.AllowedHeaders = []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"}
+	}
+	if cfg.CORS.MaxAge == 0 {
+		cfg.CORS.MaxAge = 86400
 	}
 
 	return cfg, nil
