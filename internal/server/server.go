@@ -18,6 +18,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/queue"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/router"
+	"github.com/vigilagent/vigilagent/internal/scanner"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/internal/tools"
 )
@@ -161,6 +162,7 @@ func New(cfg *config.Config) (*Server, error) {
 		AgentExec:  agentExec,
 		LLMRouter:  modelRouter,
 		Memory:     memMgr,
+		Engine:     scanner.DefaultEngine(),
 	})
 	srv.router = r
 

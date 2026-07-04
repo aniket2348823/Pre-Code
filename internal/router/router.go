@@ -146,6 +146,8 @@ func (r *Router) setupRoutes() {
 			protected.Post("/memory/search", r.searchMemoryHandler)
 			protected.Post("/memory", r.createMemoryHandler)
 
+			protected.Post("/scan", r.scanHandler)
+
 			events := protected.Group(nil)
 			events.Use(r.eventsRateLimitMiddleware)
 			{

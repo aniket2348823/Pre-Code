@@ -16,6 +16,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/llm"
 	ratelimit "github.com/vigilagent/vigilagent/internal/middleware"
 	"github.com/vigilagent/vigilagent/internal/router"
+	"github.com/vigilagent/vigilagent/internal/scanner"
 	"github.com/vigilagent/vigilagent/internal/tools"
 )
 
@@ -79,6 +80,7 @@ func newTestRouter() *router.Router {
 		AgentExec: agentExec,
 		LLMRouter: llmRouter,
 		Memory:    nil,
+		Engine:    scanner.DefaultEngine(),
 	})
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/memory"
 	"github.com/vigilagent/vigilagent/internal/queue"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/scanner"
 )
 
 // Options holds all dependencies for the Router.
@@ -50,6 +51,9 @@ type Options struct {
 	Memory    *memory.Manager
 	Budget    *cost.BudgetManager
 	Worker    *queue.TaskWorker
+
+	// Deterministic engine (static analysis)
+	Engine *scanner.Engine
 }
 
 // Router holds all HTTP handlers and dependencies.
@@ -82,6 +86,7 @@ type Router struct {
 	memory    *memory.Manager
 	budget    *cost.BudgetManager
 	worker    *queue.TaskWorker
+	engine    *scanner.Engine
 }
 
 // New creates a Router from an Options struct.
@@ -111,6 +116,7 @@ func New(opts Options) *Router {
 		memory:     opts.Memory,
 		budget:    opts.Budget,
 		worker:    opts.Worker,
+		engine:    opts.Engine,
 	}
 	r.setupMiddleware()
 	r.setupRoutes()
