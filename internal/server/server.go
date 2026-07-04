@@ -18,7 +18,16 @@ import (
 	"github.com/vigilagent/vigilagent/internal/queue"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/router"
+	"github.com/vigilagent/vigilagent/internal/attackgraph"
+	"github.com/vigilagent/vigilagent/internal/audit"
+	"github.com/vigilagent/vigilagent/internal/compliance"
+	"github.com/vigilagent/vigilagent/internal/confidence"
+	"github.com/vigilagent/vigilagent/internal/knowledge"
+	"github.com/vigilagent/vigilagent/internal/requirements"
 	"github.com/vigilagent/vigilagent/internal/scanner"
+	"github.com/vigilagent/vigilagent/internal/schema"
+	"github.com/vigilagent/vigilagent/internal/skillengine"
+	"github.com/vigilagent/vigilagent/internal/cors"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/internal/tools"
 )
@@ -140,7 +149,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// Start periodic health checks for LLM providers
 	go modelRouter.StartHealthChecks(context.Background(), 2*time.Minute)
 
-	r := router.New(router.Options{
+	opts := router.Options{
 		Config:     cfg,
 		DB:         db,
 		Redis:      rds,
@@ -162,8 +171,33 @@ func New(cfg *config.Config) (*Server, error) {
 		AgentExec:  agentExec,
 		LLMRouter:  modelRouter,
 		Memory:     memMgr,
-		Engine:     scanner.DefaultEngine(),
-	})
+		Engine:       scanner.NewEngine(scanner.NewBuiltinAnalyzer()),
+		Requirements: requirements.NewResolver(),
+		Validator:    schema.NewValidator(),
+		Compliance:   compliance.NewChecker(),
+		Knowledge:    knowledge.NewGraph(),
+		SkillEngine:  skillengine.NewEngine(),
+		Confidence:   confidence.NewEngine(),
+		AttackGraph:  attackgraph.NewEngine(),
+		Audit:        audit.NewEngine(audit.NewMemoryStore()),
+	}
+
+	// Use NewWithMiddleware when CORS is configured; otherwise default stack.
+	var r *router.Router
+	if len(cfg.CORS.AllowedOrigins) > 0 {
+		r = router.NewWithMiddleware(opts, &router.MiddlewareConfig{
+			RequestID: true,
+			Timeout:   30 * time.Second,
+			CORS: &cors.Config{
+				AllowOrigins: cfg.CORS.AllowedOrigins,
+				AllowMethods: cfg.CORS.AllowedMethods,
+				AllowHeaders: cfg.CORS.AllowedHeaders,
+				MaxAge:       3600,
+			},
+		})
+	} else {
+		r = router.New(opts)
+	}
 	srv.router = r
 
 	slog.Info("server initialized successfully")

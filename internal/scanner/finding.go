@@ -66,9 +66,14 @@ func normalizeSnippet(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// ComputeFingerprint derives a stable dedupe key from location + code, ignoring
-// category so the same line flagged by different tools collapses into one.
-func ComputeFingerprint(filename string, line int, snippet string) string {
-	h := sha256.Sum256([]byte(filename + "|" + strconv.Itoa(line) + "|" + normalizeSnippet(snippet)))
+// ComputeFingerprint derives a stable dedupe key from location + code.
+// ruleID is included so that different rules matching the same line produce
+// distinct findings (e.g. sql_injection and sql_injection_raw_query).
+func ComputeFingerprint(filename string, line int, snippet string, ruleID ...string) string {
+	rid := ""
+	if len(ruleID) > 0 {
+		rid = ruleID[0]
+	}
+	h := sha256.Sum256([]byte(filename + "|" + strconv.Itoa(line) + "|" + rid + "|" + normalizeSnippet(snippet)))
 	return hex.EncodeToString(h[:])[:16]
 }

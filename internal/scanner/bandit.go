@@ -94,7 +94,7 @@ func (b *BanditAnalyzer) Analyze(ctx context.Context, in Input) ([]Finding, erro
 			Filename:    fn,
 			Line:        r.LineNumber,
 			Snippet:     r.Code,
-			Fingerprint: ComputeFingerprint(fn, r.LineNumber, r.Code),
+			Fingerprint: ComputeFingerprint(fn, r.LineNumber, r.Code, r.TestID),
 		})
 	}
 	return findings, nil

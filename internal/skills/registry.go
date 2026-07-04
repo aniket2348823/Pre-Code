@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -94,13 +95,10 @@ func (r *Registry) Get(id string) (*Skill, bool) {
 	return skill, ok
 }
 
-// List returns all published skills.
+// List returns all published skills sorted by install count descending.
 func (r *Registry) List(category string, limit int) []*Skill {
 	var result []*Skill
 	for _, skill := range r.skills {
-		if len(result) >= limit {
-			break
-		}
 		if !skill.IsPublished {
 			continue
 		}
@@ -108,6 +106,12 @@ func (r *Registry) List(category string, limit int) []*Skill {
 			continue
 		}
 		result = append(result, skill)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].InstallCount > result[j].InstallCount
+	})
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
 	}
 	return result
 }

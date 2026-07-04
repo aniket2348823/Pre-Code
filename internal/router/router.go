@@ -9,7 +9,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vigilagent/vigilagent/internal/auth"
+	"github.com/vigilagent/vigilagent/internal/compression"
+	"github.com/vigilagent/vigilagent/internal/cors"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/requestid"
+	"github.com/vigilagent/vigilagent/internal/slogger"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
@@ -17,81 +21,54 @@ import (
 
 
 func (r *Router) setupMiddleware() {
-	r.Use(middleware.RequestID)
+	// Standard chi middleware (logging, recovery, heartbeat)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Heartbeat("/health"))
-	r.Use(requestIDMiddleware)
+
+	// Request ID: use dedicated package for context propagation
+	r.Use(requestid.Middleware)
+
+	// Structured logging (slogger)
+	r.Use(slogger.Middleware)
+
+	// Gzip compression
+	r.Use(compression.Middleware)
+
+	// CORS (use dedicated package)
+	r.useCORSFromConfig()
+
+	// Timeout (configurable, defaults to 30s)
+	timeout := 30 * time.Second
 	r.Use(func(next http.Handler) http.Handler {
-		return http.TimeoutHandler(next, 30*time.Second, "request timeout")
-	})
-	r.useCORS()
-}
-
-// useCORS applies CORS middleware from configuration.
-func (r *Router) useCORS() {
-	allowedOrigins := r.cfg.CORS.AllowedOrigins
-	if len(allowedOrigins) == 0 {
-		allowedOrigins = []string{"*"}
-	}
-	allowedMethods := r.cfg.CORS.AllowedMethods
-	if len(allowedMethods) == 0 {
-		allowedMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-	}
-	allowedHeaders := r.cfg.CORS.AllowedHeaders
-	if len(allowedHeaders) == 0 {
-		allowedHeaders = []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"}
-	}
-
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			origin := req.Header.Get("Origin")
-			if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-			} else {
-				for _, o := range allowedOrigins {
-					if o == origin {
-						w.Header().Set("Access-Control-Allow-Origin", origin)
-						break
-					}
-				}
-			}
-
-			w.Header().Set("Access-Control-Allow-Methods", joinStrings(allowedMethods, ", "))
-			w.Header().Set("Access-Control-Allow-Headers", joinStrings(allowedHeaders, ", "))
-			w.Header().Set("Access-Control-Max-Age", "86400")
-
-			if req.Method == "OPTIONS" {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			next.ServeHTTP(w, req)
-		})
+		return http.TimeoutHandler(next, timeout, `{"error":"request timeout"}`)
 	})
 }
 
-// requestIDMiddleware propagates the X-Request-ID header into the response.
-func requestIDMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		// The chi RequestID middleware already sets this in context; just echo it in the response.
-		requestID := req.Header.Get("X-Request-ID")
-		w.Header().Set("X-Request-ID", requestID)
-		next.ServeHTTP(w, req)
-	})
-}
-
-// joinStrings joins a slice of strings with a separator.
-func joinStrings(ss []string, sep string) string {
-	result := ""
-	for i, s := range ss {
-		if i > 0 {
-			result += sep
+// useCORSFromConfig applies CORS using the dedicated cors package.
+// Falls back to permissive defaults when r.cfg is nil or has no origins.
+func (r *Router) useCORSFromConfig() {
+	cfg := cors.DefaultConfig()
+	if r.cfg != nil {
+		cfg = cors.Config{
+			AllowOrigins: r.cfg.CORS.AllowedOrigins,
+			AllowMethods: r.cfg.CORS.AllowedMethods,
+			AllowHeaders: r.cfg.CORS.AllowedHeaders,
 		}
-		result += s
+		if len(cfg.AllowOrigins) == 0 {
+			cfg.AllowOrigins = []string{"*"}
+		}
+		if len(cfg.AllowMethods) == 0 {
+			cfg.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+		}
+		if len(cfg.AllowHeaders) == 0 {
+			cfg.AllowHeaders = []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"}
+		}
 	}
-	return result
+	r.Use(cfg.Middleware)
 }
+
 
 func (r *Router) setupRoutes() {
 	r.Route("/api/v1", func(v1 chi.Router) {
@@ -147,6 +124,23 @@ func (r *Router) setupRoutes() {
 			protected.Post("/memory", r.createMemoryHandler)
 
 			protected.Post("/scan", r.scanHandler)
+			protected.Post("/review", r.reviewHandler)
+			protected.Post("/requirements", r.requirementsHandler)
+			protected.Post("/validate", r.validateHandler)
+			protected.Post("/schema", r.schemaHandler)
+			protected.Post("/compliance", r.complianceHandler)
+			protected.Post("/validate-full", r.pipelineHandler)
+
+			protected.Post("/knowledge", r.knowledgeHandler)
+			protected.Post("/skills/extract", r.skillEngineHandler)
+			protected.Post("/confidence", r.confidenceHandler)
+			protected.Post("/attack-graph", r.attackGraphHandler)
+			protected.Post("/audit/trace", r.auditHandler)
+
+			// Middleware pipeline endpoints
+			protected.Post("/middleware/process", r.middlewareProcessHandler)
+			protected.Get("/middleware/metrics", r.middlewareMetricsHandler)
+			protected.Get("/middleware/patterns", r.middlewarePatternsHandler)
 
 			events := protected.Group(nil)
 			events.Use(r.eventsRateLimitMiddleware)

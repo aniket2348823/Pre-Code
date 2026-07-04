@@ -98,7 +98,7 @@ func (s *SemgrepAnalyzer) Analyze(ctx context.Context, in Input) ([]Finding, err
 			Filename:    fn,
 			Line:        r.Start.Line,
 			Snippet:     r.Extra.Lines,
-			Fingerprint: ComputeFingerprint(fn, r.Start.Line, r.Extra.Lines),
+			Fingerprint: ComputeFingerprint(fn, r.Start.Line, r.Extra.Lines, r.CheckID),
 		})
 	}
 	return findings, nil
