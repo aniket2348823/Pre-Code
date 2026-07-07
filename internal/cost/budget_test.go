@@ -94,6 +94,40 @@ func TestRecordCost_PersistsToStore(t *testing.T) {
 	}
 }
 
+func TestOnExceeded_CallbackFires(t *testing.T) {
+	m := NewBudgetManager(nil, 0, 0)
+	m.SetOrgBudget("o1", 1.00)
+	m.RecordCost("o1", "t1", 0.80)
+
+	var fired bool
+	var gotErr *BudgetExceededError
+	m.OnExceeded(func(ctx context.Context, err *BudgetExceededError) {
+		fired = true
+		gotErr = err
+	})
+
+	// This should exceed the budget and fire the callback.
+	err := m.CheckBudget(context.Background(), "o1", "t1", 0.30)
+	if err == nil {
+		t.Fatal("expected budget exceeded error")
+	}
+	if !fired {
+		t.Fatal("expected onExceeded callback to fire")
+	}
+	if gotErr == nil || gotErr.Type != "org" {
+		t.Fatalf("expected org BudgetExceededError in callback, got %v", gotErr)
+	}
+
+	// Reset and verify callback does NOT fire when within budget.
+	fired = false
+	if err := m.CheckBudget(context.Background(), "o1", "t1", 0.05); err != nil {
+		t.Fatalf("expected within-budget check to pass, got %v", err)
+	}
+	if fired {
+		t.Fatal("callback should not fire when within budget")
+	}
+}
+
 // asBudgetErr is a tiny errors.As shim to avoid importing errors in every test.
 func asBudgetErr(err error, target **BudgetExceededError) bool {
 	be, ok := err.(*BudgetExceededError)

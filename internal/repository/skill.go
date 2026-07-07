@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Skill represents a skill record in the database.
@@ -51,11 +51,11 @@ type SkillRating struct {
 
 // SkillRepository handles database operations for skills.
 type SkillRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewSkillRepository creates a new skill repository.
-func NewSkillRepository(pool *pgxpool.Pool) *SkillRepository {
+func NewSkillRepository(pool *database.Conn) *SkillRepository {
 	return &SkillRepository{pool: pool}
 }
 

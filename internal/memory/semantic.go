@@ -4,18 +4,17 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // SemanticStore manages semantic memory (codebase patterns) using pgvector.
 type SemanticStore struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewSemanticStore creates a new semantic memory store.
-func NewSemanticStore(pool *pgxpool.Pool) *SemanticStore {
+func NewSemanticStore(pool *database.Conn) *SemanticStore {
 	return &SemanticStore{pool: pool}
 }
 

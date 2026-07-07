@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Session represents a session record in the database.
@@ -24,11 +24,11 @@ type Session struct {
 
 // SessionRepository handles database operations for sessions.
 type SessionRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewSessionRepository creates a new session repository.
-func NewSessionRepository(pool *pgxpool.Pool) *SessionRepository {
+func NewSessionRepository(pool *database.Conn) *SessionRepository {
 	return &SessionRepository{pool: pool}
 }
 

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Agent represents an agent record in the database.
@@ -23,11 +23,11 @@ type Agent struct {
 
 // AgentRepository handles database operations for agents.
 type AgentRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewAgentRepository creates a new agent repository.
-func NewAgentRepository(pool *pgxpool.Pool) *AgentRepository {
+func NewAgentRepository(pool *database.Conn) *AgentRepository {
 	return &AgentRepository{pool: pool}
 }
 

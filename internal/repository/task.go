@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Task represents a task record in the database.
@@ -36,11 +36,11 @@ type Task struct {
 
 // TaskRepository handles database operations for tasks.
 type TaskRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewTaskRepository creates a new task repository.
-func NewTaskRepository(pool *pgxpool.Pool) *TaskRepository {
+func NewTaskRepository(pool *database.Conn) *TaskRepository {
 	return &TaskRepository{pool: pool}
 }
 

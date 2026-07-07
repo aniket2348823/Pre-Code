@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 func setupTestDBForProject(t *testing.T) (*pgxpool.Pool, string) {
@@ -23,7 +24,7 @@ func setupTestDBForProject(t *testing.T) (*pgxpool.Pool, string) {
 	}
 
 	// Create a test org to own projects
-	orgRepo := NewOrganizationRepository(pool)
+	orgRepo := NewOrganizationRepository(database.NewConn(pool))
 	o := &Organization{Name: "Project Test Org", Slug: "proj-test-org", OwnerID: "00000000-0000-0000-0000-000000000001", Plan: "free"}
 	err = orgRepo.Create(context.Background(), o)
 	if err != nil {
@@ -44,7 +45,7 @@ func TestProjectRepository_Create(t *testing.T) {
 	pool, orgID := setupTestDBForProject(t)
 	defer pool.Close()
 	defer cleanupTestProjectOrg(pool, orgID)
-	r := NewProjectRepository(pool)
+	r := NewProjectRepository(database.NewConn(pool))
 
 	t.Run("creates project and returns id and timestamps", func(t *testing.T) {
 		p := &Project{
@@ -74,7 +75,7 @@ func TestProjectRepository_FindByID(t *testing.T) {
 	pool, orgID := setupTestDBForProject(t)
 	defer pool.Close()
 	defer cleanupTestProjectOrg(pool, orgID)
-	r := NewProjectRepository(pool)
+	r := NewProjectRepository(database.NewConn(pool))
 
 	p := &Project{OrgID: orgID, Name: "Find Project", Status: "active"}
 	r.Create(context.Background(), p)
@@ -104,7 +105,7 @@ func TestProjectRepository_Update(t *testing.T) {
 	pool, orgID := setupTestDBForProject(t)
 	defer pool.Close()
 	defer cleanupTestProjectOrg(pool, orgID)
-	r := NewProjectRepository(pool)
+	r := NewProjectRepository(database.NewConn(pool))
 
 	p := &Project{OrgID: orgID, Name: "Original", Status: "active"}
 	r.Create(context.Background(), p)
@@ -127,7 +128,7 @@ func TestProjectRepository_Delete(t *testing.T) {
 	pool, orgID := setupTestDBForProject(t)
 	defer pool.Close()
 	defer cleanupTestProjectOrg(pool, orgID)
-	r := NewProjectRepository(pool)
+	r := NewProjectRepository(database.NewConn(pool))
 
 	p := &Project{OrgID: orgID, Name: "Delete Project", Status: "active"}
 	r.Create(context.Background(), p)
@@ -147,7 +148,7 @@ func TestProjectRepository_ListByOrg(t *testing.T) {
 	pool, orgID := setupTestDBForProject(t)
 	defer pool.Close()
 	defer cleanupTestProjectOrg(pool, orgID)
-	r := NewProjectRepository(pool)
+	r := NewProjectRepository(database.NewConn(pool))
 
 	r.Create(context.Background(), &Project{OrgID: orgID, Name: "Project A", Status: "active"})
 	r.Create(context.Background(), &Project{OrgID: orgID, Name: "Project B", Status: "active"})

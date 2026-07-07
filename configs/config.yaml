@@ -1,4 +1,6 @@
 # VigilAgent Configuration
+# Defaults for local development with docker-compose
+# Supabase overrides: set VIGILAGENT_DATABASE_* in .env file
 
 server:
   host: 0.0.0.0
@@ -12,7 +14,7 @@ database:
   host: localhost
   port: 5432
   user: vigilagent
-  password: vigilagent
+  password: vigilagent_dev
   name: vigilagent
   sslmode: disable
   max_open_conns: 25

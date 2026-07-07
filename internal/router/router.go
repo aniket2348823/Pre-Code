@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -11,10 +12,12 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/compression"
 	"github.com/vigilagent/vigilagent/internal/cors"
+	"github.com/vigilagent/vigilagent/internal/database"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/requestid"
 	"github.com/vigilagent/vigilagent/internal/slogger"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -196,6 +199,12 @@ func (r *Router) setupRoutes() {
 
 			// WebSocket endpoint for real-time agent streaming (requires auth)
 			protected.Get("/ws", r.handleWebSocket)
+
+			// Debug endpoint: verify RLS session variable is set correctly
+			// Debug endpoint: verify RLS session variable is set correctly
+			if r.authSessionMiddleware != nil {
+				protected.Get("/auth/session-check", r.authSessionMiddleware.AuthSessionCheckHandler)
+			}
 		}
 	})
 }
@@ -446,6 +455,18 @@ func (r *Router) createOrgHandler(w http.ResponseWriter, req *http.Request) {
 		// Log but do not fail - org is already created
 	}
 
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "organization.created",
+			Payload: map[string]interface{}{
+				"org_id": org.ID,
+				"name":   org.Name,
+				"slug":   org.Slug,
+			},
+		})
+	}
+
 	response.Created(w, org)
 }
 
@@ -512,6 +533,13 @@ func (r *Router) updateOrgHandler(w http.ResponseWriter, req *http.Request) {
 		response.InternalError(w, "failed to update organization")
 		return
 	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "organization.updated",
+			Payload: map[string]interface{}{"org_id": orgID},
+		})
+	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "organization updated"})
 }
 
@@ -530,6 +558,13 @@ func (r *Router) deleteOrgHandler(w http.ResponseWriter, req *http.Request) {
 	if err := r.orgs.Delete(req.Context(), orgID); err != nil {
 		response.InternalError(w, "failed to delete organization")
 		return
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "organization.deleted",
+			Payload: map[string]interface{}{"org_id": orgID},
+		})
 	}
 	response.NoContent(w)
 }
@@ -569,6 +604,19 @@ func (r *Router) createProjectHandler(w http.ResponseWriter, req *http.Request) 
 		response.InternalError(w, "failed to create project")
 		return
 	}
+
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "project.created",
+			Payload: map[string]interface{}{
+				"project_id": project.ID,
+				"name":       project.Name,
+				"org_id":     project.OrgID,
+			},
+		})
+	}
+
 	response.Created(w, project)
 }
 
@@ -649,6 +697,13 @@ func (r *Router) updateProjectHandler(w http.ResponseWriter, req *http.Request) 
 		response.InternalError(w, "failed to update project")
 		return
 	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "project.updated",
+			Payload: map[string]interface{}{"project_id": projectID},
+		})
+	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "project updated"})
 }
 
@@ -672,6 +727,13 @@ func (r *Router) deleteProjectHandler(w http.ResponseWriter, req *http.Request) 
 	if err := r.projects.Delete(req.Context(), projectID); err != nil {
 		response.InternalError(w, "failed to delete project")
 		return
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "project.deleted",
+			Payload: map[string]interface{}{"project_id": projectID},
+		})
 	}
 	response.NoContent(w)
 }
@@ -718,6 +780,17 @@ func (r *Router) createAgentHandler(w http.ResponseWriter, req *http.Request) {
 	if err := r.agents.Create(req.Context(), agent); err != nil {
 		response.InternalError(w, "failed to create agent")
 		return
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "agent.created",
+			Payload: map[string]interface{}{
+				"agent_id":   agent.ID,
+				"project_id": projectID,
+				"name":       agent.Name,
+			},
+		})
 	}
 	response.Created(w, agent)
 }
@@ -817,6 +890,13 @@ func (r *Router) updateAgentHandler(w http.ResponseWriter, req *http.Request) {
 		response.InternalError(w, "failed to update agent")
 		return
 	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "agent.updated",
+			Payload: map[string]interface{}{"agent_id": agentID},
+		})
+	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "agent updated"})
 }
 
@@ -845,6 +925,13 @@ func (r *Router) deleteAgentHandler(w http.ResponseWriter, req *http.Request) {
 	if err := r.agents.Delete(req.Context(), agentID); err != nil {
 		response.InternalError(w, "failed to delete agent")
 		return
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "agent.deleted",
+			Payload: map[string]interface{}{"agent_id": agentID},
+		})
 	}
 	response.NoContent(w)
 }
@@ -881,6 +968,19 @@ func (r *Router) createSessionHandler(w http.ResponseWriter, req *http.Request) 
 		response.InternalError(w, "failed to create session")
 		return
 	}
+
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "session.created",
+			Payload: map[string]interface{}{
+				"session_id": session.ID,
+				"agent_id":   agentID,
+				"user_id":    claims.UserID,
+			},
+		})
+	}
+
 	response.Created(w, session)
 }
 
@@ -985,6 +1085,13 @@ func (r *Router) updateSessionHandler(w http.ResponseWriter, req *http.Request) 
 			response.InternalError(w, "failed to update session")
 			return
 		}
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "session.updated",
+			Payload: map[string]interface{}{"session_id": sessionID, "status": input.Status},
+		})
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "session updated"})
 }
@@ -1280,39 +1387,67 @@ func parseTimeRange(req *http.Request) (time.Time, time.Time) {
 // skills_handlers.go, alerts_handlers.go, billing_handlers.go, admin_handlers.go, memory_handlers.go
 
 // authMiddleware validates JWT tokens or API keys on protected routes.
+// It also sets the PostgreSQL session variable app.current_user_id for RLS.
 func (r *Router) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var claims *auth.Claims
+
 		// Try API key auth first (X-API-Key header or Bearer vga_... token)
 		if r.apiKeyAuth != nil {
-			claims, err := r.apiKeyAuth.Authenticate(req)
+			c, err := r.apiKeyAuth.Authenticate(req)
 			if err != nil {
 				response.Unauthorized(w, err.Error())
 				return
 			}
-			if claims != nil {
-				ctx := auth.ContextWithClaims(req.Context(), claims)
-				next.ServeHTTP(w, req.WithContext(ctx))
-				return
+			if c != nil {
+				claims = c
 			}
 		}
 
 		// Fall back to JWT auth
-		authHeader := req.Header.Get("Authorization")
-		if authHeader == "" {
-			response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authorization header"})
-			return
+		if claims == nil {
+			authHeader := req.Header.Get("Authorization")
+			if authHeader == "" {
+				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "missing authorization header"})
+				return
+			}
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid authorization format"})
+				return
+			}
+			c, err := r.auth.ValidateToken(parts[1])
+			if err != nil {
+				response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired token"})
+				return
+			}
+			claims = c
 		}
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid authorization format"})
-			return
-		}
-		claims, err := r.auth.ValidateToken(parts[1])
-		if err != nil {
-			response.JSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired token"})
-			return
-		}
+
 		ctx := auth.ContextWithClaims(req.Context(), claims)
+
+		// Set PostgreSQL session variable for RLS policies.
+		// We acquire a dedicated connection, set the session variable on it,
+		// and store it in context so all subsequent queries in this request
+		// execute on the same connection (session variables are connection-scoped).
+		if r.db != nil && r.db.Pool != nil {
+			conn, err := r.db.Pool.Acquire(req.Context())
+			if err != nil {
+				slog.Warn("auth: failed to acquire DB connection for RLS", "error", err)
+				// Continue without RLS — don't block the request
+			} else {
+				defer conn.Release()
+				if _, err := conn.Exec(req.Context(), "SELECT app_auth.set_current_user_id($1)", claims.UserID); err != nil {
+					slog.Debug("auth: failed to set RLS session user", "error", err)
+					// Function may not exist yet — continue
+				} else {
+					// Store dedicated connection in context for repository queries
+					ctx = database.WithConn(ctx, conn)
+					slog.Debug("auth: set RLS session user", "user_id", claims.UserID)
+				}
+			}
+		}
+
 		next.ServeHTTP(w, req.WithContext(ctx))
 	})
 }

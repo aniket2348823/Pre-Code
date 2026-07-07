@@ -4,18 +4,17 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // EpisodicStore manages episodic memory in PostgreSQL.
 type EpisodicStore struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewEpisodicStore creates a new episodic memory store.
-func NewEpisodicStore(pool *pgxpool.Pool) *EpisodicStore {
+func NewEpisodicStore(pool *database.Conn) *EpisodicStore {
 	return &EpisodicStore{pool: pool}
 }
 

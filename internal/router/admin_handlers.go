@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -110,7 +111,6 @@ func (r *Router) adminUpdateUserRoleHandler(w http.ResponseWriter, req *http.Req
 		response.BadRequest(w, "invalid role: must be user, admin, or superadmin")
 		return
 	}
-
 	if err := r.users.UpdateRole(req.Context(), userID, input.Role); err != nil {
 		if err.Error() == "user not found" {
 			response.NotFound(w, "user not found")
@@ -119,7 +119,16 @@ func (r *Router) adminUpdateUserRoleHandler(w http.ResponseWriter, req *http.Req
 		response.InternalError(w, "failed to update user role")
 		return
 	}
-
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "user.role_changed",
+			Payload: map[string]interface{}{
+				"user_id": userID,
+				"role":    input.Role,
+			},
+		})
+	}
 	response.JSON(w, http.StatusOK, map[string]interface{}{
 		"user_id": userID,
 		"role":    input.Role,
@@ -140,7 +149,6 @@ func (r *Router) adminDeleteUserHandler(w http.ResponseWriter, req *http.Request
 		response.BadRequest(w, "cannot delete your own account")
 		return
 	}
-
 	if err := r.users.Delete(req.Context(), userID); err != nil {
 		if err.Error() == "user not found" {
 			response.NotFound(w, "user not found")
@@ -149,6 +157,14 @@ func (r *Router) adminDeleteUserHandler(w http.ResponseWriter, req *http.Request
 		response.InternalError(w, "failed to delete user")
 		return
 	}
-
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "user.deleted",
+			Payload: map[string]interface{}{
+				"user_id": userID,
+			},
+		})
+	}
 	response.NoContent(w)
 }

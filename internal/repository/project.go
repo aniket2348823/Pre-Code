@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Project represents a project record in the database.
@@ -22,11 +22,11 @@ type Project struct {
 
 // ProjectRepository handles database operations for projects.
 type ProjectRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewProjectRepository creates a new project repository.
-func NewProjectRepository(pool *pgxpool.Pool) *ProjectRepository {
+func NewProjectRepository(pool *database.Conn) *ProjectRepository {
 	return &ProjectRepository{pool: pool}
 }
 

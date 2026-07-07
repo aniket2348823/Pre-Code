@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -108,6 +109,17 @@ func (r *Router) createSkillHandler(w http.ResponseWriter, req *http.Request) {
 		response.InternalError(w, "failed to create skill")
 		return
 	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "skill.created",
+			Payload: map[string]interface{}{
+				"skill_id": skill.ID,
+				"name":     skill.Name,
+				"version":  skill.Version,
+			},
+		})
+	}
 	response.Created(w, skill)
 }
 
@@ -149,6 +161,13 @@ func (r *Router) updateSkillHandler(w http.ResponseWriter, req *http.Request) {
 		response.InternalError(w, "failed to update skill")
 		return
 	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "skill.updated",
+			Payload: map[string]interface{}{"skill_id": skillID},
+		})
+	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "skill updated"})
 }
 
@@ -167,6 +186,13 @@ func (r *Router) deleteSkillHandler(w http.ResponseWriter, req *http.Request) {
 	if err := r.skills.Delete(req.Context(), skillID); err != nil {
 		response.InternalError(w, "failed to delete skill")
 		return
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "skill.deleted",
+			Payload: map[string]interface{}{"skill_id": skillID},
+		})
 	}
 	response.NoContent(w)
 }
@@ -202,6 +228,16 @@ func (r *Router) rateSkillHandler(w http.ResponseWriter, req *http.Request) {
 	if err := r.skills.AddRating(req.Context(), rating); err != nil {
 		response.InternalError(w, "failed to add rating")
 		return
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "skill.rated",
+			Payload: map[string]interface{}{
+				"skill_id": skillID,
+				"rating":   input.Rating,
+			},
+		})
 	}
 	response.Created(w, rating)
 }
@@ -277,6 +313,18 @@ func (r *Router) installSkillHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	_ = r.skills.IncrementDownloads(req.Context(), skillID)
+
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "skill.installed",
+			Payload: map[string]interface{}{
+				"skill_id":      skillID,
+				"user_id":       claims.UserID,
+				"installation_id": inst.ID,
+			},
+		})
+	}
 
 	response.Created(w, map[string]interface{}{
 		"installation_id": inst.ID,

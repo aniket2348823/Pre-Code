@@ -7,6 +7,7 @@ import (
 
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/scanner"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -51,4 +52,16 @@ func (r *Router) scanHandler(w http.ResponseWriter, req *http.Request) {
 		Filename: input.Filename,
 	})
 	response.JSON(w, http.StatusOK, report)
+
+	// Dispatch webhook notification for scan completion
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "scan.completed",
+			Payload: map[string]interface{}{
+				"language": input.Language,
+				"filename": input.Filename,
+				"findings": len(report.Findings),
+			},
+		})
+	}
 }

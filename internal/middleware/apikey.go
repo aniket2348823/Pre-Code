@@ -7,21 +7,20 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/pkg/response"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // APIKeyAuth provides real DB-backed API key authentication.
 // It hashes the presented key, looks it up in the api_keys table,
 // and populates the request context with real user claims.
 type APIKeyAuth struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewAPIKeyAuth creates a new API key auth middleware.
-func NewAPIKeyAuth(pool *pgxpool.Pool) *APIKeyAuth {
+func NewAPIKeyAuth(pool *database.Conn) *APIKeyAuth {
 	return &APIKeyAuth{pool: pool}
 }
 

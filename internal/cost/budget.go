@@ -6,8 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // BudgetManager tracks and enforces cost budgets at org and task levels. Usage
@@ -15,7 +14,7 @@ import (
 // process restarts (without persistence, restarting would reset spend and
 // silently bypass budgets).
 type BudgetManager struct {
-	pool        *pgxpool.Pool
+	pool        *database.Conn
 	store       UsageStore
 	mu          sync.RWMutex
 	orgBudgets  map[string]float64
@@ -24,11 +23,12 @@ type BudgetManager struct {
 	defaultOrg  float64
 	defaultTask float64
 	loaded      bool
+	onExceeded  func(ctx context.Context, err *BudgetExceededError)
 }
 
 // NewBudgetManager creates a new budget manager with default limits. When pool
 // is non-nil, usage is persisted to Postgres via the budget_usage table.
-func NewBudgetManager(pool *pgxpool.Pool, defaultOrgBudget, defaultTaskBudget float64) *BudgetManager {
+func NewBudgetManager(pool *database.Conn, defaultOrgBudget, defaultTaskBudget float64) *BudgetManager {
 	m := &BudgetManager{
 		pool:        pool,
 		orgBudgets:  make(map[string]float64),
@@ -49,6 +49,14 @@ func (m *BudgetManager) SetStore(store UsageStore) {
 	defer m.mu.Unlock()
 	m.store = store
 	m.loaded = false
+}
+
+// OnExceeded sets a callback invoked when a budget check fails.
+// Used to dispatch webhook notifications on budget threshold breaches.
+func (m *BudgetManager) OnExceeded(fn func(ctx context.Context, err *BudgetExceededError)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onExceeded = fn
 }
 
 // ensureLoaded lazily hydrates in-memory usage from the store exactly once.
@@ -125,13 +133,15 @@ func (m *BudgetManager) CheckBudget(ctx context.Context, orgID, taskID string, p
 				"budget", orgBudget,
 				"proposed", proposedCost,
 			)
-			return &BudgetExceededError{
+			be := &BudgetExceededError{
 				Type:     "org",
 				ID:       orgID,
 				Usage:    orgUsage,
 				Budget:   orgBudget,
 				Proposed: proposedCost,
 			}
+			m.notifyExceeded(ctx, be)
+			return be
 		}
 	}
 
@@ -146,17 +156,29 @@ func (m *BudgetManager) CheckBudget(ctx context.Context, orgID, taskID string, p
 				"budget", taskBudget,
 				"proposed", proposedCost,
 			)
-			return &BudgetExceededError{
+			be := &BudgetExceededError{
 				Type:     "task",
 				ID:       taskID,
 				Usage:    taskUsage,
 				Budget:   taskBudget,
 				Proposed: proposedCost,
 			}
+			m.notifyExceeded(ctx, be)
+			return be
 		}
 	}
 
 	return nil
+}
+
+// notifyExceeded calls the onExceeded callback if set.
+func (m *BudgetManager) notifyExceeded(ctx context.Context, err *BudgetExceededError) {
+	m.mu.RLock()
+	fn := m.onExceeded
+	m.mu.RUnlock()
+	if fn != nil {
+		fn(ctx, err)
+	}
 }
 
 // RecordCost records cost against an org and task, updating the in-memory

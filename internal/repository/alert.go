@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Alert represents an alert record in the database.
@@ -26,11 +26,11 @@ type Alert struct {
 
 // AlertRepository handles database operations for alerts.
 type AlertRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewAlertRepository creates a new alert repository.
-func NewAlertRepository(pool *pgxpool.Pool) *AlertRepository {
+func NewAlertRepository(pool *database.Conn) *AlertRepository {
 	return &AlertRepository{pool: pool}
 }
 

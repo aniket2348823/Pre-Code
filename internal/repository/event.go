@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Event represents an event record in the database.
@@ -65,11 +64,11 @@ type DashboardActivity struct {
 
 // EventRepository handles database operations for events.
 type EventRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewEventRepository creates a new event repository.
-func NewEventRepository(pool *pgxpool.Pool) *EventRepository {
+func NewEventRepository(pool *database.Conn) *EventRepository {
 	return &EventRepository{pool: pool}
 }
 

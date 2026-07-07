@@ -24,6 +24,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/requirements"
 	"github.com/vigilagent/vigilagent/internal/scanner"
 	"github.com/vigilagent/vigilagent/internal/schema"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 )
 
 // Options holds all dependencies for the Router.
@@ -92,6 +93,9 @@ type Options struct {
 
 	// Audit layer
 	Audit *audit.Engine
+
+	// Webhook engine for event notifications
+	Webhook *webhook.Engine
 }
 
 // Router holds all HTTP handlers and dependencies.
@@ -105,6 +109,8 @@ type Router struct {
 	apiKM      *auth.APIKeyService
 	apiKeyAuth *ratelimit.APIKeyAuth
 	rl         *ratelimit.RateLimiter
+	authSessionMiddleware *ratelimit.AuthSessionMiddleware
+	webhookEngine        *webhook.Engine
 
 	// Repositories
 	users    *repository.UserRepository
@@ -184,12 +190,17 @@ func newRouter(opts Options) *Router {
 		confidence:  opts.Confidence,
 		attackGraph: opts.AttackGraph,
 		audit:       opts.Audit,
+		webhookEngine: opts.Webhook,
 	}
 }
 
 // New creates a Router from an Options struct with the default middleware stack.
 func New(opts Options) *Router {
 	r := newRouter(opts)
+	// Wire auth session middleware if pool is available
+	if r.db != nil && r.db.Pool != nil {
+			r.authSessionMiddleware = ratelimit.NewAuthSessionMiddleware(r.db.Conn())
+		}
 	r.initHandlers()
 	r.setupMiddleware()
 	r.setupRoutes()

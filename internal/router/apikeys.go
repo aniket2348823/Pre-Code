@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -52,10 +53,21 @@ func (r *Router) createAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 		Scopes:   input.Scopes,
 		IsActive: true,
 	}
-
-	if err :=	r.apiKeys.Create(req.Context(), key); err != nil {
+	if err := r.apiKeys.Create(req.Context(), key); err != nil {
 		response.InternalError(w, "failed to save API key")
 		return
+	}
+
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "apikey.created",
+			Payload: map[string]interface{}{
+				"key_id": key.ID,
+				"name":   key.Name,
+				"user_id": claims.UserID,
+			},
+		})
 	}
 
 	// Return the plaintext key ONCE - it will never be shown again
@@ -104,6 +116,17 @@ func (r *Router) deleteAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 		}
 		response.InternalError(w, "failed to delete API key")
 		return
+	}
+
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "apikey.deleted",
+			Payload: map[string]interface{}{
+				"key_id": keyID,
+				"user_id": claims.UserID,
+			},
+		})
 	}
 
 	response.NoContent(w)

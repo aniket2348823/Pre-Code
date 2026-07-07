@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Organization represents an organization record in the database.
@@ -33,11 +33,11 @@ type OrgMember struct {
 
 // OrganizationRepository handles database operations for organizations.
 type OrganizationRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewOrganizationRepository creates a new organization repository.
-func NewOrganizationRepository(pool *pgxpool.Pool) *OrganizationRepository {
+func NewOrganizationRepository(pool *database.Conn) *OrganizationRepository {
 	return &OrganizationRepository{pool: pool}
 }
 

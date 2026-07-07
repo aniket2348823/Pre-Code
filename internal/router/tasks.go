@@ -13,6 +13,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/agent"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -92,6 +93,19 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 			_ = r.tasks.Complete(bgCtx, task.ID, task.Prompt, "", "", 0, 0, 0, 0)
 		}
 	}()
+
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "task.created",
+			Payload: map[string]interface{}{
+				"task_id":   task.ID,
+				"project_id": task.ProjectID,
+				"prompt":    task.Prompt,
+				"status":    task.Status,
+			},
+		})
+	}
 
 	response.Created(w, map[string]interface{}{
 		"task": map[string]interface{}{
@@ -215,6 +229,16 @@ func (r *Router) cancelTaskHandler(w http.ResponseWriter, req *http.Request) {
 	if err := r.tasks.Cancel(req.Context(), taskID); err != nil {
 		response.InternalError(w, "failed to cancel task")
 		return
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "task.cancelled",
+			Payload: map[string]interface{}{
+				"task_id":    taskID,
+				"project_id": task.ProjectID,
+			},
+		})
 	}
 	response.JSON(w, http.StatusOK, map[string]interface{}{
 		"message": "task cancelled",

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // User represents a user record in the database.
@@ -25,11 +25,11 @@ type User struct {
 
 // UserRepository handles database operations for users.
 type UserRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewUserRepository creates a new user repository.
-func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
+func NewUserRepository(pool *database.Conn) *UserRepository {
 	return &UserRepository{pool: pool}
 }
 

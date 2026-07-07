@@ -1,5 +1,7 @@
-// Package webhook provides outbound webhook notifications for events
+// Package webhook provides DB-backed outbound webhook notifications for events
 // like scan completion, alert triggers, and budget threshold breaches.
+// Endpoints and delivery results are stored in PostgreSQL (webhook_endpoints
+// and webhook_deliveries tables) for persistence across restarts.
 package webhook
 
 import (
@@ -13,8 +15,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Event represents a webhook event payload.
@@ -29,8 +32,8 @@ type Event struct {
 type Endpoint struct {
 	ID        string    `json:"id"`
 	URL       string    `json:"url"`
-	Secret    string    `json:"secret,omitempty"` // HMAC secret for signature verification
-	Events    []string  `json:"events"`           // event types to subscribe to
+	Secret    string    `json:"secret,omitempty"`
+	Events    []string  `json:"events"`
 	Active    bool      `json:"active"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -38,7 +41,7 @@ type Endpoint struct {
 // DeliveryResult tracks webhook delivery success/failure.
 type DeliveryResult struct {
 	EndpointID string    `json:"endpoint_id"`
-	EventID    string    `json:"event_id"`
+	EventType  string    `json:"event_type"`
 	StatusCode int       `json:"status_code"`
 	DurationMs int64     `json:"duration_ms"`
 	Success    bool      `json:"success"`
@@ -47,19 +50,19 @@ type DeliveryResult struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// Engine manages webhook registrations and deliveries.
+// Engine manages webhook registrations and deliveries backed by PostgreSQL.
 type Engine struct {
-	mu        sync.RWMutex
-	endpoints map[string]*Endpoint
-	results   []DeliveryResult
-	client    *http.Client
-	maxRetry  int
+	pool        *pgxpool.Pool
+	client      *http.Client
+	maxRetry    int
+	cache       []Endpoint
+	cacheExpiry time.Time
 }
 
-// NewEngine creates a webhook engine.
-func NewEngine() *Engine {
+// NewEngine creates a DB-backed webhook engine.
+func NewEngine(pool *pgxpool.Pool) *Engine {
 	return &Engine{
-		endpoints: make(map[string]*Endpoint),
+		pool: pool,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -67,48 +70,68 @@ func NewEngine() *Engine {
 	}
 }
 
-// Register adds a new webhook endpoint.
-func (e *Engine) Register(ep *Endpoint) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if ep.CreatedAt.IsZero() {
-		ep.CreatedAt = time.Now()
-	}
-	e.endpoints[ep.ID] = ep
+// Register inserts a new webhook endpoint into the database.
+func (e *Engine) Register(ctx context.Context, ep *Endpoint) error {
+	query := `
+		INSERT INTO webhook_endpoints (url, secret, events, is_active)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at
+	`
+	eventsJSON, _ := json.Marshal(ep.Events)
+	return e.pool.QueryRow(ctx, query,
+		ep.URL, ep.Secret, eventsJSON, ep.Active,
+	).Scan(&ep.ID, &ep.CreatedAt)
 }
 
-// Unregister removes a webhook endpoint.
-func (e *Engine) Unregister(id string) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if _, ok := e.endpoints[id]; !ok {
-		return false
-	}
-	delete(e.endpoints, id)
-	return true
+// Unregister deletes a webhook endpoint by ID.
+func (e *Engine) Unregister(ctx context.Context, id string) error {
+	_, err := e.pool.Exec(ctx, `DELETE FROM webhook_endpoints WHERE id = $1`, id)
+	return err
 }
 
 // GetEndpoint returns a webhook endpoint by ID.
-func (e *Engine) GetEndpoint(id string) *Endpoint {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	ep, ok := e.endpoints[id]
-	if !ok {
-		return nil
+func (e *Engine) GetEndpoint(ctx context.Context, id string) (*Endpoint, error) {
+	query := `
+		SELECT id, url, secret, events, is_active, created_at
+		FROM webhook_endpoints WHERE id = $1
+	`
+	ep := &Endpoint{}
+	var eventsJSON []byte
+	err := e.pool.QueryRow(ctx, query, id).Scan(
+		&ep.ID, &ep.URL, &ep.Secret, &eventsJSON, &ep.Active, &ep.CreatedAt,
+	)
+	if err != nil {
+		return nil, err
 	}
-	cp := *ep
-	return &cp
+	_ = json.Unmarshal(eventsJSON, &ep.Events)
+	return ep, nil
 }
 
-// ListEndpoints returns all registered endpoints.
-func (e *Engine) ListEndpoints() []Endpoint {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	out := make([]Endpoint, 0, len(e.endpoints))
-	for _, ep := range e.endpoints {
-		out = append(out, *ep)
+// ListEndpoints returns all webhook endpoints.
+func (e *Engine) ListEndpoints(ctx context.Context) ([]Endpoint, error) {
+	query := `
+		SELECT id, url, secret, events, is_active, created_at
+		FROM webhook_endpoints ORDER BY created_at DESC
+	`
+	rows, err := e.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
 	}
-	return out
+	defer rows.Close()
+
+	var endpoints []Endpoint
+	for rows.Next() {
+		var ep Endpoint
+		var eventsJSON []byte
+		if err := rows.Scan(
+			&ep.ID, &ep.URL, &ep.Secret, &eventsJSON, &ep.Active, &ep.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(eventsJSON, &ep.Events)
+		endpoints = append(endpoints, ep)
+	}
+	return endpoints, rows.Err()
 }
 
 // ComputeSignature creates an HMAC-SHA256 signature of the payload.
@@ -124,33 +147,52 @@ func VerifySignature(secret, payload []byte, signature string) bool {
 	return hmac.Equal([]byte(expected), []byte(signature))
 }
 
-// Dispatch sends an event to all matching endpoints asynchronously.
+// cachedEndpoints returns endpoints from a 30-second in-memory cache to avoid
+// hitting the DB on every Dispatch call.
+func (e *Engine) cachedEndpoints(ctx context.Context) ([]Endpoint, error) {
+	if time.Now().Before(e.cacheExpiry) && e.cache != nil {
+		return e.cache, nil
+	}
+	endpoints, err := e.ListEndpoints(ctx)
+	if err != nil && e.cache != nil {
+		slog.Warn("webhook: using stale endpoint cache", "error", err)
+		return e.cache, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.cache = endpoints
+	e.cacheExpiry = time.Now().Add(30 * time.Second)
+	return endpoints, nil
+}
+
+// Dispatch sends an event to all matching active endpoints asynchronously.
 func (e *Engine) Dispatch(ctx context.Context, event Event) {
 	if event.CreatedAt.IsZero() {
 		event.CreatedAt = time.Now()
 	}
 
-	e.mu.RLock()
-	var targets []*Endpoint
-	for _, ep := range e.endpoints {
+	endpoints, err := e.cachedEndpoints(ctx)
+	if err != nil {
+		slog.Error("webhook: failed to list endpoints", "error", err)
+		return
+	}
+
+	for i := range endpoints {
+		ep := &endpoints[i]
 		if !ep.Active {
 			continue
 		}
 		for _, sub := range ep.Events {
 			if sub == event.Type || sub == "*" {
-				targets = append(targets, ep)
+				go e.deliver(ctx, ep, event, 0)
 				break
 			}
 		}
 	}
-	e.mu.RUnlock()
-
-	for _, ep := range targets {
-		go e.deliver(ctx, ep, event, 0)
-	}
 }
 
-// deliver sends a single webhook with retries.
+// deliver sends a single webhook with retries and records the result in DB.
 func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCount int) {
 	payload, err := json.Marshal(event)
 	if err != nil {
@@ -179,7 +221,7 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 
 	result := DeliveryResult{
 		EndpointID: ep.ID,
-		EventID:    event.ID,
+		EventType:  event.Type,
 		DurationMs: duration,
 		RetryCount: retryCount,
 		CreatedAt:  time.Now(),
@@ -188,7 +230,7 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 	if err != nil {
 		result.Error = err.Error()
 		result.Success = false
-		e.recordResult(result)
+		e.recordResult(ctx, result)
 
 		if retryCount < e.maxRetry {
 			delay := time.Duration(1<<uint(retryCount)) * time.Second
@@ -215,46 +257,77 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 		}
 	}
 
-	e.recordResult(result)
+	e.recordResult(ctx, result)
+	// Update last_triggered_at on the endpoint
+	_, _ = e.pool.Exec(ctx, `UPDATE webhook_endpoints SET last_triggered_at = NOW() WHERE id = $1`, ep.ID)
 }
 
-func (e *Engine) recordResult(r DeliveryResult) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.results = append(e.results, r)
-}
-
-// GetResults returns recent delivery results.
-func (e *Engine) GetResults(n int) []DeliveryResult {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	total := len(e.results)
-	if n > total {
-		n = total
+// recordResult inserts a delivery result into the webhook_deliveries table.
+func (e *Engine) recordResult(ctx context.Context, r DeliveryResult) {
+	query := `
+		INSERT INTO webhook_deliveries (endpoint_id, event_type, status_code, success, error, duration_ms)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`
+	_, err := e.pool.Exec(ctx, query,
+		r.EndpointID, r.EventType, r.StatusCode, r.Success, r.Error, r.DurationMs,
+	)
+	if err != nil {
+		slog.Error("webhook: failed to record delivery", "error", err, "endpoint_id", r.EndpointID)
 	}
-	start := total - n
-	out := make([]DeliveryResult, n)
-	copy(out, e.results[start:])
-	return out
 }
 
-// Stats returns delivery statistics.
-func (e *Engine) Stats() map[string]interface{} {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	var total, success, fail int
-	for _, r := range e.results {
-		total++
-		if r.Success {
-			success++
-		} else {
-			fail++
+// GetResults returns recent delivery results for an endpoint.
+func (e *Engine) GetResults(ctx context.Context, endpointID string, limit int) ([]DeliveryResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := `
+		SELECT endpoint_id, event_type, status_code, duration_ms, success, error, created_at
+		FROM webhook_deliveries
+		WHERE endpoint_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+	rows, err := e.pool.Query(ctx, query, endpointID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []DeliveryResult
+	for rows.Next() {
+		var r DeliveryResult
+		if err := rows.Scan(
+			&r.EndpointID, &r.EventType, &r.StatusCode, &r.DurationMs,
+			&r.Success, &r.Error, &r.CreatedAt,
+		); err != nil {
+			return nil, err
 		}
+		results = append(results, r)
 	}
+	return results, rows.Err()
+}
+
+// Stats returns delivery statistics from the database.
+func (e *Engine) Stats(ctx context.Context) (map[string]interface{}, error) {
+	var endpoints, total24h, success24h, fail24h int
+
+	if err := e.pool.QueryRow(ctx, `SELECT COUNT(*) FROM webhook_endpoints`).Scan(&endpoints); err != nil {
+		return nil, err
+	}
+
+	if err := e.pool.QueryRow(ctx, `
+		SELECT COUNT(*), COUNT(*) FILTER (WHERE success), COUNT(*) FILTER (WHERE NOT success)
+		FROM webhook_deliveries
+		WHERE created_at > NOW() - INTERVAL '24 hours'
+	`).Scan(&total24h, &success24h, &fail24h); err != nil {
+		return nil, err
+	}
+
 	return map[string]interface{}{
-		"total_deliveries": total,
-		"successful":       success,
-		"failed":           fail,
-		"endpoints":        len(e.endpoints),
-	}
+		"endpoints":            endpoints,
+		"total_deliveries_24h": total24h,
+		"successful_24h":       success24h,
+		"failed_24h":           fail24h,
+	}, nil
 }

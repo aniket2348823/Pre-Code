@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // APIKey represents an API key record in the database.
@@ -25,11 +25,11 @@ type APIKey struct {
 
 // APIKeyRepository handles database operations for API keys.
 type APIKeyRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewAPIKeyRepository creates a new API key repository.
-func NewAPIKeyRepository(pool *pgxpool.Pool) *APIKeyRepository {
+func NewAPIKeyRepository(pool *database.Conn) *APIKeyRepository {
 	return &APIKeyRepository{pool: pool}
 }
 

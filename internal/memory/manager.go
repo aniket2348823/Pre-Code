@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Manager coordinates all memory layers for cascading recall.
@@ -16,7 +15,7 @@ type Manager struct {
 	procedural *ProceduralStore
 	working    *WorkingMemory
 	embedder   Embedder
-	pool       *pgxpool.Pool
+	pool       *database.Conn
 }
 
 // NewManager creates a new memory manager with all layers.
@@ -24,13 +23,13 @@ type Manager struct {
 // It defaults to a NoOpEmbedder (zero vectors) so semantic recall degrades
 // gracefully when no embedding provider is configured. Use
 // NewManagerWithEmbedder to enable real semantic search.
-func NewManager(pool *pgxpool.Pool) *Manager {
+func NewManager(pool *database.Conn) *Manager {
 	return NewManagerWithEmbedder(pool, NewNoOpEmbedder(1536))
 }
 
 // NewManagerWithEmbedder creates a memory manager that embeds queries and
 // stored content using the given Embedder, enabling real vector search.
-func NewManagerWithEmbedder(pool *pgxpool.Pool, embedder Embedder) *Manager {
+func NewManagerWithEmbedder(pool *database.Conn, embedder Embedder) *Manager {
 	if embedder == nil {
 		embedder = NewNoOpEmbedder(1536)
 	}

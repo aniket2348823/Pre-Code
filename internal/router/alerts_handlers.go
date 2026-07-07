@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -74,6 +75,20 @@ func (r *Router) createAlertHandler(w http.ResponseWriter, req *http.Request) {
 		response.InternalError(w, "failed to create alert")
 		return
 	}
+
+	// Dispatch webhook notification for alert creation
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "alert.created",
+			Payload: map[string]interface{}{
+				"alert_id": alert.ID,
+				"name":     alert.Name,
+				"type":     alert.Type,
+				"channel":  alert.Channel,
+			},
+		})
+	}
+
 	response.Created(w, alert)
 }
 
@@ -141,6 +156,13 @@ func (r *Router) updateAlertHandler(w http.ResponseWriter, req *http.Request) {
 		response.InternalError(w, "failed to update alert")
 		return
 	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "alert.updated",
+			Payload: map[string]interface{}{"alert_id": alertID, "name": name},
+		})
+	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "alert updated"})
 }
 
@@ -164,6 +186,13 @@ func (r *Router) deleteAlertHandler(w http.ResponseWriter, req *http.Request) {
 	if err := r.alerts.Delete(req.Context(), alertID); err != nil {
 		response.InternalError(w, "failed to delete alert")
 		return
+	}
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "alert.deleted",
+			Payload: map[string]interface{}{"alert_id": alertID},
+		})
 	}
 	response.NoContent(w)
 }

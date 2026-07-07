@@ -25,6 +25,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/knowledge"
 	"github.com/vigilagent/vigilagent/internal/requirements"
 	"github.com/vigilagent/vigilagent/internal/scanner"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/internal/schema"
 	"github.com/vigilagent/vigilagent/internal/skillengine"
 	"github.com/vigilagent/vigilagent/internal/cors"
@@ -85,18 +86,19 @@ func New(cfg *config.Config) (*Server, error) {
 		srv.cleanup = cleanup
 	}
 
-	userRepo := repository.NewUserRepository(db.Pool)
-	orgRepo := repository.NewOrganizationRepository(db.Pool)
-	projectRepo := repository.NewProjectRepository(db.Pool)
-	agentRepo := repository.NewAgentRepository(db.Pool)
-	sessionRepo := repository.NewSessionRepository(db.Pool)
-	eventRepo := repository.NewEventRepository(db.Pool)
-	apiKeyRepo := repository.NewAPIKeyRepository(db.Pool)
-	taskRepo := repository.NewTaskRepository(db.Pool)
-	skillRepo := repository.NewSkillRepository(db.Pool)
-	alertRepo := repository.NewAlertRepository(db.Pool)
+	conn := db.Conn()
+	userRepo := repository.NewUserRepository(conn)
+	orgRepo := repository.NewOrganizationRepository(conn)
+	projectRepo := repository.NewProjectRepository(conn)
+	agentRepo := repository.NewAgentRepository(conn)
+	sessionRepo := repository.NewSessionRepository(conn)
+	eventRepo := repository.NewEventRepository(conn)
+	apiKeyRepo := repository.NewAPIKeyRepository(conn)
+	taskRepo := repository.NewTaskRepository(conn)
+	skillRepo := repository.NewSkillRepository(conn)
+	alertRepo := repository.NewAlertRepository(conn)
 
-	apiKeyAuth := mw.NewAPIKeyAuth(db.Pool)
+	apiKeyAuth := mw.NewAPIKeyAuth(conn)
 	rl := mw.NewRateLimiter(rds.Client, 100, time.Minute)
 
 	// Initialize LLM providers based on config
@@ -118,7 +120,20 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Enforce a hard per-task budget (risk R31) with restart-safe persistence,
 	// and cache identical responses to cut spend (docs 06/07 core cost levers).
-	budgetMgr := cost.NewBudgetManager(db.Pool, 0, cfg.LLM.BudgetPerTask)
+	budgetMgr := cost.NewBudgetManager(conn, 0, cfg.LLM.BudgetPerTask)
+	webhookEngine := webhook.NewEngine(db.Pool)
+	budgetMgr.OnExceeded(func(ctx context.Context, err *cost.BudgetExceededError) {
+		webhookEngine.Dispatch(ctx, webhook.Event{
+			Type: "budget.exceeded",
+			Payload: map[string]interface{}{
+				"type":     err.Type,
+				"id":       err.ID,
+				"usage":    err.Usage,
+				"budget":   err.Budget,
+				"proposed": err.Proposed,
+			},
+		})
+	})
 	modelRouter.SetBudgetGuard(budgetMgr)
 	modelRouter.SetCache(llm.NewInMemoryCache(time.Hour))
 	slog.Info("router budget enforcement + response cache enabled", "budget_per_task", cfg.LLM.BudgetPerTask)
@@ -139,10 +154,10 @@ func New(cfg *config.Config) (*Server, error) {
 	// embeddings so semantic recall works; otherwise fall back to zero vectors.
 	var memMgr *memory.Manager
 	if cfg.LLM.OpenAIKey != "" {
-		memMgr = memory.NewManagerWithEmbedder(db.Pool, memory.NewOpenAIEmbedder(cfg.LLM.OpenAIKey))
+		memMgr = memory.NewManagerWithEmbedder(conn, memory.NewOpenAIEmbedder(cfg.LLM.OpenAIKey))
 		slog.Info("memory manager using OpenAI embeddings")
 	} else {
-		memMgr = memory.NewManager(db.Pool)
+		memMgr = memory.NewManager(conn)
 		slog.Warn("no OpenAI key; memory recall running without embeddings (zero vectors)")
 	}
 
@@ -180,6 +195,8 @@ func New(cfg *config.Config) (*Server, error) {
 		Confidence:   confidence.NewEngine(),
 		AttackGraph:  attackgraph.NewEngine(),
 		Audit:        audit.NewEngine(audit.NewMemoryStore()),
+		Budget:       budgetMgr,
+		Webhook:      webhookEngine,
 	}
 
 	// Use NewWithMiddleware when CORS is configured; otherwise default stack.

@@ -2,8 +2,7 @@ package cost
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // UsageStore persists cumulative spend so budget enforcement survives restarts.
@@ -17,11 +16,11 @@ type UsageStore interface {
 
 // PostgresUsageStore persists usage in the budget_usage table.
 type PostgresUsageStore struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewPostgresUsageStore creates a Postgres-backed usage store.
-func NewPostgresUsageStore(pool *pgxpool.Pool) *PostgresUsageStore {
+func NewPostgresUsageStore(pool *database.Conn) *PostgresUsageStore {
 	return &PostgresUsageStore{pool: pool}
 }
 

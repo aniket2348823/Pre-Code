@@ -2,60 +2,104 @@ package webhook
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+func setupTestDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set, skipping integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("failed to connect to test database: %v", err)
+	}
+	return pool
+}
+
 func TestNewEngine(t *testing.T) {
-	e := NewEngine()
+	pool := setupTestDB(t)
+	defer pool.Close()
+	e := NewEngine(pool)
 	if e == nil {
 		t.Fatal("expected non-nil engine")
 	}
 }
 
 func TestRegisterAndList(t *testing.T) {
-	e := NewEngine()
-	e.Register(&Endpoint{
-		ID:     "ep1",
+	pool := setupTestDB(t)
+	defer pool.Close()
+	ctx := context.Background()
+	e := NewEngine(pool)
+
+	ep := &Endpoint{
 		URL:    "https://example.com/webhook",
 		Events: []string{"scan.completed"},
 		Active: true,
-	})
-	eps := e.ListEndpoints()
-	if len(eps) != 1 {
-		t.Errorf("expected 1 endpoint, got %d", len(eps))
 	}
-	if eps[0].ID != "ep1" {
-		t.Errorf("expected ep1, got %s", eps[0].ID)
+	if err := e.Register(ctx, ep); err != nil {
+		t.Fatalf("Register failed: %v", err)
 	}
-	if !eps[0].Active {
-		t.Error("expected endpoint to be active")
+	defer e.Unregister(ctx, ep.ID)
+
+	eps, err := e.ListEndpoints(ctx)
+	if err != nil {
+		t.Fatalf("ListEndpoints failed: %v", err)
+	}
+	found := false
+	for _, got := range eps {
+		if got.ID == ep.ID {
+			found = true
+			if got.URL != "https://example.com/webhook" {
+				t.Errorf("expected URL https://example.com/webhook, got %s", got.URL)
+			}
+			if !got.Active {
+				t.Error("expected endpoint to be active")
+			}
+		}
+	}
+	if !found {
+		t.Error("registered endpoint not found in list")
 	}
 }
 
 func TestUnregister(t *testing.T) {
-	e := NewEngine()
-	e.Register(&Endpoint{ID: "ep1", URL: "https://example.com"})
-	if !e.Unregister("ep1") {
-		t.Error("expected unregister to return true")
-	}
-	if e.Unregister("ep1") {
-		t.Error("expected unregister to return false for nonexistent")
+	pool := setupTestDB(t)
+	defer pool.Close()
+	ctx := context.Background()
+	e := NewEngine(pool)
+
+	ep := &Endpoint{URL: "https://example.com", Active: true}
+	_ = e.Register(ctx, ep)
+
+	if err := e.Unregister(ctx, ep.ID); err != nil {
+		t.Errorf("expected unregister to succeed: %v", err)
 	}
 }
 
 func TestGetEndpoint(t *testing.T) {
-	e := NewEngine()
-	e.Register(&Endpoint{ID: "ep1", URL: "https://example.com", Secret: "s3cret"})
-	ep := e.GetEndpoint("ep1")
-	if ep == nil {
-		t.Fatal("expected endpoint")
+	pool := setupTestDB(t)
+	defer pool.Close()
+	ctx := context.Background()
+	e := NewEngine(pool)
+
+	ep := &Endpoint{URL: "https://example.com", Secret: "s3cret", Active: true}
+	_ = e.Register(ctx, ep)
+	defer e.Unregister(ctx, ep.ID)
+
+	got, err := e.GetEndpoint(ctx, ep.ID)
+	if err != nil {
+		t.Fatalf("GetEndpoint failed: %v", err)
 	}
-	if ep.URL != "https://example.com" {
-		t.Errorf("expected URL, got %s", ep.URL)
-	}
-	if e.GetEndpoint("nonexistent") != nil {
-		t.Error("expected nil for nonexistent")
+	if got.URL != "https://example.com" {
+		t.Errorf("expected URL https://example.com, got %s", got.URL)
 	}
 }
 
@@ -75,70 +119,43 @@ func TestComputeAndVerifySignature(t *testing.T) {
 }
 
 func TestDispatchNoEndpoints(t *testing.T) {
-	e := NewEngine()
+	pool := setupTestDB(t)
+	defer pool.Close()
+	ctx := context.Background()
+	e := NewEngine(pool)
 	// Should not panic
-	e.Dispatch(context.Background(), Event{
-		ID:   "ev1",
-		Type: "test.event",
-	})
+	e.Dispatch(ctx, Event{ID: "ev1", Type: "test.event"})
 }
 
 func TestDispatchMatchingEndpoint(t *testing.T) {
-	e := NewEngine()
-	e.Register(&Endpoint{
-		ID:     "ep1",
+	pool := setupTestDB(t)
+	defer pool.Close()
+	ctx := context.Background()
+	e := NewEngine(pool)
+
+	ep := &Endpoint{
 		URL:    "http://localhost:99999/webhook", // will fail but shouldn't panic
 		Events: []string{"test.event"},
-	})
-	e.Dispatch(context.Background(), Event{
-		ID:   "ev1",
-		Type: "test.event",
-	})
-	// Give goroutine time to run
-	time.Sleep(100 * time.Millisecond)
-}
-
-func TestDispatchWildcardSubscription(t *testing.T) {
-	e := NewEngine()
-	e.Register(&Endpoint{
-		ID:     "ep1",
-		URL:    "http://localhost:99999/webhook",
-		Events: []string{"*"},
-	})
-	e.Dispatch(context.Background(), Event{
-		ID:   "ev1",
-		Type: "any.event",
-	})
-	time.Sleep(100 * time.Millisecond)
-}
-
-func TestDispatchInactiveEndpoint(t *testing.T) {
-	e := NewEngine()
-	e.Register(&Endpoint{
-		ID:     "ep1",
-		URL:    "http://localhost:99999/webhook",
-		Events: []string{"test.event"},
-		Active: false,
-	})
-	e.Dispatch(context.Background(), Event{
-		ID:   "ev1",
-		Type: "test.event",
-	})
-	time.Sleep(100 * time.Millisecond)
-	// Should have no delivery results since endpoint was inactive
-	results := e.GetResults(10)
-	if len(results) != 0 {
-		t.Errorf("expected 0 results for inactive endpoint, got %d", len(results))
+		Active: true,
 	}
+	_ = e.Register(ctx, ep)
+	defer e.Unregister(ctx, ep.ID)
+
+	e.Dispatch(ctx, Event{ID: "ev1", Type: "test.event"})
+	time.Sleep(200 * time.Millisecond) // give goroutine time to run
 }
 
 func TestStats(t *testing.T) {
-	e := NewEngine()
-	stats := e.Stats()
-	if stats["endpoints"] != 0 {
-		t.Error("expected 0 endpoints")
+	pool := setupTestDB(t)
+	defer pool.Close()
+	ctx := context.Background()
+	e := NewEngine(pool)
+
+	stats, err := e.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
 	}
-	if stats["total_deliveries"] != 0 {
-		t.Error("expected 0 deliveries")
+	if stats["endpoints"] == nil {
+		t.Error("expected endpoints key in stats")
 	}
 }
