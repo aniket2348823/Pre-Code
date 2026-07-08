@@ -345,19 +345,19 @@ ORDER BY query_start;
 CREATE OR REPLACE VIEW v_table_sizes AS
 SELECT
     schemaname,
-    tablename,
-    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS total_size,
-    pg_size_pretty(pg_relation_size(schemaname||'.'||tablename)) AS table_size,
-    pg_size_pretty(pg_indexes_size((schemaname||'.'||tablename)::regclass)) AS index_size,
+    relname AS tablename,
+    pg_size_pretty(pg_total_relation_size(schemaname||'.'||relname)) AS total_size,
+    pg_size_pretty(pg_relation_size(schemaname||'.'||relname)) AS table_size,
+    pg_size_pretty(pg_indexes_size((schemaname||'.'||relname)::regclass)) AS index_size,
     n_live_tup AS row_count
 FROM pg_stat_user_tables
-ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
+ORDER BY pg_total_relation_size(schemaname||'.'||relname) DESC;
 
 -- Index usage view
 CREATE OR REPLACE VIEW v_index_usage AS
 SELECT
     schemaname,
-    tablename,
+    relname AS tablename,
     indexrelname,
     idx_scan AS times_used,
     idx_tup_read AS tuples_read,
