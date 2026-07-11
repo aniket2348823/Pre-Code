@@ -7,8 +7,8 @@ import (
 
 func TestWebhookEvent_AllValid(t *testing.T) {
 	all := AllWebhookEvents()
-	if len(all) != 5 {
-		t.Errorf("AllWebhookEvents() has %d entries, want 5", len(all))
+	if len(all) != 15 {
+		t.Errorf("AllWebhookEvents() has %d entries, want 15", len(all))
 	}
 	for _, e := range all {
 		if !e.Valid() {

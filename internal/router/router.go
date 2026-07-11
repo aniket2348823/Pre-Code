@@ -13,6 +13,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/compression"
 	"github.com/vigilagent/vigilagent/internal/cors"
 	"github.com/vigilagent/vigilagent/internal/database"
+	mw "github.com/vigilagent/vigilagent/internal/middleware"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/requestid"
 	"github.com/vigilagent/vigilagent/internal/slogger"
@@ -36,11 +37,16 @@ func (r *Router) setupMiddleware() {
 	// Structured logging (slogger)
 	r.Use(slogger.Middleware)
 
-	// Gzip compression
+	// NOTE: compression.Middleware is wired in NewWithMiddleware() for the custom
+	// stack with CORS. For the default stack (New()), we wire it here.
+	// Only one of New() or NewWithMiddleware() is called per deployment.
 	r.Use(compression.Middleware)
 
 	// CORS (use dedicated package)
 	r.useCORSFromConfig()
+
+	// Security headers
+	r.Use(r.securityHeadersMiddleware)
 
 	// Timeout (configurable, defaults to 30s)
 	timeout := 30 * time.Second
@@ -49,27 +55,76 @@ func (r *Router) setupMiddleware() {
 	})
 }
 
+// securityHeadersMiddleware adds hardened HTTP security headers to every response.
+func (r *Router) securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+
+		// Content-Security-Policy: restrict resource loading to same-origin only.
+		// For a pure JSON API this is the tightest policy — no inline scripts,
+		// no external styles, no frames. Adjust if you later serve HTML.
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'none'; "+
+			"frame-ancestors 'none'; "+
+			"form-action 'none'; "+
+			"base-uri 'self'; "+
+			"object-src 'none'")
+
+		// Only set HSTS in production (behind TLS)
+		if r.cfg != nil && r.cfg.Server.Env == "production" {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
 // useCORSFromConfig applies CORS using the dedicated cors package.
-// Falls back to permissive defaults when r.cfg is nil or has no origins.
+// In production: uses ProductionConfig with explicit origins (validated at startup).
+// In development: falls back to permissive defaults with a warning.
 func (r *Router) useCORSFromConfig() {
-	cfg := cors.DefaultConfig()
-	if r.cfg != nil {
+	var cfg cors.Config
+	if r.cfg != nil && r.cfg.Server.Env == "production" {
+		// Production: use restrictive config with explicit origins
+		cfg = cors.ProductionConfig(r.cfg.CORS.AllowedOrigins)
+		slog.Info("CORS configured for production", "origins", r.cfg.CORS.AllowedOrigins)
+	} else if r.cfg != nil && corsAllExplicit(r.cfg.CORS.AllowedOrigins) {
+		// Explicit non-wildcard origins configured (even in development)
 		cfg = cors.Config{
-			AllowOrigins: r.cfg.CORS.AllowedOrigins,
-			AllowMethods: r.cfg.CORS.AllowedMethods,
-			AllowHeaders: r.cfg.CORS.AllowedHeaders,
+			AllowOrigins:     r.cfg.CORS.AllowedOrigins,
+			AllowMethods:     r.cfg.CORS.AllowedMethods,
+			AllowHeaders:     r.cfg.CORS.AllowedHeaders,
+			AllowCredentials: r.cfg.CORS.AllowCredentials,
 		}
-		if len(cfg.AllowOrigins) == 0 {
-			cfg.AllowOrigins = []string{"*"}
-		}
-		if len(cfg.AllowMethods) == 0 {
-			cfg.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-		}
-		if len(cfg.AllowHeaders) == 0 {
-			cfg.AllowHeaders = []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"}
-		}
+	} else {
+		// Development fallback: permissive CORS
+		cfg = cors.DefaultConfig()
+		slog.Warn("using permissive CORS (AllowOrigins=[*]) — restrict in production")
+	}
+	if len(cfg.AllowMethods) == 0 {
+		cfg.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
+	}
+	if len(cfg.AllowHeaders) == 0 {
+		cfg.AllowHeaders = []string{"Accept", "Authorization", "Content-Type", "X-API-Key", "X-Request-ID"}
 	}
 	r.Use(cfg.Middleware)
+}
+
+// corsAllExplicit returns true when every origin in the list is a concrete URL
+// (no wildcards). Returns false for empty or wildcard-containing lists.
+func corsAllExplicit(origins []string) bool {
+	if len(origins) == 0 {
+		return false
+	}
+	for _, o := range origins {
+		if o == "*" {
+			return false
+		}
+	}
+	return true
 }
 
 
@@ -82,13 +137,17 @@ func (r *Router) setupRoutes() {
 		v1.Get("/metrics", r.metricsHandler)
 
 		public := v1.Group(nil)
+			public.Use(limitBodySize)
+			public.Use(r.authRateLimitMiddleware)
 		{
 			public.Post("/auth/register", r.registerHandler)
 			public.Post("/auth/login", r.loginHandler)
 		}
 
 		protected := v1.Group(nil)
+		protected.Use(limitBodySize)
 		protected.Use(r.authMiddleware)
+		protected.Use(r.apiKeyRateLimitMiddleware)
 		{
 			protected.Get("/users/me", r.currentUserHandler)
 			protected.Post("/auth/refresh", r.refreshTokenHandler)
@@ -122,6 +181,7 @@ func (r *Router) setupRoutes() {
 			protected.Get("/tasks/{taskID}", r.getTaskHandler)
 			protected.Post("/tasks/{taskID}/cancel", r.cancelTaskHandler)
 			protected.Get("/tasks/{taskID}/stream", r.streamTaskHandler)
+			protected.Post("/tasks/{taskID}/hitl", r.approveHITLHandler)
 
 			protected.Post("/memory/search", r.searchMemoryHandler)
 			protected.Post("/memory", r.createMemoryHandler)
@@ -155,6 +215,15 @@ func (r *Router) setupRoutes() {
 			protected.Get("/analytics/cost", r.costAnalyticsHandler)
 			protected.Get("/analytics/tokens", r.tokenAnalyticsHandler)
 			protected.Get("/analytics/sessions", r.sessionAnalyticsHandler)
+			protected.Get("/analytics/cost-intel", r.costIntelDashboardHandler)
+			protected.Get("/analytics/cost-intel/forecast", r.costIntelForecastHandler)
+			protected.Get("/analytics/cost-intel/recommendations", r.costIntelRecommendationsHandler)
+			protected.Get("/analytics/cost-intel/anomalies", r.costIntelAnomaliesHandler)
+
+			// Extended endpoints
+			protected.Post("/tasks/batch", r.batchTaskHandler)
+			protected.Get("/providers/health", r.healthStatsHandler)
+			protected.Post("/providers/cost-override", r.costOverrideHandler)
 
 			protected.Get("/dashboard/overview", r.dashboardOverviewHandler)
 			protected.Get("/dashboard/activity", r.dashboardActivityHandler)
@@ -188,6 +257,14 @@ func (r *Router) setupRoutes() {
 			protected.Get("/api-keys", r.listAPIKeysHandler)
 			protected.Delete("/api-keys/{keyID}", r.deleteAPIKeyHandler)
 
+			// Webhook endpoint management
+			protected.Post("/webhooks", r.createWebhookHandler)
+			protected.Get("/webhooks", r.listWebhooksHandler)
+			protected.Get("/webhooks/stats", r.webhookStatsHandler)
+			protected.Get("/webhooks/{webhookID}", r.getWebhookHandler)
+			protected.Delete("/webhooks/{webhookID}", r.deleteWebhookHandler)
+			protected.Get("/webhooks/{webhookID}/deliveries", r.getWebhookDeliveriesHandler)
+
 			admin := protected.Group(nil)
 			admin.Use(r.adminMiddleware)
 			{
@@ -200,7 +277,6 @@ func (r *Router) setupRoutes() {
 			// WebSocket endpoint for real-time agent streaming (requires auth)
 			protected.Get("/ws", r.handleWebSocket)
 
-			// Debug endpoint: verify RLS session variable is set correctly
 			// Debug endpoint: verify RLS session variable is set correctly
 			if r.authSessionMiddleware != nil {
 				protected.Get("/auth/session-check", r.authSessionMiddleware.AuthSessionCheckHandler)
@@ -969,13 +1045,14 @@ func (r *Router) createSessionHandler(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// Dispatch webhook notification
+	// Dispatch lifecycle webhook notification
 	if r.webhookEngine != nil {
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
 			Type: "session.created",
 			Payload: map[string]interface{}{
 				"session_id": session.ID,
 				"agent_id":   agentID,
+				"project_id": agent.ProjectID,
 				"user_id":    claims.UserID,
 			},
 		})
@@ -1086,11 +1163,30 @@ func (r *Router) updateSessionHandler(w http.ResponseWriter, req *http.Request) 
 			return
 		}
 	}
-	// Dispatch webhook notification
+	// Dispatch lifecycle webhook notifications
 	if r.webhookEngine != nil {
+		// Map internal status to canonical lifecycle event
+		var lifecycleEvent string
+		switch input.Status {
+		case "completed":
+			lifecycleEvent = "session.completed"
+		case "failed":
+			lifecycleEvent = "session.failed"
+		case "active":
+			lifecycleEvent = "session.active"
+		default:
+			// Unrecognized status — still notify so subscribers are aware
+			lifecycleEvent = "session.updated"
+		}
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
-			Type: "session.updated",
-			Payload: map[string]interface{}{"session_id": sessionID, "status": input.Status},
+			Type: lifecycleEvent,
+			Payload: map[string]interface{}{
+				"session_id": sessionID,
+				"agent_id":   session.AgentID,
+				"project_id": session.ProjectID,
+				"user_id":    claims.UserID,
+				"status":     input.Status,
+			},
 		})
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "session updated"})
@@ -1383,6 +1479,20 @@ func parseTimeRange(req *http.Request) (time.Time, time.Time) {
 	return from, to
 }
 
+// maxRequestBodySize is the default maximum request body size (2 MiB).
+const maxRequestBodySize = 2 << 20 // 2 MiB
+
+// limitBodySize wraps the request body with http.MaxBytesReader to prevent
+// resource exhaustion from oversized payloads. Returns 413 on overflow.
+func limitBodySize(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Body != nil {
+			req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodySize)
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
 // Skills, Alerts, Billing, Admin, Memory handlers are implemented in:
 // skills_handlers.go, alerts_handlers.go, billing_handlers.go, admin_handlers.go, memory_handlers.go
 
@@ -1466,6 +1576,20 @@ func (r *Router) adminMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// authRateLimitMiddleware provides Redis-backed sliding-window rate limiting
+// for public auth endpoints (register, login). Keyed by IP address to prevent
+// brute-force attacks. Limits: 10 requests per minute per IP.
+// Falls back to no limiting if Redis-backed limiter is unavailable.
+func (r *Router) authRateLimitMiddleware(next http.Handler) http.Handler {
+	if r.authRL == nil {
+		slog.Warn("auth rate limiting disabled: Redis-backed limiter not configured")
+		return next
+	}
+	return r.authRL.Middleware(func(req *http.Request) string {
+		return mw.RateLimitByIPKey(req)
+	})(next)
 }
 
 // eventsRateLimitMiddleware applies Redis-backed rate limiting to event ingestion.

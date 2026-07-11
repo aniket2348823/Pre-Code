@@ -15,9 +15,26 @@ import (
 type WebhookEvent string
 
 const (
-	WebhookTaskCompleted  WebhookEvent = "task.completed"
-	WebhookTaskFailed     WebhookEvent = "task.failed"
-	WebhookHITLRequired   WebhookEvent = "hitl.required"
+	// Task lifecycle events — fired on every state transition.
+	WebhookTaskCreated   WebhookEvent = "task.created"
+	WebhookTaskStarted   WebhookEvent = "task.started"
+	WebhookTaskPlanning  WebhookEvent = "task.planning"
+	WebhookTaskExecuting WebhookEvent = "task.executing"
+	WebhookTaskCompleted WebhookEvent = "task.completed"
+	WebhookTaskFailed    WebhookEvent = "task.failed"
+	WebhookTaskCancelled WebhookEvent = "task.cancelled"
+
+	// Human-in-the-loop events.
+	WebhookHITLRequired WebhookEvent = "hitl.required"
+
+	// Session lifecycle events — fired on every state transition.
+	WebhookSessionCreated   WebhookEvent = "session.created"
+	WebhookSessionActive    WebhookEvent = "session.active"
+	WebhookSessionCompleted WebhookEvent = "session.completed"
+	WebhookSessionFailed    WebhookEvent = "session.failed"
+	WebhookSessionUpdated   WebhookEvent = "session.updated"
+
+	// Infrastructure events.
 	WebhookBudgetExceeded WebhookEvent = "budget.exceeded"
 	WebhookSkillInstalled WebhookEvent = "skill.installed"
 )
@@ -25,7 +42,17 @@ const (
 // AllWebhookEvents returns every defined webhook event.
 func AllWebhookEvents() []WebhookEvent {
 	return []WebhookEvent{
-		WebhookTaskCompleted, WebhookTaskFailed, WebhookHITLRequired,
+		// Task lifecycle
+		WebhookTaskCreated, WebhookTaskStarted, WebhookTaskPlanning,
+		WebhookTaskExecuting, WebhookTaskCompleted, WebhookTaskFailed,
+		WebhookTaskCancelled,
+		// HITL
+		WebhookHITLRequired,
+		// Session lifecycle
+		WebhookSessionCreated, WebhookSessionActive,
+		WebhookSessionCompleted, WebhookSessionFailed,
+		WebhookSessionUpdated,
+		// Infrastructure
 		WebhookBudgetExceeded, WebhookSkillInstalled,
 	}
 }

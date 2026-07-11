@@ -14,9 +14,13 @@ import (
 
 // adminStatsHandler returns platform-wide statistics.
 func (r *Router) adminStatsHandler(w http.ResponseWriter, req *http.Request) {
-	_, ok := auth.ClaimsFromContext(req.Context())
+	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
 		response.Unauthorized(w, "missing authentication")
+		return
+	}
+	if claims.Role != "admin" && claims.Role != "superadmin" {
+		response.Forbidden(w, "admin access required")
 		return
 	}
 
@@ -52,9 +56,13 @@ func (r *Router) adminStatsHandler(w http.ResponseWriter, req *http.Request) {
 
 // adminListUsersHandler returns all users (admin only).
 func (r *Router) adminListUsersHandler(w http.ResponseWriter, req *http.Request) {
-	_, ok := auth.ClaimsFromContext(req.Context())
+	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
 		response.Unauthorized(w, "missing authentication")
+		return
+	}
+	if claims.Role != "admin" && claims.Role != "superadmin" {
+		response.Forbidden(w, "admin access required")
 		return
 	}
 
@@ -88,9 +96,13 @@ func (r *Router) adminListUsersHandler(w http.ResponseWriter, req *http.Request)
 
 // adminUpdateUserRoleHandler updates a user's role.
 func (r *Router) adminUpdateUserRoleHandler(w http.ResponseWriter, req *http.Request) {
-	_, ok := auth.ClaimsFromContext(req.Context())
+	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
 		response.Unauthorized(w, "missing authentication")
+		return
+	}
+	if claims.Role != "admin" && claims.Role != "superadmin" {
+		response.Forbidden(w, "admin access required")
 		return
 	}
 	userID := chi.URLParam(req, "userID")
@@ -144,6 +156,10 @@ func (r *Router) adminDeleteUserHandler(w http.ResponseWriter, req *http.Request
 	}
 	userID := chi.URLParam(req, "userID")
 
+	if claims.Role != "admin" && claims.Role != "superadmin" {
+		response.Forbidden(w, "admin access required")
+		return
+	}
 	// Prevent self-deletion
 	if claims.UserID == userID {
 		response.BadRequest(w, "cannot delete your own account")

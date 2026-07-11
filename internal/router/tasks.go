@@ -17,6 +17,13 @@ import (
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
+// TaskSSEEvent is a real-time event pushed from the agent to SSE subscribers.
+type TaskSSEEvent struct {
+	TaskID  string
+	Event   string
+	Payload map[string]interface{}
+}
+
 // createTaskHandler creates a new task and starts execution.
 func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
@@ -65,6 +72,13 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Create a channel for real-time SSE events from the agent
+	sseCh := make(chan TaskSSEEvent, 16)
+	if r.sseHub != nil {
+		r.sseHub.Register(task.ID, sseCh)
+		defer r.sseHub.Unregister(task.ID)
+	}
+
 	// Start agent execution in background using a fresh context
 	go func() {
 		bgCtx := context.Background()
@@ -81,26 +95,126 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 			Tags:          []string{},
 		}
 		if r.agentExec != nil {
+			// Wire per-task state change callback to dispatch lifecycle webhooks
+			// and push real-time SSE events for HITL and state transitions
+			agentTask.OnStateChange = func(taskID, oldState, newState string) {
+				// Persist intermediate states to DB so SSE polling detects transitions.
+				// Terminal states (completed, failed) are written by Complete/UpdateStatus
+				// after ExecuteTask returns, which also sets result/tokens/cost.
+				isTerminal := newState == "completed" || newState == "failed" || newState == "cancelled"
+				if !isTerminal {
+					_ = r.tasks.UpdateStatus(bgCtx, taskID, newState)
+				}
+
+				// Push real-time SSE event for all transitions
+				if r.sseHub != nil {
+					r.sseHub.Broadcast(taskID, TaskSSEEvent{
+						TaskID: taskID,
+						Event:  "task_lifecycle",
+						Payload: map[string]interface{}{
+							"old_state": oldState,
+							"new_state": newState,
+						},
+					})
+				}
+
+				// Dispatch webhook for mapped events
+				if r.webhookEngine != nil {
+					var eventType string
+					switch newState {
+					case "planning":
+						eventType = "task.planning"
+					case "executing":
+						if oldState == "waiting_hitl" {
+							return // already dispatched task.executing before HITL
+						}
+						eventType = "task.executing"
+					case "waiting_hitl":
+						eventType = "hitl.required"
+					case "cancelled":
+						eventType = "task.cancelled"
+					default:
+						return
+					}
+					r.webhookEngine.Dispatch(bgCtx, webhook.Event{
+						Type: eventType,
+						Payload: map[string]interface{}{
+							"task_id":    taskID,
+							"user_id":    task.UserID,
+							"project_id": task.ProjectID,
+							"old_state":  oldState,
+							"new_state":  newState,
+						},
+					})
+				}
+			}
+
+			// Dispatch task.started lifecycle event
+			if r.webhookEngine != nil {
+				r.webhookEngine.Dispatch(bgCtx, webhook.Event{
+					Type: "task.started",
+					Payload: map[string]interface{}{
+						"task_id":    task.ID,
+						"user_id":    task.UserID,
+						"project_id": task.ProjectID,
+					},
+				})
+			}
+
 			result, err := r.agentExec.ExecuteTask(bgCtx, agentTask)
 			if err != nil {
 				_ = r.tasks.UpdateStatus(bgCtx, task.ID, "failed")
+				if r.webhookEngine != nil {
+					r.webhookEngine.Dispatch(bgCtx, webhook.Event{
+						Type: "task.failed",
+						Payload: map[string]interface{}{
+							"task_id":   task.ID,
+							"user_id":   task.UserID,
+							"project_id": task.ProjectID,
+							"error":     err.Error(),
+						},
+					})
+				}
 			} else {
 				_ = r.tasks.Complete(bgCtx, task.ID, result.Result, "", "",
 					result.TokensUsed, 0, result.TokensUsed, result.Cost)
+				if r.webhookEngine != nil {
+					r.webhookEngine.Dispatch(bgCtx, webhook.Event{
+						Type: "task.completed",
+						Payload: map[string]interface{}{
+							"task_id":   task.ID,
+							"user_id":   task.UserID,
+							"project_id": task.ProjectID,
+							"cost":      result.Cost,
+							"tokens":    result.TokensUsed,
+						},
+					})
+				}
 			}
 		} else {
 			// No agent configured — mark as completed with echo
 			_ = r.tasks.Complete(bgCtx, task.ID, task.Prompt, "", "", 0, 0, 0, 0)
+			if r.webhookEngine != nil {
+				r.webhookEngine.Dispatch(bgCtx, webhook.Event{
+					Type: "task.completed",
+					Payload: map[string]interface{}{
+						"task_id":   task.ID,
+						"user_id":   task.UserID,
+						"project_id": task.ProjectID,
+					},
+				})
+			}
 		}
 	}()
 
-	// Dispatch webhook notification
+	// Dispatch lifecycle webhook notifications
 	if r.webhookEngine != nil {
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
 			Type: "task.created",
 			Payload: map[string]interface{}{
 				"task_id":   task.ID,
 				"project_id": task.ProjectID,
+				"user_id":   claims.UserID,
 				"prompt":    task.Prompt,
 				"status":    task.Status,
 			},
@@ -230,13 +344,14 @@ func (r *Router) cancelTaskHandler(w http.ResponseWriter, req *http.Request) {
 		response.InternalError(w, "failed to cancel task")
 		return
 	}
-	// Dispatch webhook notification
+	// Dispatch lifecycle webhook notification
 	if r.webhookEngine != nil {
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
 			Type: "task.cancelled",
 			Payload: map[string]interface{}{
 				"task_id":    taskID,
 				"project_id": task.ProjectID,
+				"user_id":    claims.UserID,
 			},
 		})
 	}
@@ -246,7 +361,7 @@ func (r *Router) cancelTaskHandler(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// streamTaskHandler streams task updates via SSE.
+// streamTaskHandler streams task updates via SSE with lifecycle events.
 func (r *Router) streamTaskHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
@@ -282,7 +397,7 @@ func (r *Router) streamTaskHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Send current task status
+	// Send current task status as initial event
 	data, _ := json.Marshal(map[string]interface{}{
 		"task_id": task.ID,
 		"status":  task.Status,
@@ -296,22 +411,86 @@ func (r *Router) streamTaskHandler(w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithCancel(bgCtx)
 	defer cancel()
 
+	// Track last state to detect transitions and emit lifecycle events
+	lastStatus := task.Status
+
+	// sendSSE writes an SSE event and flushes
+	sendSSE := func(eventType, payload string) {
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload)
+		flusher.Flush()
+	}
+
+	// sendLifecycleEvent maps DB status to SSE lifecycle event type and sends
+	sendLifecycleEvent := func(t *repository.Task) {
+		if t.Status == lastStatus {
+			return
+		}
+		lastStatus = t.Status
+
+		var eventType string
+		switch t.Status {
+		case "planning":
+			eventType = "task_planning"
+		case "executing":
+			eventType = "task_executing"
+		case "completed":
+			eventType = "task_completed"
+		case "failed":
+			eventType = "task_failed"
+		case "cancelled":
+			eventType = "task_cancelled"
+		default:
+			return
+		}
+		d, _ := json.Marshal(map[string]interface{}{
+			"task_id": t.ID,
+			"status":  t.Status,
+			"result":  t.Result,
+		})
+		sendSSE(eventType, string(d))
+	}
+
+	// Register a channel with the SSE hub so real-time events from the agent
+	// (HITL decisions, state transitions) reach this SSE subscriber.
+	sseCh := make(chan TaskSSEEvent, 16)
+	if r.sseHub != nil {
+		r.sseHub.Register(taskID, sseCh)
+		defer r.sseHub.Unregister(taskID)
+	}
+
 	// Poll task status until terminal state
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case evt, ok := <-sseCh:
+				// Real-time event from agent (e.g. HITL, state transition)
+				if !ok {
+					continue
+				}
+				d, _ := json.Marshal(evt.Payload)
+				sendSSE(evt.Event, string(d))
+			case <-heartbeat.C:
+				// Send heartbeat to keep connection alive and detect disconnects
+				sendSSE("heartbeat", `{"ts":"`+time.Now().UTC().Format(time.RFC3339)+"}"}
 			case <-ticker.C:
 				t, err := r.tasks.FindByID(ctx, taskID)
 				if err != nil {
 					return
 				}
+
+				// Emit lifecycle event on state transition
+				sendLifecycleEvent(t)
+
+				// Always send the general update
 				d, _ := json.Marshal(map[string]interface{}{
 					"task_id":       t.ID,
 					"status":        t.Status,
@@ -320,12 +499,10 @@ func (r *Router) streamTaskHandler(w http.ResponseWriter, req *http.Request) {
 					"output_tokens": t.OutputTokens,
 					"cost":          t.Cost,
 				})
-				fmt.Fprintf(w, "event: task_update\ndata: %s\n\n", d)
-				flusher.Flush()
+				sendSSE("task_update", string(d))
 
 				if t.Status == "completed" || t.Status == "failed" || t.Status == "cancelled" {
-					fmt.Fprintf(w, "event: done\ndata: {}\n\n")
-					flusher.Flush()
+					sendSSE("done", "{}")
 					return
 				}
 			}

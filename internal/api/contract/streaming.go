@@ -14,21 +14,25 @@ type StreamEventType string
 
 const (
 	EventTaskStarted   StreamEventType = "task_started"
+	EventTaskPlanning  StreamEventType = "task_planning"
+	EventTaskExecuting StreamEventType = "task_executing"
 	EventStepStarted   StreamEventType = "step_started"
 	EventStepCompleted StreamEventType = "step_completed"
 	EventTokenStream   StreamEventType = "token_stream"
 	EventHITLRequired  StreamEventType = "hitl_required"
 	EventTaskCompleted StreamEventType = "task_completed"
 	EventTaskFailed    StreamEventType = "task_failed"
+	EventTaskCancelled StreamEventType = "task_cancelled"
 	EventHeartbeat     StreamEventType = "heartbeat"
 )
 
 // AllStreamEventTypes returns every defined event type.
 func AllStreamEventTypes() []StreamEventType {
 	return []StreamEventType{
-		EventTaskStarted, EventStepStarted, EventStepCompleted,
+		EventTaskStarted, EventTaskPlanning, EventTaskExecuting,
+		EventStepStarted, EventStepCompleted,
 		EventTokenStream, EventHITLRequired, EventTaskCompleted,
-		EventTaskFailed, EventHeartbeat,
+		EventTaskFailed, EventTaskCancelled, EventHeartbeat,
 	}
 }
 
@@ -80,6 +84,21 @@ func NewStreamEvent(eventType StreamEventType, payload any) (StreamEvent, error)
 type TaskStartedEvent struct {
 	TaskID string    `json:"task_id"`
 	Plan   *TaskPlan `json:"plan,omitempty"`
+}
+
+// TaskPlanningEvent is the payload for EventTaskPlanning.
+type TaskPlanningEvent struct {
+	TaskID string `json:"task_id"`
+}
+
+// TaskExecutingEvent is the payload for EventTaskExecuting.
+type TaskExecutingEvent struct {
+	TaskID string `json:"task_id"`
+}
+
+// TaskCancelledEvent is the payload for EventTaskCancelled.
+type TaskCancelledEvent struct {
+	TaskID string `json:"task_id"`
 }
 
 // StepStartedEvent is the payload for EventStepStarted.

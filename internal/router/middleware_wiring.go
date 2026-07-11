@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/vigilagent/vigilagent/internal/compression"
 	"github.com/vigilagent/vigilagent/internal/cors"
 	"github.com/vigilagent/vigilagent/internal/idempotency"
 	"github.com/vigilagent/vigilagent/internal/rateguard"
@@ -94,6 +95,9 @@ func NewWithMiddleware(opts Options, mcfg *MiddlewareConfig) *Router {
 
 	// Build handlers using shared logic.
 	r.initHandlers()
+
+	// Wire compression (outermost, before security)
+	r.Use(compression.Middleware)
 
 	// Wire security middleware first (outermost)
 	r.setupSecurityMiddleware(mcfg)

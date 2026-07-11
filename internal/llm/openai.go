@@ -172,7 +172,7 @@ func (o *OpenAIAdapter) convertMessages(req *ChatRequest) []openai.ChatCompletio
 }
 
 func calculateOpenAICost(model string, inputTokens, outputTokens int) float64 {
-	info, ok := PriceTable[model]
+	info, ok := LookupPrice(model)
 	if !ok {
 		return 0
 	}

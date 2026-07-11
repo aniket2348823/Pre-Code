@@ -39,7 +39,9 @@ func TestRegisterAndList(t *testing.T) {
 	ctx := context.Background()
 	e := NewEngine(pool)
 
+	userID := "test-user-1"
 	ep := &Endpoint{
+		UserID: userID,
 		URL:    "https://example.com/webhook",
 		Events: []string{"scan.completed"},
 		Active: true,
@@ -47,9 +49,9 @@ func TestRegisterAndList(t *testing.T) {
 	if err := e.Register(ctx, ep); err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
-	defer e.Unregister(ctx, ep.ID)
+	defer e.Unregister(ctx, userID, ep.ID)
 
-	eps, err := e.ListEndpoints(ctx)
+	eps, err := e.ListEndpoints(ctx, userID)
 	if err != nil {
 		t.Fatalf("ListEndpoints failed: %v", err)
 	}
@@ -76,10 +78,11 @@ func TestUnregister(t *testing.T) {
 	ctx := context.Background()
 	e := NewEngine(pool)
 
-	ep := &Endpoint{URL: "https://example.com", Active: true}
+	userID := "test-user-2"
+	ep := &Endpoint{UserID: userID, URL: "https://example.com", Active: true}
 	_ = e.Register(ctx, ep)
 
-	if err := e.Unregister(ctx, ep.ID); err != nil {
+	if err := e.Unregister(ctx, userID, ep.ID); err != nil {
 		t.Errorf("expected unregister to succeed: %v", err)
 	}
 }
@@ -90,11 +93,12 @@ func TestGetEndpoint(t *testing.T) {
 	ctx := context.Background()
 	e := NewEngine(pool)
 
-	ep := &Endpoint{URL: "https://example.com", Secret: "s3cret", Active: true}
+	userID := "test-user-3"
+	ep := &Endpoint{UserID: userID, URL: "https://example.com", Secret: "s3cret", Active: true}
 	_ = e.Register(ctx, ep)
-	defer e.Unregister(ctx, ep.ID)
+	defer e.Unregister(ctx, userID, ep.ID)
 
-	got, err := e.GetEndpoint(ctx, ep.ID)
+	got, err := e.GetEndpoint(ctx, userID, ep.ID)
 	if err != nil {
 		t.Fatalf("GetEndpoint failed: %v", err)
 	}
@@ -133,13 +137,15 @@ func TestDispatchMatchingEndpoint(t *testing.T) {
 	ctx := context.Background()
 	e := NewEngine(pool)
 
+	userID := "test-user-4"
 	ep := &Endpoint{
+		UserID: userID,
 		URL:    "http://localhost:99999/webhook", // will fail but shouldn't panic
 		Events: []string{"test.event"},
 		Active: true,
 	}
 	_ = e.Register(ctx, ep)
-	defer e.Unregister(ctx, ep.ID)
+	defer e.Unregister(ctx, userID, ep.ID)
 
 	e.Dispatch(ctx, Event{ID: "ev1", Type: "test.event"})
 	time.Sleep(200 * time.Millisecond) // give goroutine time to run
@@ -151,7 +157,8 @@ func TestStats(t *testing.T) {
 	ctx := context.Background()
 	e := NewEngine(pool)
 
-	stats, err := e.Stats(ctx)
+	userID := "test-user-5"
+	stats, err := e.Stats(ctx, userID)
 	if err != nil {
 		t.Fatalf("Stats failed: %v", err)
 	}

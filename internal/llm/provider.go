@@ -109,6 +109,9 @@ func (m ModelInfo) Supports(capability string) bool {
 	return false
 }
 
+// priceTableMu guards concurrent reads/writes to PriceTable.
+var priceTableMu sync.RWMutex
+
 // PriceTable maps model names to pricing. It is the built-in default; deployments
 // can override prices at runtime via ModelRouter.SetPrices (see doc 06/07 — prices
 // drift monthly and should not be pinned in code for production).
@@ -119,9 +122,22 @@ var PriceTable = map[string]ModelInfo{
 	"gpt-4.5":                  {Name: "gpt-4.5", Provider: "openai", InputCostPer1K: 0.015, OutputCostPer1K: 0.06, MaxTokens: 16384, Capabilities: []string{"tools", "vision", "reasoning"}},
 	"gpt-4o":                   {Name: "gpt-4o", Provider: "openai", InputCostPer1K: 0.0025, OutputCostPer1K: 0.01, MaxTokens: 16384, Capabilities: []string{"tools", "vision"}},
 	"gpt-4o-mini":              {Name: "gpt-4o-mini", Provider: "openai", InputCostPer1K: 0.00015, OutputCostPer1K: 0.0006, MaxTokens: 16384, Capabilities: []string{"tools"}},
-	"gemini-2.5-pro":           {Name: "gemini-2.5-pro", Provider: "google", InputCostPer1K: 0.00125, OutputCostPer1K: 0.01, MaxTokens: 8192, Capabilities: []string{"tools", "vision", "reasoning"}},
-	"gemini-2.0-flash":         {Name: "gemini-2.0-flash", Provider: "google", InputCostPer1K: 0.000075, OutputCostPer1K: 0.0003, MaxTokens: 8192, Capabilities: []string{"tools", "vision"}},
 	"deepseek-r1":              {Name: "deepseek-r1", Provider: "deepseek", InputCostPer1K: 0.00055, OutputCostPer1K: 0.00219, MaxTokens: 8192, Capabilities: []string{"reasoning"}},
+	// Gemini
+	"gemini-2.5-pro":           {Name: "gemini-2.5-pro", Provider: "gemini", InputCostPer1K: 0.00125, OutputCostPer1K: 0.01, MaxTokens: 8192, Capabilities: []string{"tools", "vision", "reasoning"}},
+	"gemini-2.0-flash":         {Name: "gemini-2.0-flash", Provider: "gemini", InputCostPer1K: 0.000075, OutputCostPer1K: 0.0003, MaxTokens: 8192, Capabilities: []string{"tools", "vision"}},
+	// Mistral
+	"mistral-large-latest":     {Name: "mistral-large-latest", Provider: "mistral", InputCostPer1K: 0.002, OutputCostPer1K: 0.006, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"mistral-small-latest":     {Name: "mistral-small-latest", Provider: "mistral", InputCostPer1K: 0.001, OutputCostPer1K: 0.003, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	// Groq
+	"llama-3.1-70b-versatile":  {Name: "llama-3.1-70b-versatile", Provider: "groq", InputCostPer1K: 0.00059, OutputCostPer1K: 0.00079, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"llama-3.1-8b-instant":     {Name: "llama-3.1-8b-instant", Provider: "groq", InputCostPer1K: 0.00005, OutputCostPer1K: 0.00008, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	// NVIDIA NIM
+	"nvidia/llama-3.1-405b-instruct": {Name: "nvidia/llama-3.1-405b-instruct", Provider: "nvidia_nim", InputCostPer1K: 0.003, OutputCostPer1K: 0.009, MaxTokens: 8192, Capabilities: []string{"tools", "reasoning"}},
+	"nvidia/llama-3.1-70b-instruct":  {Name: "nvidia/llama-3.1-70b-instruct", Provider: "nvidia_nim", InputCostPer1K: 0.00088, OutputCostPer1K: 0.00088, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	// Cohere
+	"command-r-plus":           {Name: "command-r-plus", Provider: "cohere", InputCostPer1K: 0.0015, OutputCostPer1K: 0.00225, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"command-r":                {Name: "command-r", Provider: "cohere", InputCostPer1K: 0.00015, OutputCostPer1K: 0.00015, MaxTokens: 8192, Capabilities: []string{"tools"}},
 }
 
 // Task represents a task for model routing (canonical definition).
@@ -530,6 +546,152 @@ func (r *ModelRouter) maxTokensFor(model string) int {
 
 // systemPrompt returns a task's system prompt, if any is derivable. Kept as a
 // hook so prompt construction lives in one place.
+// LookupPrice returns pricing for a model from the global PriceTable, safe for
+// concurrent use. Returns zero value and false if the model is not found.
+func LookupPrice(model string) (ModelInfo, bool) {
+	priceTableMu.RLock()
+	defer priceTableMu.RUnlock()
+	info, ok := PriceTable[model]
+	return info, ok
+}
+
+// SetPrice updates or inserts a model's pricing in the global PriceTable, safe
+// for concurrent use. Callers should also call ModelRouter.SetPrices to update
+// the router's internal copy.
+func SetPrice(model string, info ModelInfo) {
+	priceTableMu.Lock()
+	defer priceTableMu.Unlock()
+	PriceTable[model] = info
+}
+
+// AllPrices returns a snapshot of the entire global PriceTable, safe for
+// concurrent use. The returned map is a copy — mutations do not affect the
+// original table.
+func AllPrices() map[string]ModelInfo {
+	priceTableMu.RLock()
+	defer priceTableMu.RUnlock()
+	copy := make(map[string]ModelInfo, len(PriceTable))
+	for k, v := range PriceTable {
+		copy[k] = v
+	}
+	return copy
+}
+
+// StreamResult holds the streaming channel plus metadata about which model
+// was selected, enabling callers to track token usage and cost attribution.
+type StreamResult struct {
+	Ch       <-chan *ChatChunk
+	Model    string
+	Provider string
+	EstInput int // estimated input tokens from routing
+}
+
+// StreamWithFailover routes a task, then streams tokens from the chosen provider
+// (or fallbacks) via a channel. Returns a StreamResult containing the channel
+// and routing metadata so callers can track token usage and cost.
+func (r *ModelRouter) StreamWithFailover(ctx context.Context, task *Task) (*StreamResult, error) {
+	decision, err := r.Route(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("routing failed: %w", err)
+	}
+
+	attempts := []FallbackOption{{Provider: decision.Provider, Model: decision.Model, EstCost: decision.EstCost}}
+	attempts = append(attempts, decision.Fallbacks...)
+
+	estInput := estimateInputTokens(task)
+	for _, a := range attempts {
+		ch, err := r.streamAttempt(ctx, task, a)
+		if err == nil {
+			return &StreamResult{
+				Ch:       ch,
+				Model:    a.Model,
+				Provider: a.Provider,
+				EstInput: estInput,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("all providers failed to stream for task %s", task.ID)
+}
+
+// streamAttempt runs a single streaming try with budget gating and cost recording.
+func (r *ModelRouter) streamAttempt(ctx context.Context, task *Task, opt FallbackOption) (<-chan *ChatChunk, error) {
+	r.mu.RLock()
+	provider, ok := r.providers[opt.Provider]
+	budget := r.budget
+	r.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("provider %s not registered", opt.Provider)
+	}
+
+	req := &ChatRequest{
+		Model:     opt.Model,
+		Messages:  task.Messages,
+		System:    systemPrompt(task),
+		MaxTokens: r.maxTokensFor(opt.Model),
+	}
+
+	// Budget gate before spending.
+	if budget != nil {
+		if err := budget.CheckBudget(ctx, task.OrgID, task.ID, opt.EstCost); err != nil {
+			return nil, err
+		}
+	}
+
+	start := time.Now()
+	rawCh, err := provider.Stream(ctx, req)
+	if err != nil {
+		r.healthMonitor.RecordFailure(opt.Provider)
+		return nil, err
+	}
+
+	// Wrap the raw channel to collect content and record cost on finish.
+	wrappedCh := make(chan *ChatChunk, 32)
+	go func() {
+		defer close(wrappedCh)
+		var content strings.Builder
+	finished := false
+	drainLoop:
+		for {
+			select {
+			case <-ctx.Done():
+				break drainLoop
+			case chunk, ok := <-rawCh:
+				if !ok {
+					break drainLoop
+				}
+				content.WriteString(chunk.Content)
+				select {
+				case wrappedCh <- chunk:
+				default:
+				}
+				if chunk.Finish {
+					finished = true
+					break drainLoop
+				}
+			}
+		}
+		latency := time.Since(start)
+		// Only record success if stream completed normally (not cancelled).
+		if finished {
+			r.healthMonitor.RecordSuccess(opt.Provider, latency)
+
+			// Estimate cost from accumulated content (output tokens ~ chars/4).
+			outputTokens := content.Len() / 4
+			info, _ := LookupPrice(opt.Model)
+			cost := (float64(opt.EstCost) / 2.0) + // rough input cost half of estimate
+				(float64(outputTokens) / 1000.0 * info.OutputCostPer1K)
+			if budget != nil {
+				budget.RecordCost(task.OrgID, task.ID, cost)
+			}
+		} else {
+			r.healthMonitor.RecordFailure(opt.Provider)
+		}
+	}()
+
+	return wrappedCh, nil
+}
+
 func systemPrompt(task *Task) string {
 	if task == nil {
 		return ""

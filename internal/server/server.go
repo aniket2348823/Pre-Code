@@ -11,6 +11,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/config"
 	"github.com/vigilagent/vigilagent/internal/cost"
+	"github.com/vigilagent/vigilagent/internal/costintel"
 	"github.com/vigilagent/vigilagent/internal/database"
 	"github.com/vigilagent/vigilagent/internal/llm"
 	mw "github.com/vigilagent/vigilagent/internal/middleware"
@@ -34,16 +35,16 @@ import (
 )
 
 type Server struct {
-	cfg     *config.Config
-	router  *router.Router
-	db      *database.Postgres
-	redis   *database.Redis
-	nats    *queue.NATS
-	cleanup func()
+	cfg       *config.Config
+	router    *router.Router
+	db        *database.Postgres
+	redis     *database.Redis
+	nats      *queue.NATS
+	cleanup   func()
+	hotReload *config.HotReloader
 }
 
 func New(cfg *config.Config) (*Server, error) {
-	// Validate config before proceeding
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
@@ -100,8 +101,8 @@ func New(cfg *config.Config) (*Server, error) {
 
 	apiKeyAuth := mw.NewAPIKeyAuth(conn)
 	rl := mw.NewRateLimiter(rds.Client, 100, time.Minute)
+	authRL := mw.NewRateLimiter(rds.Client, 10, time.Minute)
 
-	// Initialize LLM providers based on config
 	modelRouter := llm.NewModelRouter(&llm.RouterConfig{
 		DefaultModel:  cfg.LLM.DefaultModel,
 		BudgetPerTask: cfg.LLM.BudgetPerTask,
@@ -117,9 +118,41 @@ func New(cfg *config.Config) (*Server, error) {
 		modelRouter.RegisterProvider("anthropic", anthropicProvider)
 		slog.Info("registered Anthropic provider")
 	}
+	if cfg.LLM.GeminiKey != "" {
+		geminiProvider, err := llm.NewGemini(cfg.LLM.GeminiKey)
+		if err != nil {
+			slog.Warn("failed to create Gemini provider", "error", err)
+		} else {
+			modelRouter.RegisterProvider("gemini", geminiProvider)
+			slog.Info("registered Gemini provider")
+		}
+	}
+	if cfg.LLM.OpenRouterKey != "" {
+		openrouterProvider := llm.NewOpenRouter(cfg.LLM.OpenRouterKey)
+		modelRouter.RegisterProvider("openrouter", openrouterProvider)
+		slog.Info("registered OpenRouter provider")
+	}
+	if cfg.LLM.MistralKey != "" {
+		mistralProvider := llm.NewMistral(cfg.LLM.MistralKey)
+		modelRouter.RegisterProvider("mistral", mistralProvider)
+		slog.Info("registered Mistral provider")
+	}
+	if cfg.LLM.GroqKey != "" {
+		groqProvider := llm.NewGroq(cfg.LLM.GroqKey)
+		modelRouter.RegisterProvider("groq", groqProvider)
+		slog.Info("registered Groq provider")
+	}
+	if cfg.LLM.NVIDIANIMKey != "" {
+		nimProvider := llm.NewNVIDIANIM(cfg.LLM.NVIDIANIMKey)
+		modelRouter.RegisterProvider("nvidia_nim", nimProvider)
+		slog.Info("registered NVIDIA NIM provider")
+	}
+	if cfg.LLM.CohereKey != "" {
+		cohereProvider := llm.NewCohere(cfg.LLM.CohereKey)
+		modelRouter.RegisterProvider("cohere", cohereProvider)
+		slog.Info("registered Cohere provider")
+	}
 
-	// Enforce a hard per-task budget (risk R31) with restart-safe persistence,
-	// and cache identical responses to cut spend (docs 06/07 core cost levers).
 	budgetMgr := cost.NewBudgetManager(conn, 0, cfg.LLM.BudgetPerTask)
 	webhookEngine := webhook.NewEngine(db.Pool)
 	budgetMgr.OnExceeded(func(ctx context.Context, err *cost.BudgetExceededError) {
@@ -138,7 +171,6 @@ func New(cfg *config.Config) (*Server, error) {
 	modelRouter.SetCache(llm.NewInMemoryCache(time.Hour))
 	slog.Info("router budget enforcement + response cache enabled", "budget_per_task", cfg.LLM.BudgetPerTask)
 
-	// Initialize tool registry with all built-in tools
 	toolRegistry := tools.NewToolRegistry()
 	toolRegistry.Register(&tools.ReadFileTool{})
 	toolRegistry.Register(&tools.WriteFileTool{})
@@ -150,8 +182,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// Initialize agent engine
 	agentExec := agent.NewAgent(modelRouter, toolRegistry)
 
-	// Initialize memory manager. When an OpenAI key is configured, use real
-	// embeddings so semantic recall works; otherwise fall back to zero vectors.
+	// Initialize memory manager with optional OpenAI embeddings
 	var memMgr *memory.Manager
 	if cfg.LLM.OpenAIKey != "" {
 		memMgr = memory.NewManagerWithEmbedder(conn, memory.NewOpenAIEmbedder(cfg.LLM.OpenAIKey))
@@ -161,7 +192,10 @@ func New(cfg *config.Config) (*Server, error) {
 		slog.Warn("no OpenAI key; memory recall running without embeddings (zero vectors)")
 	}
 
-	// Start periodic health checks for LLM providers
+	// Wire memory system into agent for episodic recall during task execution
+	agentExec.SetMemory(memMgr)
+	slog.Info("agent memory wired", "layers", "working+episodic+semantic")
+
 	go modelRouter.StartHealthChecks(context.Background(), 2*time.Minute)
 
 	opts := router.Options{
@@ -172,7 +206,8 @@ func New(cfg *config.Config) (*Server, error) {
 		JWT:        jwtSvc,
 		APIKeys:    apiKeySvc,
 		APIAuth:    apiKeyAuth,
-		RateLimit:  rl,
+		RateLimit:     rl,
+		AuthRateLimit: authRL,
 		Users:      userRepo,
 		Orgs:       orgRepo,
 		Projects:   projectRepo,
@@ -197,9 +232,9 @@ func New(cfg *config.Config) (*Server, error) {
 		Audit:        audit.NewEngine(audit.NewMemoryStore()),
 		Budget:       budgetMgr,
 		Webhook:      webhookEngine,
+		CostIntel:    costintel.NewEngine(),
 	}
 
-	// Use NewWithMiddleware when CORS is configured; otherwise default stack.
 	var r *router.Router
 	if len(cfg.CORS.AllowedOrigins) > 0 {
 		r = router.NewWithMiddleware(opts, &router.MiddlewareConfig{
@@ -217,17 +252,44 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 	srv.router = r
 
+	// Start config hot reload watcher
+	hotReload := config.NewHotReloader(cfg)
+	hotReload.OnChange(func(newCfg *config.Config) {
+		slog.Info("hot reload: updating model router config")
+		modelRouter.SetPrices(llm.AllPrices())
+		if newCfg.LLM.DefaultModel != "" {
+			slog.Info("hot reload: new default model", "model", newCfg.LLM.DefaultModel)
+		}
+	})
+	hotReload.Start(ctx)
+
+	// Start config hot reload watcher
+	hotReload := config.NewHotReloader(cfg)
+	hotReload.OnChange(func(newCfg *config.Config) {
+		slog.Info("hot reload: updating model router config")
+		modelRouter.SetPrices(llm.AllPrices())
+		if newCfg.LLM.DefaultModel != "" {
+			slog.Info("hot reload: new default model", "model", newCfg.LLM.DefaultModel)
+		}
+	})
+	hotReload.Start(context.Background())
+	srv.hotReload = hotReload
+
 	slog.Info("server initialized successfully")
 	return srv, nil
 }
 
 func (s *Server) Router() *router.Router {
 	return s.router
-}// version is set via ldflags at build time.
+}
+
 var version = "dev"
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	slog.Info("cleaning up server resources")
+	if s.hotReload != nil {
+		s.hotReload.Stop()
+	}
 	if s.cleanup != nil {
 		s.cleanup()
 	}

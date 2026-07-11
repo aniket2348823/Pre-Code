@@ -12,12 +12,32 @@ import (
 	"github.com/vigilagent/vigilagent/internal/tools"
 )
 
+// MemoryStore is the interface the agent uses to recall and store memories.
+// Satisfied by memory.Manager.
+type MemoryStore interface {
+	Recall(ctx context.Context, query string, limit int) ([]MemoryResult, error)
+	StoreEpisode(ctx context.Context, userID, episodeType, title, content string, importance float64) error
+}
+
+// MemoryResult mirrors memory.MemoryResult for import cycle avoidance.
+type MemoryResult struct {
+	Type    string
+	Content string
+	Score   float64
+}
+
+// TokenCallback is called for each streaming token during task execution.
+// The caller (router) uses this to push SSE events to the client.
+type TokenCallback func(taskID string, chunk *llm.ChatChunk)
+
 // Agent orchestrates task execution using LLM providers and tools.
 type Agent struct {
-	router  *llm.ModelRouter
-	tools   *tools.ToolRegistry
-	sm      *StateMachine
-	maxIter int
+	router        *llm.ModelRouter
+	tools         *tools.ToolRegistry
+	sm            *StateMachine
+	maxIter       int
+	memory        MemoryStore
+	tokenCallback TokenCallback
 }
 
 // NewAgent creates a new agent with the given dependencies.
@@ -28,6 +48,16 @@ func NewAgent(router *llm.ModelRouter, toolRegistry *tools.ToolRegistry) *Agent 
 		sm:      NewStateMachine(),
 		maxIter: 20,
 	}
+}
+
+// SetMemory attaches a memory store for episodic recall and storage.
+func (a *Agent) SetMemory(m MemoryStore) {
+	a.memory = m
+}
+
+// SetTokenCallback attaches a callback for streaming tokens during execution.
+func (a *Agent) SetTokenCallback(cb TokenCallback) {
+	a.tokenCallback = cb
 }
 
 // TaskResult represents the result of a completed task.
@@ -53,11 +83,23 @@ type llmPlanStep struct {
 	Params      map[string]interface{} `json:"params,omitempty"`
 }
 
+// transition applies a state transition and fires the task's OnStateChange callback.
+func (a *Agent) transition(task *Task, event Event) error {
+	oldState := string(task.State)
+	if err := a.sm.Transition(task, event); err != nil {
+		return err
+	}
+	if task.OnStateChange != nil {
+		task.OnStateChange(task.ID, oldState, string(task.State))
+	}
+	return nil
+}
+
 // ExecuteTask runs a task through the agent loop: think -> act -> observe -> decide.
 func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error) {
 	slog.Info("agent: executing task", "task_id", task.ID, "title", task.Title)
 
-	if err := a.sm.Transition(task, EventStart); err != nil {
+	if err := a.transition(task, EventStart); err != nil {
 		return nil, fmt.Errorf("failed to start task: %w", err)
 	}
 
@@ -65,15 +107,21 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 	now := time.Now()
 	task.StartedAt = &now
 
+	// Phase 0: Recall relevant memories before planning
+	var memoryContext string
+	if a.memory != nil {
+		memoryContext = a.recallMemory(ctx, task)
+	}
+
 	// Phase 1: Plan the task using the LLM
-	plan, err := a.planTask(ctx, task)
+	plan, err := a.planTask(ctx, task, memoryContext)
 	if err != nil {
-		a.sm.Transition(task, EventStepFailed)
+		a.transition(task, EventStepFailed)
 		return nil, fmt.Errorf("planning failed: %w", err)
 	}
 	task.Plan = plan
 
-	if err := a.sm.Transition(task, EventPlanReady); err != nil {
+	if err := a.transition(task, EventPlanReady); err != nil {
 		return nil, fmt.Errorf("plan transition failed: %w", err)
 	}
 
@@ -103,7 +151,18 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 		// Check HITL requirement
 		tool, ok := a.tools.Get(step.Tool)
 		if ok && tool.RequiresHITL(step.Params) {
-			a.sm.Transition(task, EventHITLApproved)
+			task.HITLRequired = true
+			task.HITLCheckpoint = &HITLCheckpoint{
+				CheckpointID: fmt.Sprintf("cp-%s-%d", task.ID, i),
+				Description:  fmt.Sprintf("Step %d requires human approval: %s", i, step.Description),
+				Options:      []string{"approve", "reject", "modify"},
+				WaitingSince: time.Now(),
+			}
+			// Transition to waiting_hitl (fires hitl.required webhook)
+			if err := a.transition(task, EventHITLRequired); err == nil {
+				// Auto-approve for now; HITL UX will gate this later
+				a.transition(task, EventHITLApproved)
+			}
 		}
 
 		slog.Info("agent: executing step", "task_id", task.ID, "step", i, "tool", step.Tool)
@@ -140,7 +199,7 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 		})
 
 		if stepResult.Error != "" {
-			a.sm.Transition(task, EventStepFailed)
+			a.transition(task, EventStepFailed)
 
 			// Ask LLM what to do about the failure
 			if i+1 < plan.TotalSteps {
@@ -161,16 +220,21 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 			continue
 		}
 
-		a.sm.Transition(task, EventStepComplete)
+		a.transition(task, EventStepComplete)
 	}
 
 	// Phase 3: Final review using LLM
-	a.sm.Transition(task, EventReviewPassed)
+	a.transition(task, EventReviewPassed)
 
-	result := a.buildResult(conversationHistory)
+	result := a.buildResult(task.ID, conversationHistory)
 	task.Result = result
 	task.TotalTokens = task.InputTokens + task.OutputTokens
 	duration := time.Since(start)
+
+	// Phase 4: Store memory of completed task
+	if a.memory != nil {
+		a.storeMemory(ctx, task)
+	}
 
 	return &TaskResult{
 		TaskID:     task.ID,
@@ -181,6 +245,50 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 		Duration:   duration,
 		TokensUsed: task.TotalTokens,
 	}, nil
+}
+
+// recallMemory retrieves relevant past memories to enhance planning.
+func (a *Agent) recallMemory(ctx context.Context, task *Task) string {
+	if a.memory == nil {
+		return ""
+	}
+
+	query := task.Title + " " + task.Description
+	results, err := a.memory.Recall(ctx, query, 3)
+	if err != nil || len(results) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for _, r := range results {
+		parts = append(parts, fmt.Sprintf("[%s] %s", r.Type, r.Content))
+	}
+
+	return fmt.Sprintf("\n\n## Relevant past memories:\n%s\n", strings.Join(parts, "\n"))
+}
+
+// storeMemory persists the completed task in memory for future recall.
+func (a *Agent) storeMemory(ctx context.Context, task *Task) {
+	if a.memory == nil {
+		return
+	}
+
+	title := fmt.Sprintf("task: %s", truncate(task.Title, 100))
+	content := fmt.Sprintf("Title: %s\nDescription: %s\nResult: %s\nSteps: %d\nCost: $%.4f",
+		task.Title, task.Description, truncate(task.Result, 500),
+		len(task.Steps), task.Cost)
+
+	importance := 0.5
+	if task.State == StateCompleted {
+		importance = 0.7
+	}
+	if task.Cost > 0.1 {
+		importance = 0.8
+	}
+
+	if err := a.memory.StoreEpisode(ctx, task.UserID, "agent_task", title, content, importance); err != nil {
+		slog.Warn("agent: failed to store memory", "task_id", task.ID, "error", err)
+	}
 }
 
 // systemPrompt returns the system prompt for the agent.
@@ -204,12 +312,59 @@ Always be concise and action-oriented.`, strings.Join(toolDescriptions, "\n"))
 }
 
 // planTask uses the LLM to create an execution plan for the task.
-func (a *Agent) planTask(ctx context.Context, task *Task) (*Plan, error) {
+func (a *Agent) planTask(ctx context.Context, task *Task, memoryContext string) (*Plan, error) {
+	userPrompt := fmt.Sprintf("Plan the execution for this task:\n\nTitle: %s\nDescription: %s%s\n\nRespond with JSON: {\"steps\": [{\"tool\": \"...\", \"description\": \"...\", \"params\": {...}}]}",
+		task.Title, task.Description, memoryContext)
+
 	messages := []llm.Message{
 		{Role: "system", Content: a.systemPrompt()},
-		{Role: "user", Content: fmt.Sprintf("Plan the execution for this task:\n\nTitle: %s\nDescription: %s\n\nRespond with JSON: {\"steps\": [{\"tool\": \"...\", \"description\": \"...\", \"params\": {...}}]}", task.Title, task.Description)},
+		{Role: "user", Content: userPrompt},
 	}
 
+	// Use streaming when callback is attached for real-time token delivery
+	if a.tokenCallback != nil {
+		result, err := a.router.StreamWithFailover(ctx, &llm.Task{
+			ID:          task.ID,
+			Type:        task.Complexity,
+			Description: task.Description,
+			Tags:        task.Tags,
+			Messages:    messages,
+		})
+		if err != nil {
+			slog.Warn("LLM planning failed (stream), using default plan", "error", err)
+			return a.buildDefaultPlan(task), nil
+		}
+
+		// Track model/provider from routing metadata
+		task.ModelUsed = result.Model
+		task.Provider = result.Provider
+
+		var content strings.Builder
+		for chunk := range result.Ch {
+			if chunk.Content != "" {
+				content.WriteString(chunk.Content)
+				a.tokenCallback(task.ID, chunk)
+			}
+			if chunk.Finish {
+				break
+			}
+		}
+
+		// Estimate output tokens from accumulated content (~4 chars/token)
+		outputTokens := content.Len() / 4
+		task.InputTokens += result.EstInput
+		task.OutputTokens += outputTokens
+
+		// Parse streamed plan
+		plan, err := a.parsePlanFromResponse(content.String())
+		if err != nil {
+			slog.Warn("failed to parse streamed plan, using default", "error", err)
+			return a.buildDefaultPlan(task), nil
+		}
+		return plan, nil
+	}
+
+	// Fallback: non-streaming when no callback is attached
 	response, err := a.router.ExecuteWithFailover(ctx, &llm.Task{
 		ID:          task.ID,
 		Type:        task.Complexity,
@@ -312,6 +467,36 @@ func (a *Agent) reflectOnFailure(ctx context.Context, history []llm.Message, tas
 		),
 	})
 
+	// Use streaming when callback is attached
+	if a.tokenCallback != nil {
+		result, err := a.router.StreamWithFailover(ctx, &llm.Task{
+			ID:       task.ID,
+			Messages: reflectMessages,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		var content strings.Builder
+		for chunk := range result.Ch {
+			if chunk.Content != "" {
+				content.WriteString(chunk.Content)
+				a.tokenCallback(task.ID, chunk)
+			}
+			if chunk.Finish {
+				break
+			}
+		}
+
+		// Estimate output tokens from accumulated content
+		outputTokens := content.Len() / 4
+		task.InputTokens += result.EstInput
+		task.OutputTokens += outputTokens
+
+		return a.parsePlanFromResponse(content.String())
+	}
+
+	// Fallback: non-streaming
 	response, err := a.router.ExecuteWithFailover(ctx, &llm.Task{
 		ID:       task.ID,
 		Messages: reflectMessages,
@@ -337,10 +522,10 @@ func (a *Agent) filterValidSteps(steps []PlanStep) []PlanStep {
 		}
 	}
 	return filtered
-}
-
-// buildResult uses the LLM to synthesize a final result from all step outputs.
-func (a *Agent) buildResult(history []llm.Message) string {
+}// buildResult uses the LLM to synthesize a final result from all step outputs.
+// When a tokenCallback is attached, it streams the response in real-time,
+// pushing each chunk to SSE subscribers as it arrives.
+func (a *Agent) buildResult(taskID string, history []llm.Message) string {
 	// Collect all step outputs
 	var outputs []string
 	var lastOutput string
@@ -356,7 +541,7 @@ func (a *Agent) buildResult(history []llm.Message) string {
 	}
 
 	// Ask the LLM to synthesize a final summary with a timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	summaryMsgs := []llm.Message{
@@ -364,18 +549,54 @@ func (a *Agent) buildResult(history []llm.Message) string {
 		{Role: "user", Content: fmt.Sprintf("Task step outputs:\n%s\n\nProvide a brief summary of what was accomplished.", strings.Join(outputs, "\n"))},
 	}
 
+	// Use streaming when callback is attached for real-time token delivery
+	if a.tokenCallback != nil {
+		result, err := a.router.StreamWithFailover(ctx, &llm.Task{
+			Messages: summaryMsgs,
+		})
+		if err != nil || result == nil {
+			return a.fallbackResult(outputs, lastOutput)
+		}
+
+		var content strings.Builder
+		for chunk := range result.Ch {
+			if chunk.Content != "" {
+				content.WriteString(chunk.Content)
+				a.tokenCallback(taskID, chunk)
+			}
+			if chunk.Finish {
+				break
+			}
+		}
+
+		// Log streaming cost attribution for observability
+		outputTokens := content.Len() / 4
+		slog.Debug("streaming buildResult completed",
+			"task_id", taskID,
+			"model", result.Model,
+			"provider", result.Provider,
+			"est_output_tokens", outputTokens,
+		)
+		return content.String()
+	}
+
+	// Fallback: non-streaming when no callback is attached
 	resp, err := a.router.ExecuteWithFailover(ctx, &llm.Task{
 		Messages: summaryMsgs,
 	})
 	if err != nil || resp == nil {
-		// Fallback: include last step output for useful feedback
-		if lastOutput != "" {
-			return fmt.Sprintf("Task completed in %d steps. Last output: %s", len(outputs), lastOutput)
-		}
-		return fmt.Sprintf("Task completed. %d steps executed successfully.", len(outputs))
+		return a.fallbackResult(outputs, lastOutput)
 	}
 
 	return resp.Content
+}
+
+// fallbackResult returns a best-effort summary when LLM synthesis fails.
+func (a *Agent) fallbackResult(outputs []string, lastOutput string) string {
+	if lastOutput != "" {
+		return fmt.Sprintf("Task completed in %d steps. Last output: %s", len(outputs), lastOutput)
+	}
+	return fmt.Sprintf("Task completed. %d steps executed successfully.", len(outputs))
 }
 
 // buildDefaultPlan creates a fallback plan when LLM planning fails.
@@ -391,6 +612,14 @@ func (a *Agent) buildDefaultPlan(task *Task) *Plan {
 	}
 	plan.TotalSteps = len(plan.Steps)
 	return plan
+}
+
+// truncate cuts s to maxLen characters, appending "..." if truncated.
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func (a *Agent) executeStep(ctx context.Context, task *Task, step PlanStep) StepResult {

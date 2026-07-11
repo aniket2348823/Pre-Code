@@ -31,6 +31,7 @@ type Event struct {
 // Endpoint represents a registered webhook endpoint.
 type Endpoint struct {
 	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
 	URL       string    `json:"url"`
 	Secret    string    `json:"secret,omitempty"`
 	Events    []string  `json:"events"`
@@ -73,32 +74,32 @@ func NewEngine(pool *pgxpool.Pool) *Engine {
 // Register inserts a new webhook endpoint into the database.
 func (e *Engine) Register(ctx context.Context, ep *Endpoint) error {
 	query := `
-		INSERT INTO webhook_endpoints (url, secret, events, is_active)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO webhook_endpoints (user_id, url, secret, events, is_active)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, created_at
 	`
 	eventsJSON, _ := json.Marshal(ep.Events)
 	return e.pool.QueryRow(ctx, query,
-		ep.URL, ep.Secret, eventsJSON, ep.Active,
+		ep.UserID, ep.URL, ep.Secret, eventsJSON, ep.Active,
 	).Scan(&ep.ID, &ep.CreatedAt)
 }
 
-// Unregister deletes a webhook endpoint by ID.
-func (e *Engine) Unregister(ctx context.Context, id string) error {
-	_, err := e.pool.Exec(ctx, `DELETE FROM webhook_endpoints WHERE id = $1`, id)
+// Unregister deletes a webhook endpoint by ID for a specific user.
+func (e *Engine) Unregister(ctx context.Context, userID, id string) error {
+	_, err := e.pool.Exec(ctx, `DELETE FROM webhook_endpoints WHERE id = $1 AND user_id = $2`, id, userID)
 	return err
 }
 
-// GetEndpoint returns a webhook endpoint by ID.
-func (e *Engine) GetEndpoint(ctx context.Context, id string) (*Endpoint, error) {
+// GetEndpoint returns a webhook endpoint by ID for a specific user.
+func (e *Engine) GetEndpoint(ctx context.Context, userID, id string) (*Endpoint, error) {
 	query := `
-		SELECT id, url, secret, events, is_active, created_at
-		FROM webhook_endpoints WHERE id = $1
+		SELECT id, user_id, url, secret, events, is_active, created_at
+		FROM webhook_endpoints WHERE id = $1 AND user_id = $2
 	`
 	ep := &Endpoint{}
 	var eventsJSON []byte
-	err := e.pool.QueryRow(ctx, query, id).Scan(
-		&ep.ID, &ep.URL, &ep.Secret, &eventsJSON, &ep.Active, &ep.CreatedAt,
+	err := e.pool.QueryRow(ctx, query, id, userID).Scan(
+		&ep.ID, &ep.UserID, &ep.URL, &ep.Secret, &eventsJSON, &ep.Active, &ep.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -107,13 +108,13 @@ func (e *Engine) GetEndpoint(ctx context.Context, id string) (*Endpoint, error) 
 	return ep, nil
 }
 
-// ListEndpoints returns all webhook endpoints.
-func (e *Engine) ListEndpoints(ctx context.Context) ([]Endpoint, error) {
+// ListEndpoints returns all webhook endpoints for a specific user.
+func (e *Engine) ListEndpoints(ctx context.Context, userID string) ([]Endpoint, error) {
 	query := `
-		SELECT id, url, secret, events, is_active, created_at
-		FROM webhook_endpoints ORDER BY created_at DESC
+		SELECT id, user_id, url, secret, events, is_active, created_at
+		FROM webhook_endpoints WHERE user_id = $1 ORDER BY created_at DESC
 	`
-	rows, err := e.pool.Query(ctx, query)
+	rows, err := e.pool.Query(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +125,7 @@ func (e *Engine) ListEndpoints(ctx context.Context) ([]Endpoint, error) {
 		var ep Endpoint
 		var eventsJSON []byte
 		if err := rows.Scan(
-			&ep.ID, &ep.URL, &ep.Secret, &eventsJSON, &ep.Active, &ep.CreatedAt,
+			&ep.ID, &ep.UserID, &ep.URL, &ep.Secret, &eventsJSON, &ep.Active, &ep.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -147,13 +148,40 @@ func VerifySignature(secret, payload []byte, signature string) bool {
 	return hmac.Equal([]byte(expected), []byte(signature))
 }
 
+// ListAllEndpoints returns all webhook endpoints (for dispatch).
+func (e *Engine) ListAllEndpoints(ctx context.Context) ([]Endpoint, error) {
+	query := `
+		SELECT id, user_id, url, secret, events, is_active, created_at
+		FROM webhook_endpoints ORDER BY created_at DESC
+	`
+	rows, err := e.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var endpoints []Endpoint
+	for rows.Next() {
+		var ep Endpoint
+		var eventsJSON []byte
+		if err := rows.Scan(
+			&ep.ID, &ep.UserID, &ep.URL, &ep.Secret, &eventsJSON, &ep.Active, &ep.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(eventsJSON, &ep.Events)
+		endpoints = append(endpoints, ep)
+	}
+	return endpoints, rows.Err()
+}
+
 // cachedEndpoints returns endpoints from a 30-second in-memory cache to avoid
 // hitting the DB on every Dispatch call.
 func (e *Engine) cachedEndpoints(ctx context.Context) ([]Endpoint, error) {
 	if time.Now().Before(e.cacheExpiry) && e.cache != nil {
 		return e.cache, nil
 	}
-	endpoints, err := e.ListEndpoints(ctx)
+	endpoints, err := e.ListAllEndpoints(ctx)
 	if err != nil && e.cache != nil {
 		slog.Warn("webhook: using stale endpoint cache", "error", err)
 		return e.cache, nil
@@ -276,19 +304,20 @@ func (e *Engine) recordResult(ctx context.Context, r DeliveryResult) {
 	}
 }
 
-// GetResults returns recent delivery results for an endpoint.
-func (e *Engine) GetResults(ctx context.Context, endpointID string, limit int) ([]DeliveryResult, error) {
+// GetResults returns recent delivery results for an endpoint owned by a specific user.
+func (e *Engine) GetResults(ctx context.Context, userID, endpointID string, limit int) ([]DeliveryResult, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	query := `
-		SELECT endpoint_id, event_type, status_code, duration_ms, success, error, created_at
-		FROM webhook_deliveries
-		WHERE endpoint_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2
+		SELECT d.endpoint_id, d.event_type, d.status_code, d.duration_ms, d.success, d.error, d.created_at
+		FROM webhook_deliveries d
+		JOIN webhook_endpoints e ON e.id = d.endpoint_id
+		WHERE d.endpoint_id = $1 AND e.user_id = $2
+		ORDER BY d.created_at DESC
+		LIMIT $3
 	`
-	rows, err := e.pool.Query(ctx, query, endpointID, limit)
+	rows, err := e.pool.Query(ctx, query, endpointID, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -308,19 +337,20 @@ func (e *Engine) GetResults(ctx context.Context, endpointID string, limit int) (
 	return results, rows.Err()
 }
 
-// Stats returns delivery statistics from the database.
-func (e *Engine) Stats(ctx context.Context) (map[string]interface{}, error) {
+// Stats returns delivery statistics from the database for a specific user.
+func (e *Engine) Stats(ctx context.Context, userID string) (map[string]interface{}, error) {
 	var endpoints, total24h, success24h, fail24h int
 
-	if err := e.pool.QueryRow(ctx, `SELECT COUNT(*) FROM webhook_endpoints`).Scan(&endpoints); err != nil {
+	if err := e.pool.QueryRow(ctx, `SELECT COUNT(*) FROM webhook_endpoints WHERE user_id = $1`, userID).Scan(&endpoints); err != nil {
 		return nil, err
 	}
 
 	if err := e.pool.QueryRow(ctx, `
 		SELECT COUNT(*), COUNT(*) FILTER (WHERE success), COUNT(*) FILTER (WHERE NOT success)
-		FROM webhook_deliveries
-		WHERE created_at > NOW() - INTERVAL '24 hours'
-	`).Scan(&total24h, &success24h, &fail24h); err != nil {
+		FROM webhook_deliveries d
+		JOIN webhook_endpoints e ON e.id = d.endpoint_id
+		WHERE e.user_id = $1 AND d.created_at > NOW() - INTERVAL '24 hours'
+	`, userID).Scan(&total24h, &success24h, &fail24h); err != nil {
 		return nil, err
 	}
 

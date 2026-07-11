@@ -12,8 +12,6 @@ import (
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
-const maxMiddlewareBody = 1 << 20 // 1 MiB
-
 // middlewareProcessHandler is the core middleware endpoint that runs the
 // full pipeline: context → skill match → scan → critique → extract patterns.
 // Returns the result as JSON, or streams via SSE if Accept: text/event-stream.
@@ -23,7 +21,6 @@ func (r *Router) middlewareProcessHandler(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	req.Body = http.MaxBytesReader(w, req.Body, maxMiddlewareBody)
 	var input struct {
 		TaskType    string         `json:"task_type"`
 		Description string         `json:"description"`
@@ -238,44 +235,9 @@ func (r *Router) runPipeline(_ *http.Request, input *pipelineRequest) *pipelineR
 	return rep
 }
 
-// middlewareMetricsHandler returns pipeline metrics.
-func (r *Router) middlewareMetricsHandler(w http.ResponseWriter, req *http.Request) {
-	if _, ok := auth.ClaimsFromContext(req.Context()); !ok {
-		response.Unauthorized(w, "missing authentication")
-		return
-	}
-
-	metrics := map[string]interface{}{
-		"total_requests": 0,
-		"message":        "middleware metrics placeholder",
-	}
-
-	if r.engine != nil {
-		metrics["scanner_available"] = true
-	}
-	if r.skillEng != nil {
-		metrics["skill_engine_available"] = true
-		metrics["skill_count"] = r.skillEng.Count()
-	}
-
-	response.JSON(w, http.StatusOK, metrics)
-}
-
-// middlewarePatternsHandler lists extracted vulnerability patterns.
-func (r *Router) middlewarePatternsHandler(w http.ResponseWriter, req *http.Request) {
-	if _, ok := auth.ClaimsFromContext(req.Context()); !ok {
-		response.Unauthorized(w, "missing authentication")
-		return
-	}
-
-	if r.skillEng == nil {
-		response.JSON(w, http.StatusOK, []interface{}{})
-		return
-	}
-
-	skills := r.skillEng.GetAllSkills()
-	response.JSON(w, http.StatusOK, skills)
-}
+// NOTE: middlewareMetricsHandler and middlewarePatternsHandler are defined in
+// extended_handlers.go with real implementations using LLM router health
+// and cost intelligence engine. The placeholder stubs were removed here.
 
 // pipelineRequest is the input to the pipeline.
 type pipelineRequest struct {

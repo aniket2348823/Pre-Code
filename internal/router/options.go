@@ -8,6 +8,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/config"
 	"github.com/vigilagent/vigilagent/internal/cost"
+	"github.com/vigilagent/vigilagent/internal/costintel"
 	"github.com/vigilagent/vigilagent/internal/database"
 	"github.com/vigilagent/vigilagent/internal/llm"
 	ratelimit "github.com/vigilagent/vigilagent/internal/middleware"
@@ -40,10 +41,11 @@ type Options struct {
 	RedisDS interface{} // *redis.Client for rate limiter
 
 	// Auth
-	JWT       *auth.JWT
-	APIKeys   *auth.APIKeyService
-	APIAuth   *ratelimit.APIKeyAuth
-	RateLimit *ratelimit.RateLimiter
+	JWT           *auth.JWT
+	APIKeys       *auth.APIKeyService
+	APIAuth       *ratelimit.APIKeyAuth
+	RateLimit     *ratelimit.RateLimiter
+	AuthRateLimit *ratelimit.RateLimiter // Redis-backed rate limiter for auth endpoints
 
 	// Repositories
 	Users      *repository.UserRepository
@@ -96,6 +98,9 @@ type Options struct {
 
 	// Webhook engine for event notifications
 	Webhook *webhook.Engine
+
+	// Cost intelligence engine for forecasting, anomaly detection, and recommendations
+	CostIntel *costintel.Engine
 }
 
 // Router holds all HTTP handlers and dependencies.
@@ -109,8 +114,10 @@ type Router struct {
 	apiKM      *auth.APIKeyService
 	apiKeyAuth *ratelimit.APIKeyAuth
 	rl         *ratelimit.RateLimiter
+	authRL     *ratelimit.RateLimiter // Redis-backed auth rate limiter
 	authSessionMiddleware *ratelimit.AuthSessionMiddleware
 	webhookEngine        *webhook.Engine
+	sseHub               *SSEHub
 
 	// Repositories
 	users    *repository.UserRepository
@@ -140,6 +147,7 @@ type Router struct {
 	confidence          *confidence.Engine
 	attackGraph         *attackgraph.Engine
 	audit               *audit.Engine
+	costIntel           *costintel.Engine
 	requirementsHandlerFn http.HandlerFunc
 	validateHandlerFn   http.HandlerFunc
 	schemaHandlerFn     http.HandlerFunc
@@ -161,10 +169,11 @@ func newRouter(opts Options) *Router {
 		db:          opts.DB,
 		rds:         opts.Redis,
 		nats:        opts.NATS,
-		auth:        opts.JWT,
-		apiKM:       opts.APIKeys,
-		apiKeyAuth:  opts.APIAuth,
-		rl:          opts.RateLimit,
+	auth:        opts.JWT,
+	apiKM:       opts.APIKeys,
+	apiKeyAuth:  opts.APIAuth,
+	rl:          opts.RateLimit,
+	authRL:      opts.AuthRateLimit,
 		users:       opts.Users,
 		orgs:        opts.Orgs,
 		projects:    opts.Projects,
@@ -191,6 +200,8 @@ func newRouter(opts Options) *Router {
 		attackGraph: opts.AttackGraph,
 		audit:       opts.Audit,
 		webhookEngine: opts.Webhook,
+		costIntel:     opts.CostIntel,
+		sseHub:        NewSSEHub(),
 	}
 }
 

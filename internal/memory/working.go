@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -123,7 +124,7 @@ func NewProceduralStore() *ProceduralStore {
 }
 
 // Store saves a workflow.
-func (s *ProceduralStore) Store(_ interface{}, wf *Workflow) error {
+func (s *ProceduralStore) Store(_ context.Context, wf *Workflow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	wf.CreatedAt = time.Now()
@@ -132,7 +133,7 @@ func (s *ProceduralStore) Store(_ interface{}, wf *Workflow) error {
 }
 
 // Get retrieves a workflow by ID.
-func (s *ProceduralStore) Get(_ interface{}, id string) (*Workflow, error) {
+func (s *ProceduralStore) Get(_ context.Context, id string) (*Workflow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	wf, ok := s.workflows[id]
@@ -143,7 +144,7 @@ func (s *ProceduralStore) Get(_ interface{}, id string) (*Workflow, error) {
 }
 
 // Search finds workflows by name.
-func (s *ProceduralStore) Search(_ interface{}, query string, limit int) ([]Workflow, error) {
+func (s *ProceduralStore) Search(_ context.Context, query string, limit int) ([]Workflow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -161,7 +162,7 @@ func (s *ProceduralStore) Search(_ interface{}, query string, limit int) ([]Work
 }
 
 // ListByUser returns all workflows for a user.
-func (s *ProceduralStore) ListByUser(_ interface{}, userID string, limit int) ([]Workflow, error) {
+func (s *ProceduralStore) ListByUser(_ context.Context, userID string, limit int) ([]Workflow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

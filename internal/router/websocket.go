@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,11 +13,47 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 )
 
+// stripHostPort removes the port from a host string, handling both IPv4
+// (1.2.3.4:8080) and IPv6 bracket notation ([::1]:8080) correctly.
+func stripHostPort(host string) string {
+	if strings.HasPrefix(host, "[") {
+		// IPv6 bracket notation: [::1]:port → ::1
+		if idx := strings.LastIndex(host, "]:"); idx != -1 {
+			return host[1:idx]
+		}
+		// No port, just [::1] → ::1
+		if strings.HasSuffix(host, "]") {
+			return host[1 : len(host)-1]
+		}
+	}
+	// IPv4 or bare IPv6: strip after last colon
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		return host[:idx]
+	}
+	return host
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for now
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return false
+		}
+		host := r.Host
+		if host == "" {
+			return false
+		}
+		// Extract host from origin (remove scheme)
+		originHost := origin
+		if idx := strings.Index(originHost, "://"); idx != -1 {
+			originHost = originHost[idx+3:]
+		}
+		// Strip port from origin and Host header (IPv4 + IPv6 safe)
+		originHost = stripHostPort(originHost)
+		hostOnly := stripHostPort(host)
+		return originHost == hostOnly
 	},
 }
 

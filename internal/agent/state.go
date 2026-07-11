@@ -28,6 +28,7 @@ const (
 	EventPlanReady      Event = "plan_ready"
 	EventStepComplete   Event = "step_complete"
 	EventStepFailed     Event = "step_failed"
+	EventHITLRequired   Event = "hitl_required"
 	EventHITLApproved   Event = "hitl_approved"
 	EventHITLRejected   Event = "hitl_rejected"
 	EventReviewPassed   Event = "review_passed"
@@ -72,6 +73,10 @@ type Task struct {
 	CompletedAt       *time.Time             `json:"completed_at,omitempty"`
 	CreatedAt         time.Time              `json:"created_at"`
 	UpdatedAt         time.Time              `json:"updated_at"`
+
+	// OnStateChange is a per-task callback fired on every state transition.
+	// Set by the caller (router) to dispatch lifecycle webhooks. Nil-safe.
+	OnStateChange func(taskID, oldState, newState string) `json:"-"`
 }
 
 // Plan represents the execution plan for a task.
@@ -173,6 +178,9 @@ func (sm *StateMachine) Transition(task *Task, event Event) error {
 			}
 			// Stay in executing for retry
 			return nil
+		case EventHITLRequired:
+			task.State = StateWaitingHITL
+			return nil
 		case EventHITLApproved:
 			task.State = StateExecuting
 			return nil
@@ -219,7 +227,7 @@ func (sm *StateMachine) ValidTransitions(state TaskState) []Event {
 	case StatePlanning:
 		return []Event{EventPlanReady, EventStepFailed}
 	case StateExecuting:
-		return []Event{EventStepComplete, EventStepFailed, EventHITLApproved, EventCancel}
+		return []Event{EventStepComplete, EventStepFailed, EventHITLRequired, EventHITLApproved, EventCancel}
 	case StateWaitingHITL:
 		return []Event{EventHITLApproved, EventHITLRejected}
 	case StateReviewing:

@@ -15,6 +15,7 @@ type AnthropicAdapter struct {
 	apiKey   string
 	model    string
 	httpAddr string
+	client   *http.Client
 }
 
 // NewAnthropic creates a new Anthropic provider.
@@ -23,6 +24,9 @@ func NewAnthropic(apiKey string) *AnthropicAdapter {
 		apiKey:   apiKey,
 		model:    "claude-sonnet-4-20250514",
 		httpAddr: "https://api.anthropic.com",
+		client: &http.Client{
+			Timeout: 120 * time.Second,
+		},
 	}
 }
 
@@ -119,13 +123,13 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 	httpReq.Header.Set("x-api-key", a.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := safeReadBody(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
@@ -193,13 +197,13 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 	httpReq.Header.Set("x-api-key", a.apiKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.client.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
+		respBody, _ := safeReadBody(resp.Body)
 		resp.Body.Close()
-		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("anthropic stream error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
@@ -229,7 +233,7 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 }
 
 func calculateAnthropicCost(model string, inputTokens, outputTokens int) float64 {
-	info, ok := PriceTable[model]
+	info, ok := LookupPrice(model)
 	if !ok {
 		return 0
 	}

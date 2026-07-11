@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -134,4 +135,35 @@ func RateLimitByUser(client *redis.Client, limit int, window time.Duration) func
 		}
 		return "user:" + userID
 	})
+}
+
+// RateLimitByIPKey extracts the client IP address from the request for use
+// as a rate-limit key. Handles X-Forwarded-For, X-Real-IP, and RemoteAddr.
+func RateLimitByIPKey(r *http.Request) string {
+	ip := r.Header.Get("X-Forwarded-For")
+	if ip != "" {
+		// X-Forwarded-For may contain multiple IPs; take the first one
+		if idx := strings.Index(ip, ","); idx != -1 {
+			ip = strings.TrimSpace(ip[:idx])
+		}
+	}
+	if ip == "" {
+		ip = r.Header.Get("X-Real-IP")
+	}
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	// Strip port: handle both IPv4 (1.2.3.4:8080) and IPv6 ([::1]:8080)
+	if strings.HasPrefix(ip, "[") {
+		// IPv6 bracket notation: [::1]:port
+		if idx := strings.LastIndex(ip, "]:"); idx != -1 {
+			ip = ip[1:idx]
+		}
+	} else {
+		// IPv4 or unbracketed IPv6: strip after last colon
+		if idx := strings.LastIndex(ip, ":"); idx != -1 {
+			ip = ip[:idx]
+		}
+	}
+	return "ip:" + ip
 }

@@ -36,7 +36,6 @@ func (r *Router) reviewHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	req.Body = http.MaxBytesReader(w, req.Body, 2<<20) // 2MB limit
 	var input pipeline.ReviewRequest
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")

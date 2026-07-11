@@ -14,14 +14,15 @@ func TestStateMachine_Transitions(t *testing.T) {
 		wantState TaskState
 		wantErr   bool
 	}{
-		{"pending -> start -> planning", StatePending, EventStart, StatePlanning, false},
-		{"pending -> cancel -> cancelled", StatePending, EventCancel, StateCancelled, false},
-		{"planning -> plan_ready -> executing", StatePlanning, EventPlanReady, StateExecuting, false},
-		{"planning -> step_failed -> failed", StatePlanning, EventStepFailed, StateFailed, false},
-		{"executing -> step_complete stays executing", StateExecuting, EventStepComplete, StateExecuting, false},
-		{"executing -> cancel -> cancelled", StateExecuting, EventCancel, StateCancelled, false},
-		{"waiting_hitl -> hitl_approved -> executing", StateWaitingHITL, EventHITLApproved, StateExecuting, false},
-		{"waiting_hitl -> hitl_rejected -> failed", StateWaitingHITL, EventHITLRejected, StateFailed, false},
+	{"pending -> start -> planning", StatePending, EventStart, StatePlanning, false},
+	{"pending -> cancel -> cancelled", StatePending, EventCancel, StateCancelled, false},
+	{"planning -> plan_ready -> executing", StatePlanning, EventPlanReady, StateExecuting, false},
+	{"planning -> step_failed -> failed", StatePlanning, EventStepFailed, StateFailed, false},
+	{"executing -> hitl_required -> waiting_hitl", StateExecuting, EventHITLRequired, StateWaitingHITL, false},
+	{"executing -> step_complete stays executing", StateExecuting, EventStepComplete, StateExecuting, false},
+	{"executing -> cancel -> cancelled", StateExecuting, EventCancel, StateCancelled, false},
+	{"waiting_hitl -> hitl_approved -> executing", StateWaitingHITL, EventHITLApproved, StateExecuting, false},
+	{"waiting_hitl -> hitl_rejected -> failed", StateWaitingHITL, EventHITLRejected, StateFailed, false},
 		{"reviewing -> review_passed -> completed", StateReviewing, EventReviewPassed, StateCompleted, false},
 		{"reviewing -> review_failed -> executing", StateReviewing, EventReviewFailed, StateExecuting, false},
 		{"pending -> step_complete -> error", StatePending, EventStepComplete, StatePending, true},
@@ -83,8 +84,8 @@ func TestValidTransitions(t *testing.T) {
 	}
 
 	executingEvents := sm.ValidTransitions(StateExecuting)
-	if len(executingEvents) != 4 {
-		t.Errorf("StateExecuting valid transitions = %d, want 4", len(executingEvents))
+	if len(executingEvents) != 5 {
+		t.Errorf("StateExecuting valid transitions = %d, want 5", len(executingEvents))
 	}
 
 	completedEvents := sm.ValidTransitions(StateCompleted)

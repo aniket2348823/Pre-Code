@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"time"
 )
 
@@ -31,6 +32,14 @@ func (t *RunCommandTool) Parameters() map[string]interface{} {
 	}
 }
 
+// shellCommand returns the appropriate shell binary and arguments for the current OS.
+func shellCommand(command string) (string, []string) {
+	if runtime.GOOS == "windows" {
+		return "cmd", []string{"/c", command}
+	}
+	return "sh", []string{"-c", command}
+}
+
 func (t *RunCommandTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
 	start := time.Now()
 	command, _ := params["command"].(string)
@@ -46,13 +55,14 @@ func (t *RunCommandTool) Execute(ctx context.Context, params map[string]interfac
 	cancelCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(cancelCtx, "sh", "-c", command)
+	shell, args := shellCommand(command)
+	cmd := exec.CommandContext(cancelCtx, shell, args...)
 	output, err := cmd.CombinedOutput()
 
 	result := &ToolResult{
 		Output:   string(output),
 		Duration: time.Since(start),
-		Metadata: map[string]interface{}{"command": command, "timeout": timeout},
+		Metadata: map[string]interface{}{"command": command, "timeout": timeout, "os": runtime.GOOS},
 	}
 
 	if err != nil {

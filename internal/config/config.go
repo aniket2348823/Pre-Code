@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -59,9 +60,16 @@ type AuthConfig struct {
 }
 
 // LLMConfig holds LLM provider API keys and routing config.
+// Each key is optional; providers are only registered when their key is set.
 type LLMConfig struct {
 	OpenAIKey      string
 	AnthropicKey   string
+	GeminiKey      string
+	OpenRouterKey  string
+	MistralKey     string
+	GroqKey        string
+	NVIDIANIMKey   string
+	CohereKey      string
 	DefaultModel   string
 	BudgetPerTask  float64
 	MaxTokens      int
@@ -180,6 +188,12 @@ func Load() (*Config, error) {
 		LLM: LLMConfig{
 			OpenAIKey:     viper.GetString("llm.openai_key"),
 			AnthropicKey:  viper.GetString("llm.anthropic_key"),
+			GeminiKey:     viper.GetString("llm.gemini_key"),
+			OpenRouterKey: viper.GetString("llm.openrouter_key"),
+			MistralKey:    viper.GetString("llm.mistral_key"),
+			GroqKey:       viper.GetString("llm.groq_key"),
+			NVIDIANIMKey:  viper.GetString("llm.nvidia_nim_key"),
+			CohereKey:     viper.GetString("llm.cohere_key"),
 			DefaultModel:  viper.GetString("llm.default_model"),
 			BudgetPerTask: viper.GetFloat64("llm.budget_per_task"),
 			MaxTokens:     viper.GetInt("llm.max_tokens"),
@@ -295,8 +309,37 @@ func (c *Config) Validate() error {
 	if c.LLM.MaxTokens < 0 {
 		return fmt.Errorf("llm.max_tokens must be non-negative")
 	}
-	if c.Server.Env == "production" && c.LLM.OpenAIKey == "" && c.LLM.AnthropicKey == "" {
+	if c.Server.Env == "production" && c.LLM.OpenAIKey == "" && c.LLM.AnthropicKey == "" && c.LLM.GeminiKey == "" && c.LLM.OpenRouterKey == "" && c.LLM.MistralKey == "" && c.LLM.GroqKey == "" && c.LLM.NVIDIANIMKey == "" && c.LLM.CohereKey == "" {
 		return fmt.Errorf("at least one LLM API key is required in production")
+	}
+
+	// CORS: validate origin format for all configured origins (all environments)
+	for _, o := range c.CORS.AllowedOrigins {
+		if o == "*" {
+			continue // wildcard handled by production check below
+		}
+		lower := strings.ToLower(o)
+		if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+			return fmt.Errorf("cors.allowed_origins: %q is not a valid origin (must start with http:// or https://)", o)
+		}
+		// Reject origins with paths — CORS origins must be scheme + host + optional port
+		rest := lower[7:]
+		if strings.HasPrefix(lower, "https://") {
+			rest = lower[8:]
+		}
+		if idx := strings.Index(rest, "/"); idx != -1 {
+			return fmt.Errorf("cors.allowed_origins: %q must not contain a path (use https://example.com, not https://example.com/path)", o)
+		}
+	}
+	if c.Server.Env == "production" {
+		if len(c.CORS.AllowedOrigins) == 0 {
+			return fmt.Errorf("cors.allowed_origins is required in production")
+		}
+		for _, o := range c.CORS.AllowedOrigins {
+			if o == "*" {
+				return fmt.Errorf("cors.allowed_origins must not contain wildcard '*' in production")
+			}
+		}
 	}
 
 	// Log
