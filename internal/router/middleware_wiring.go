@@ -7,6 +7,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/compression"
 	"github.com/vigilagent/vigilagent/internal/cors"
 	"github.com/vigilagent/vigilagent/internal/idempotency"
+	mw "github.com/vigilagent/vigilagent/internal/middleware"
 	"github.com/vigilagent/vigilagent/internal/rateguard"
 	"github.com/vigilagent/vigilagent/internal/requestid"
 	"github.com/vigilagent/vigilagent/internal/signing"
@@ -92,6 +93,10 @@ func (r *Router) setupObservabilityMiddleware(cfg *MiddlewareConfig) {
 // All middleware is wired BEFORE routes are set up, as required by chi.
 func NewWithMiddleware(opts Options, mcfg *MiddlewareConfig) *Router {
 	r := newRouter(opts)
+
+	if r.db != nil && r.db.Pool != nil {
+		r.authSessionMiddleware = mw.NewAuthSessionMiddleware(r.db.Conn())
+	}
 
 	// Build handlers using shared logic.
 	r.initHandlers()

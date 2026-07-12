@@ -1,7 +1,9 @@
 package router
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/agent"
@@ -10,16 +12,19 @@ import (
 	"github.com/vigilagent/vigilagent/internal/cost"
 	"github.com/vigilagent/vigilagent/internal/costintel"
 	"github.com/vigilagent/vigilagent/internal/database"
+	"github.com/vigilagent/vigilagent/internal/email"
+	"github.com/vigilagent/vigilagent/internal/featureflags"
 	"github.com/vigilagent/vigilagent/internal/llm"
-	ratelimit "github.com/vigilagent/vigilagent/internal/middleware"
+	mw "github.com/vigilagent/vigilagent/internal/middleware"
 	"github.com/vigilagent/vigilagent/internal/memory"
 	"github.com/vigilagent/vigilagent/internal/queue"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/skills"
+	"github.com/vigilagent/vigilagent/internal/knowledge"
+	"github.com/vigilagent/vigilagent/internal/skillengine"
 	"github.com/vigilagent/vigilagent/internal/attackgraph"
 	"github.com/vigilagent/vigilagent/internal/audit"
 	"github.com/vigilagent/vigilagent/internal/confidence"
-	"github.com/vigilagent/vigilagent/internal/knowledge"
-	"github.com/vigilagent/vigilagent/internal/skillengine"
 	"github.com/vigilagent/vigilagent/internal/compliance"
 	"github.com/vigilagent/vigilagent/internal/pipeline"
 	"github.com/vigilagent/vigilagent/internal/requirements"
@@ -29,7 +34,6 @@ import (
 )
 
 // Options holds all dependencies for the Router.
-// Instead of 20 positional parameters, this struct groups related dependencies.
 type Options struct {
 	// Config
 	Config *config.Config
@@ -43,9 +47,9 @@ type Options struct {
 	// Auth
 	JWT           *auth.JWT
 	APIKeys       *auth.APIKeyService
-	APIAuth       *ratelimit.APIKeyAuth
-	RateLimit     *ratelimit.RateLimiter
-	AuthRateLimit *ratelimit.RateLimiter // Redis-backed rate limiter for auth endpoints
+	APIAuth       *mw.APIKeyAuth
+	RateLimit     *mw.RateLimiter
+	AuthRateLimit *mw.RateLimiter
 
 	// Repositories
 	Users      *repository.UserRepository
@@ -99,8 +103,17 @@ type Options struct {
 	// Webhook engine for event notifications
 	Webhook *webhook.Engine
 
-	// Cost intelligence engine for forecasting, anomaly detection, and recommendations
+	// Cost intelligence engine
 	CostIntel *costintel.Engine
+
+	// Email service
+	Email *email.VerificationService
+
+	// Feature flags
+	FeatureFlags *featureflags.Manager
+
+	// Skill marketplace RAG engine
+	SkillRAG *skills.RAGEngine
 }
 
 // Router holds all HTTP handlers and dependencies.
@@ -112,12 +125,12 @@ type Router struct {
 	nats       *queue.NATS
 	auth       *auth.JWT
 	apiKM      *auth.APIKeyService
-	apiKeyAuth *ratelimit.APIKeyAuth
-	rl         *ratelimit.RateLimiter
-	authRL     *ratelimit.RateLimiter // Redis-backed auth rate limiter
-	authSessionMiddleware *ratelimit.AuthSessionMiddleware
+	apiKeyAuth *mw.APIKeyAuth
+	rl         *mw.RateLimiter
+	authRL     *mw.RateLimiter
+	authSessionMiddleware *mw.AuthSessionMiddleware
 	webhookEngine        *webhook.Engine
-	sseHub               *SSEHub
+	wsManager            *WebSocketManager
 
 	// Repositories
 	users    *repository.UserRepository
@@ -148,32 +161,47 @@ type Router struct {
 	attackGraph         *attackgraph.Engine
 	audit               *audit.Engine
 	costIntel           *costintel.Engine
+	lockout             mw.Lockout
+	lockoutCancel       context.CancelFunc
+
+	// Email + Feature Flags + RAG
+	email        *email.VerificationService
+	featureFlags *featureflags.Manager
+	skillRAG     *skills.RAGEngine
+
 	requirementsHandlerFn http.HandlerFunc
-	validateHandlerFn   http.HandlerFunc
-	schemaHandlerFn     http.HandlerFunc
-	complianceHandlerFn  http.HandlerFunc
-	pipelineHandlerFn    http.HandlerFunc
-	knowledgeHandlerFn   http.HandlerFunc
-	skillEngineHandlerFn http.HandlerFunc
-	confidenceHandlerFn  http.HandlerFunc
-	attackGraphHandlerFn http.HandlerFunc
-	auditHandlerFn       http.HandlerFunc
+	validateHandlerFn     http.HandlerFunc
+	schemaHandlerFn       http.HandlerFunc
+	complianceHandlerFn   http.HandlerFunc
+	pipelineHandlerFn     http.HandlerFunc
+	knowledgeHandlerFn    http.HandlerFunc
+	skillEngineHandlerFn  http.HandlerFunc
+	confidenceHandlerFn   http.HandlerFunc
+	attackGraphHandlerFn  http.HandlerFunc
+	auditHandlerFn        http.HandlerFunc
 }
 
 // newRouter creates a Router from Options without wiring middleware or routes.
-// Shared by New() and NewWithMiddleware() to avoid field-init duplication.
 func newRouter(opts Options) *Router {
+	// Use Redis-backed lockout if Redis is available, otherwise in-memory
+	var lockout mw.Lockout
+	if opts.Redis != nil && opts.Redis.Client != nil {
+		lockout = mw.NewLockout(opts.Redis.Client, 5, 15*time.Minute)
+	} else {
+		lockout = mw.NewAccountLockout(5, 15*time.Minute)
+	}
+
 	return &Router{
 		Mux:         chi.NewMux(),
 		cfg:         opts.Config,
 		db:          opts.DB,
 		rds:         opts.Redis,
 		nats:        opts.NATS,
-	auth:        opts.JWT,
-	apiKM:       opts.APIKeys,
-	apiKeyAuth:  opts.APIAuth,
-	rl:          opts.RateLimit,
-	authRL:      opts.AuthRateLimit,
+		auth:        opts.JWT,
+		apiKM:       opts.APIKeys,
+		apiKeyAuth:  opts.APIAuth,
+		rl:          opts.RateLimit,
+		authRL:      opts.AuthRateLimit,
 		users:       opts.Users,
 		orgs:        opts.Orgs,
 		projects:    opts.Projects,
@@ -200,18 +228,21 @@ func newRouter(opts Options) *Router {
 		attackGraph: opts.AttackGraph,
 		audit:       opts.Audit,
 		webhookEngine: opts.Webhook,
+		wsManager:     NewWebSocketManager(DefaultWebSocketManagerConfig()),
+		lockout:       lockout,
 		costIntel:     opts.CostIntel,
-		sseHub:        NewSSEHub(),
+		email:       opts.Email,
+		featureFlags: opts.FeatureFlags,
+		skillRAG:    opts.SkillRAG,
 	}
 }
 
 // New creates a Router from an Options struct with the default middleware stack.
 func New(opts Options) *Router {
 	r := newRouter(opts)
-	// Wire auth session middleware if pool is available
 	if r.db != nil && r.db.Pool != nil {
-			r.authSessionMiddleware = ratelimit.NewAuthSessionMiddleware(r.db.Conn())
-		}
+		r.authSessionMiddleware = mw.NewAuthSessionMiddleware(r.db.Conn())
+	}
 	r.initHandlers()
 	r.setupMiddleware()
 	r.setupRoutes()
@@ -219,14 +250,18 @@ func New(opts Options) *Router {
 }
 
 // initHandlers builds deterministic engine handlers at construction time.
-// Extracted from New() so NewWithMiddleware() can reuse it without duplication.
 func (r *Router) initHandlers() {
-	// Deterministic engine (scanner) — create default if not provided.
+	// Start lockout cleanup goroutine for in-memory implementation
+	if al, ok := r.lockout.(*mw.AccountLockout); ok {
+		ctx, cancel := context.WithCancel(context.Background())
+		go al.Cleanup(ctx, 5*time.Minute)
+		r.lockoutCancel = cancel
+	}
+
 	if r.engine == nil {
 		r.engine = scanner.NewEngine(scanner.NewBuiltinAnalyzer())
 	}
 
-	// Requirements + validation
 	reqResolver := r.requirements
 	if reqResolver == nil {
 		reqResolver = requirements.NewResolver()
@@ -251,7 +286,6 @@ func (r *Router) initHandlers() {
 	}
 	r.pipelineHandlerFn = pipeline.NewHTTPHandler(r.pipeline)
 
-	// Advanced engines
 	kg := r.knowledge
 	if kg == nil {
 		kg = knowledge.NewGraph()
@@ -281,4 +315,11 @@ func (r *Router) initHandlers() {
 		au = audit.NewEngine(audit.NewMemoryStore())
 	}
 	r.auditHandlerFn = audit.NewHTTPHandler(au)
+}
+
+// Shutdown cancels background goroutines started by the router.
+func (r *Router) Shutdown() {
+	if r.lockoutCancel != nil {
+		r.lockoutCancel()
+	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ type Config struct {
 	Stripe   StripeConfig
 	CORS     CORSConfig
 	Log      LogConfig
+	SMTP     SMTPConfig
 }
 
 type ServerConfig struct {
@@ -96,11 +98,26 @@ type LogConfig struct {
 	Format string
 }
 
+// SMTPConfig holds email/SMTP server configuration.
+type SMTPConfig struct {
+	Host     string
+	Port     int
+	Username string
+	Password string
+	From     string
+	FromName string
+}
+
 func Load() (*Config, error) {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath("./configs")
-	viper.AddConfigPath(".")
+	// Support custom config path via env var (used in Docker)
+	if configPath := os.Getenv("VIGILAGENT_CONFIG_PATH"); configPath != "" {
+		viper.SetConfigFile(configPath)
+	} else {
+		viper.SetConfigName("config")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath("./configs")
+		viper.AddConfigPath(".")
+	}
 
 	// Set defaults
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -137,12 +154,16 @@ func Load() (*Config, error) {
 	viper.SetDefault("llm.budget_per_task", 1.0)
 	viper.SetDefault("llm.max_tokens", 8192)
 
+	// SMTP defaults
+	viper.SetDefault("smtp.port", 587)
+
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("log.format", "json")
 
 	// Enable environment variable override
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix("VIGILAGENT")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
 	// Read config file (if exists)
 	if err := viper.ReadInConfig(); err != nil {
@@ -180,7 +201,8 @@ func Load() (*Config, error) {
 		NATS: NATSConfig{
 			URL:    viper.GetString("nats.url"),
 			Stream: viper.GetString("nats.stream"),
-		},		Auth: AuthConfig{
+		},
+		Auth: AuthConfig{
 			JWTSecret:     viper.GetString("auth.jwt_secret"),
 			JWTExpiration: viper.GetDuration("auth.jwt_expiration"),
 			APIKeyPrefix:  viper.GetString("auth.api_key_prefix"),
@@ -203,6 +225,14 @@ func Load() (*Config, error) {
 			WebhookSecret: viper.GetString("stripe.webhook_secret"),
 			SuccessURL:    viper.GetString("stripe.success_url"),
 			CancelURL:     viper.GetString("stripe.cancel_url"),
+		},
+		SMTP: SMTPConfig{
+			Host:     viper.GetString("smtp.host"),
+			Port:     viper.GetInt("smtp.port"),
+			Username: viper.GetString("smtp.username"),
+			Password: viper.GetString("smtp.password"),
+			From:     viper.GetString("smtp.from"),
+			FromName: viper.GetString("smtp.from_name"),
 		},
 		CORS: CORSConfig{
 			AllowedOrigins:  viper.GetStringSlice("cors.allowed_origins"),

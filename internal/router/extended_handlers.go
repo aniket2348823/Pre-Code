@@ -3,8 +3,8 @@ package router
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
-	"strconv"
 
 	"github.com/vigilagent/vigilagent/internal/agent"
 	"github.com/vigilagent/vigilagent/internal/auth"
@@ -29,7 +29,7 @@ func (r *Router) middlewareMetricsHandler(w http.ResponseWriter, req *http.Reque
 	// Return LLM router health and cost intel metrics
 	var healthData interface{}
 	if r.llmRouter != nil && r.llmRouter.GetHealthMonitor() != nil {
-		healthData = r.llmRouter.GetHealthMonitor().Summary()
+		healthData = map[string]interface{}{"healthy_providers": r.llmRouter.GetHealthMonitor().GetHealthyProviders()}
 	}
 
 	var costData map[string]float64
@@ -134,9 +134,9 @@ func (r *Router) batchTaskHandler(w http.ResponseWriter, req *http.Request) {
 
 		results[i] = taskResult{Index: i, TaskID: task.ID, Status: "created"}
 
-		// Start execution in background
-		taskCopy := task
-		go r.executeTaskBackground(taskCopy)
+		// Start execution in background (copy the struct, not the pointer)
+		taskCopy := *task
+		go r.executeTaskBackground(&taskCopy)
 	}
 
 	// Dispatch batch webhook
@@ -157,9 +157,10 @@ func (r *Router) batchTaskHandler(w http.ResponseWriter, req *http.Request) {
 
 // executeTaskBackground runs a task in the background goroutine.
 func (r *Router) executeTaskBackground(task *repository.Task) {
-	// This reuses the same pattern from createTaskHandler
 	if r.agentExec == nil {
-		_ = r.tasks.Complete(context.Background(), task.ID, task.Prompt, "", "", 0, 0, 0, 0)
+		if err := r.tasks.Complete(context.Background(), task.ID, task.Prompt, "", "", 0, 0, 0, 0); err != nil {
+			slog.Error("failed to complete task (no agent)", "error", err, "task_id", task.ID)
+		}
 		return
 	}
 
@@ -179,11 +180,15 @@ func (r *Router) executeTaskBackground(task *repository.Task) {
 	bgCtx := context.Background()
 	result, err := r.agentExec.ExecuteTask(bgCtx, agentTask)
 	if err != nil {
-		_ = r.tasks.UpdateStatus(context.Background(), task.ID, "failed")
+		if updateErr := r.tasks.UpdateStatus(context.Background(), task.ID, "failed"); updateErr != nil {
+			slog.Error("failed to update task status to failed", "error", updateErr, "task_id", task.ID)
+		}
 		return
 	}
-	_ = r.tasks.Complete(bgCtx, task.ID, result.Result, "", "",
-		result.TokensUsed, 0, result.TokensUsed, result.Cost)
+	if err := r.tasks.Complete(bgCtx, task.ID, result.Result, "", "",
+		result.TokensUsed, 0, result.TokensUsed, result.Cost); err != nil {
+		slog.Error("failed to complete task", "error", err, "task_id", task.ID)
+	}
 }
 
 // healthStatsHandler returns real-time provider health statistics.
@@ -197,7 +202,7 @@ func (r *Router) healthStatsHandler(w http.ResponseWriter, req *http.Request) {
 
 	var healthSummary interface{}
 	if r.llmRouter != nil && r.llmRouter.GetHealthMonitor() != nil {
-		healthSummary = r.llmRouter.GetHealthMonitor().Summary()
+		healthSummary = map[string]interface{}{"healthy_providers": r.llmRouter.GetHealthMonitor().GetHealthyProviders()}
 	}
 
 	response.JSON(w, http.StatusOK, map[string]interface{}{

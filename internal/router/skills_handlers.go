@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -63,7 +64,7 @@ func (r *Router) getSkillHandler(w http.ResponseWriter, req *http.Request) {
 	skillID := chi.URLParam(req, "skillID")
 	skill, err := r.skills.FindByID(req.Context(), skillID)
 	if err != nil {
-		response.NotFound(w, err.Error())
+		response.NotFound(w, "skill not found")
 		return
 	}
 	response.JSON(w, http.StatusOK, skill)
@@ -132,11 +133,9 @@ func (r *Router) updateSkillHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	skillID := chi.URLParam(req, "skillID")
 	skill, err := r.skills.FindByID(req.Context(), skillID)
-	if err != nil {
-		response.NotFound(w, err.Error())
+	if err != nil {		response.NotFound(w, "skill not found")
 		return
 	}
-
 	var input struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -180,7 +179,7 @@ func (r *Router) deleteSkillHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	skillID := chi.URLParam(req, "skillID")
 	if _, err := r.skills.FindByID(req.Context(), skillID); err != nil {
-		response.NotFound(w, err.Error())
+		response.NotFound(w, "skill not found")
 		return
 	}
 	if err := r.skills.Delete(req.Context(), skillID); err != nil {
@@ -289,7 +288,7 @@ func (r *Router) installSkillHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	skillID := chi.URLParam(req, "skillID")
 	if _, err := r.skills.FindByID(req.Context(), skillID); err != nil {
-		response.NotFound(w, err.Error())
+		response.NotFound(w, "skill not found")
 		return
 	}
 
@@ -312,7 +311,9 @@ func (r *Router) installSkillHandler(w http.ResponseWriter, req *http.Request) {
 		response.InternalError(w, "failed to install skill")
 		return
 	}
-	_ = r.skills.IncrementDownloads(req.Context(), skillID)
+	if err := r.skills.IncrementDownloads(req.Context(), skillID); err != nil {
+		slog.Warn("failed to increment skill downloads", "error", err, "skill_id", skillID)
+	}
 
 	// Dispatch webhook notification
 	if r.webhookEngine != nil {

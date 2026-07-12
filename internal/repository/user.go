@@ -103,6 +103,32 @@ func (r *UserRepository) UpdateProfile(ctx context.Context, userID, name, avatar
 	return err
 }
 
+// UpdatePassword updates a user's password hash.
+func (r *UserRepository) UpdatePassword(ctx context.Context, userID, passwordHash string) error {
+	query := `UPDATE users SET password_hash = $2, updated_at = NOW() WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, query, userID, passwordHash)
+	if err != nil {
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found")
+	}
+	return nil
+}
+
+// UpdateEmailVerified marks a user's email as verified.
+func (r *UserRepository) UpdateEmailVerified(ctx context.Context, userID string) error {
+	query := `UPDATE users SET email_verified = true, updated_at = NOW() WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("failed to mark email as verified: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found")
+	}
+	return nil
+}
+
 // UpdateRole updates a user's role (admin operation).
 func (r *UserRepository) UpdateRole(ctx context.Context, userID, role string) error {
 	query := `UPDATE users SET role = $2, updated_at = NOW() WHERE id = $1`

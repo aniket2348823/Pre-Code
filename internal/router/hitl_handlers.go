@@ -59,8 +59,8 @@ func (r *Router) approveHITLHandler(w http.ResponseWriter, req *http.Request) {
 	// Broadcast real-time HITL decision via SSE hub so the agent's
 	// background goroutine can resume. The agent polls for SSE events
 	// during waiting_hitl state and resumes on hitl.approved.
-	if r.sseHub != nil {
-		r.sseHub.Broadcast(taskID, TaskSSEEvent{
+	if r.wsManager != nil {
+		r.wsManager.SSEBroadcast(taskID, TaskSSEEvent{
 			TaskID: taskID,
 			Event:  "hitl_decision",
 			Payload: map[string]interface{}{

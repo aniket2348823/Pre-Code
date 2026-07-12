@@ -23,12 +23,15 @@ import (
 	"github.com/vigilagent/vigilagent/internal/audit"
 	"github.com/vigilagent/vigilagent/internal/compliance"
 	"github.com/vigilagent/vigilagent/internal/confidence"
+	"github.com/vigilagent/vigilagent/internal/email"
+	"github.com/vigilagent/vigilagent/internal/featureflags"
 	"github.com/vigilagent/vigilagent/internal/knowledge"
 	"github.com/vigilagent/vigilagent/internal/requirements"
 	"github.com/vigilagent/vigilagent/internal/scanner"
 	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/internal/schema"
 	"github.com/vigilagent/vigilagent/internal/skillengine"
+	"github.com/vigilagent/vigilagent/internal/skills"
 	"github.com/vigilagent/vigilagent/internal/cors"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/internal/tools"
@@ -51,9 +54,19 @@ func New(cfg *config.Config) (*Server, error) {
 
 	srv := &Server{cfg: cfg}
 
-	db, err := database.NewPostgres(context.Background(), &cfg.Database)
+	// Connect to PostgreSQL with retry (services may not be ready yet in Docker)
+	var err error
+	var db *database.Postgres
+	for attempt := 1; attempt <= 10; attempt++ {
+		db, err = database.NewPostgres(context.Background(), &cfg.Database)
+		if err == nil {
+			break
+		}
+		slog.Warn("database connection failed, retrying...", "attempt", attempt, "max", 10, "error", err)
+		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("database initialization failed: %w", err)
+		return nil, fmt.Errorf("database initialization failed after 10 attempts: %w", err)
 	}
 	srv.db = db
 
@@ -62,18 +75,36 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("database migration failed: %w", err)
 	}
 
-	rds, err := database.NewRedis(context.Background(), &cfg.Redis)
+	// Connect to Redis with retry
+	var rds *database.Redis
+	for attempt := 1; attempt <= 5; attempt++ {
+		rds, err = database.NewRedis(context.Background(), &cfg.Redis)
+		if err == nil {
+			break
+		}
+		slog.Warn("redis connection failed, retrying...", "attempt", attempt, "max", 5, "error", err)
+		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+	}
 	if err != nil {
 		db.Close()
-		return nil, fmt.Errorf("redis initialization failed: %w", err)
+		return nil, fmt.Errorf("redis initialization failed after 5 attempts: %w", err)
 	}
 	srv.redis = rds
 
-	natsConn, err := queue.NewNATS(&cfg.NATS)
+	// Connect to NATS with retry
+	var natsConn *queue.NATS
+	for attempt := 1; attempt <= 5; attempt++ {
+		natsConn, err = queue.NewNATS(&cfg.NATS)
+		if err == nil {
+			break
+		}
+		slog.Warn("nats connection failed, retrying...", "attempt", attempt, "max", 5, "error", err)
+		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+	}
 	if err != nil {
 		db.Close()
 		rds.Close()
-		return nil, fmt.Errorf("nats initialization failed: %w", err)
+		return nil, fmt.Errorf("nats initialization failed after 5 attempts: %w", err)
 	}
 	srv.nats = natsConn
 
@@ -193,10 +224,47 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	// Wire memory system into agent for episodic recall during task execution
-	agentExec.SetMemory(memMgr)
+	agentExec.SetMemory(&memoryAdapter{mgr: memMgr})
 	slog.Info("agent memory wired", "layers", "working+episodic+semantic")
 
 	go modelRouter.StartHealthChecks(context.Background(), 2*time.Minute)
+
+	// Wire email service
+	var emailSender email.Sender
+	if cfg.SMTP.Host != "" {
+		emailSender = email.NewSMTPSender(email.SMTPConfig{
+			Host:     cfg.SMTP.Host,
+			Port:     cfg.SMTP.Port,
+			Username: cfg.SMTP.Username,
+			Password: cfg.SMTP.Password,
+			From:     cfg.SMTP.From,
+			FromName: cfg.SMTP.FromName,
+		})
+		slog.Info("email sender configured", "host", cfg.SMTP.Host)
+	} else {
+		emailSender = &email.NoOpSender{}
+		slog.Info("email sender: no-op (SMTP not configured)")
+	}
+	// Use Redis-backed token store for email verification tokens (survives restarts)
+	var verificationSvc *email.VerificationService
+	if rds != nil && rds.Client != nil {
+		redisTokenStore := email.NewRedisTokenStore(rds.Client, 24*time.Hour)
+		verificationSvc = email.NewVerificationServiceWithRedis(emailSender, redisTokenStore)
+		slog.Info("email verification service: Redis-backed token store")
+	} else {
+		verificationSvc = email.NewVerificationService(emailSender)
+		slog.Warn("email verification service: in-memory token store (tokens lost on restart)")
+	}
+	go verificationSvc.Cleanup(context.Background(), 1*time.Hour)
+
+	// Wire feature flags
+	featureFlagMgr := featureflags.NewManager(conn)
+	featureFlagMgr.StartRefresh(context.Background(), 5*time.Minute)
+	_ = featureflags.EnsureTable(context.Background(), conn)
+
+	// Wire RAG engine for skill marketplace search
+	skillRAG := skills.NewRAGEngine(conn, memory.NewNoOpEmbedder(1536))
+	_ = skills.EnsureRequiredTables(context.Background(), conn)
 
 	opts := router.Options{
 		Config:     cfg,
@@ -233,6 +301,9 @@ func New(cfg *config.Config) (*Server, error) {
 		Budget:       budgetMgr,
 		Webhook:      webhookEngine,
 		CostIntel:    costintel.NewEngine(),
+		Email:        verificationSvc,
+		FeatureFlags: featureFlagMgr,
+		SkillRAG:     skillRAG,
 	}
 
 	var r *router.Router
@@ -261,19 +332,11 @@ func New(cfg *config.Config) (*Server, error) {
 			slog.Info("hot reload: new default model", "model", newCfg.LLM.DefaultModel)
 		}
 	})
-	hotReload.Start(ctx)
-
-	// Start config hot reload watcher
-	hotReload := config.NewHotReloader(cfg)
-	hotReload.OnChange(func(newCfg *config.Config) {
-		slog.Info("hot reload: updating model router config")
-		modelRouter.SetPrices(llm.AllPrices())
-		if newCfg.LLM.DefaultModel != "" {
-			slog.Info("hot reload: new default model", "model", newCfg.LLM.DefaultModel)
-		}
-	})
-	hotReload.Start(context.Background())
+	go hotReload.Start(context.Background())
 	srv.hotReload = hotReload
+
+	// NOTE: pg_trgm extension should be created via migrations or manually.
+	// CREATE EXTENSION requires superuser and hangs through connection poolers.
 
 	slog.Info("server initialized successfully")
 	return srv, nil
@@ -287,6 +350,9 @@ var version = "dev"
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	slog.Info("cleaning up server resources")
+	if s.router != nil {
+		s.router.Shutdown()
+	}
 	if s.hotReload != nil {
 		s.hotReload.Stop()
 	}
@@ -294,7 +360,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.cleanup()
 	}
 	if s.nats != nil {
-		s.nats.Close()
+		// Drain in-flight messages before closing
+		drainCtx, drainCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer drainCancel()
+		if err := s.nats.Drain(drainCtx); err != nil {
+			slog.Warn("NATS drain failed, forcing close", "error", err)
+			s.nats.Close()
+		}
 	}
 	if s.redis != nil {
 		s.redis.Close()
@@ -313,3 +385,29 @@ func (s *Server) runMigrations() error {
 	}
 	return database.Migrate(context.Background(), s.db.Pool, migrationsDir)
 }
+
+// memoryAdapter bridges memory.Manager to agent.MemoryStore.
+type memoryAdapter struct {
+	mgr *memory.Manager
+}
+
+func (a *memoryAdapter) Recall(ctx context.Context, query string, limit int) ([]agent.MemoryResult, error) {
+	results, err := a.mgr.Recall(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agent.MemoryResult, len(results))
+	for i, r := range results {
+		out[i] = agent.MemoryResult{
+			Type:    r.Type,
+			Content: r.Content,
+			Score:   r.Score,
+		}
+	}
+	return out, nil
+}
+
+func (a *memoryAdapter) StoreEpisode(ctx context.Context, userID, episodeType, title, content string, importance float64) error {
+	return a.mgr.StoreEpisode(ctx, userID, episodeType, title, content, importance)
+}
+

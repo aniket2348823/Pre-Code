@@ -1,83 +1,166 @@
 package errors
 
 import (
-	"errors"
 	"testing"
 )
 
-func TestAppError_ErrorMessage(t *testing.T) {
-	tests := []struct {
-		name string
-		err  *AppError
-		want string
-	}{
-		{"no wrapped error", NotFound("Task"), "RESOURCE_NOT_FOUND: Task not found"},
-		{"wrapped error", Wrap(errors.New("boom"), CodeTaskFailed, "task"), "TASK_FAILED: task: boom"},
-		{"validation", Validation("bad input", nil), "VALIDATION_ERROR: bad input"},
+func TestNew(t *testing.T) {
+	err := New(ErrNotFound, "user not found")
+	if err.Code != ErrNotFound {
+		t.Errorf("expected code %s, got %s", ErrNotFound, err.Code)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.err.Error(); got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
-			}
-		})
+	if err.Message != "user not found" {
+		t.Errorf("expected message 'user not found', got %q", err.Message)
+	}
+	if err.HTTPStatus() != 404 {
+		t.Errorf("expected HTTP status 404, got %d", err.HTTPStatus())
 	}
 }
 
-func TestAppError_HTTPStatus(t *testing.T) {
-	cases := map[Code]int{
-		CodeNotFound:       404,
-		CodeInvalidToken:   401,
-		CodeUnauthorized:   401,
-		CodeInsufficient:   403,
-		CodeForbidden:      403,
-		CodeConflict:       409,
-		CodeValidation:     422,
-		CodeQuota:          402,
-		CodeBudgetExceeded: 402,
-		CodeRateLimit:      429,
-		CodeProviderDown:   503,
-		CodeTaskFailed:     500,
+func TestNewf(t *testing.T) {
+	err := Newf(ErrDBError, "failed to query table %s", "users")
+	if err.Code != ErrDBError {
+		t.Errorf("expected code %s, got %s", ErrDBError, err.Code)
 	}
-	for code, want := range cases {
-		t.Run(string(code), func(t *testing.T) {
-			if got := New(code, "x").HTTPStatus(); got != want {
-				t.Errorf("got %d, want %d", got, want)
-			}
-		})
+	if err.Message != "failed to query table users" {
+		t.Errorf("unexpected message: %q", err.Message)
 	}
 }
 
-func TestAppError_ToBody(t *testing.T) {
-	e := WithRequestID(Validation("bad", map[string]any{"field": "title"}), "req-1")
-	body := e.ToBody()
-	if body.Error.Code != CodeValidation {
-		t.Fatalf("code mismatch: %s", body.Error.Code)
+func TestWithDetails(t *testing.T) {
+	err := New(ErrInvalidBody, "bad request").WithDetails(map[string]string{"field": "email"})
+	if err.Details == nil {
+		t.Error("expected details to be set")
 	}
-	if body.Error.RequestID != "req-1" {
-		t.Errorf("missing request id")
-	}
-	if body.Error.Timestamp == "" {
-		t.Errorf("missing timestamp")
-	}
-	if body.Error.Details["field"] != "title" {
-		t.Errorf("missing details")
-	}
-}
-
-func TestAsAppError(t *testing.T) {
-	inner := NotFound("Skill")
-	wrapped := Wrap(inner, CodeTaskFailed, "task chain")
-
-	got, ok := AsAppError(wrapped)
+	details, ok := err.Details.(map[string]string)
 	if !ok {
-		t.Fatal("expected AsAppError to unwrap")
+		t.Error("expected details to be map[string]string")
 	}
-	if got.Code != CodeTaskFailed {
-		t.Errorf("got %s, want TASK_FAILED", got.Code)
+	if details["field"] != "email" {
+		t.Errorf("expected field 'email', got %q", details["field"])
+	}
+}
+
+func TestErrorString(t *testing.T) {
+	err := New(ErrNotFound, "resource missing")
+	expected := "[RES_001] resource missing"
+	if err.Error() != expected {
+		t.Errorf("expected %q, got %q", expected, err.Error())
+	}
+}
+
+func TestHTTPStatusMapping(t *testing.T) {
+	tests := []struct {
+		code   ErrorCode
+		status int
+	}{
+		// Auth — 401
+		{ErrMissingAuth, 401},
+		{ErrInvalidCredentials, 401},
+		{ErrTokenExpired, 401},
+		{ErrTokenInvalid, 401},
+		{ErrAccountDisabled, 401},
+		{ErrEmailNotVerified, 401},
+		{ErrAPIKeyInvalid, 401},
+		// Auth — 403
+		{ErrInsufficientPerms, 403},
+		// Auth — 429
+		{ErrAccountLocked, 429},
+		// Auth — 400/409
+		{ErrPasswordTooWeak, 400},
+		{ErrDuplicateEmail, 409},
+		// Validation — 400
+		{ErrInvalidBody, 400},
+		{ErrMissingField, 400},
+		{ErrInvalidEmail, 400},
+		{ErrInvalidID, 400},
+		{ErrPayloadTooLarge, 413},
+		{ErrInvalidQuery, 400},
+		{ErrInvalidPagination, 400},
+		// Resource
+		{ErrNotFound, 404},
+		{ErrAlreadyExists, 409},
+		{ErrConflict, 409},
+		{ErrDeleted, 410},
+		// Scanner
+		{ErrScanFailed, 500},
+		{ErrScanTimeout, 504},
+		{ErrScanInputEmpty, 400},
+		{ErrUnsupportedLang, 400},
+		{ErrReviewFailed, 500},
+		{ErrNoLLMProvider, 503},
+		// Skill
+		{ErrSkillNotFound, 404},
+		{ErrSkillNotPublished, 404},
+		{ErrSkillVersionInvalid, 400},
+		{ErrSkillUploadFailed, 500},
+		{ErrSkillScanFailed, 500},
+		{ErrSkillSearchFailed, 500},
+		// Billing
+		{ErrBillingNotConfigured, 503},
+		{ErrSubscriptionNotFound, 404},
+		{ErrCheckoutFailed, 400},
+		{ErrPaymentFailed, 402},
+		// Infrastructure
+		{ErrRateLimited, 429},
+		{ErrServiceDown, 503},
+		{ErrDBError, 500},
+		{ErrCacheError, 503},
+		{ErrQueueError, 500},
+		{ErrWebhookFailed, 500},
 	}
 
-	if _, ok := AsAppError(errors.New("plain")); ok {
-		t.Error("expected false on plain error")
+	for _, tt := range tests {
+		err := New(tt.code, "test")
+		if err.HTTPStatus() != tt.status {
+			t.Errorf("code %s: expected HTTP %d, got %d", tt.code, tt.status, err.HTTPStatus())
+		}
+	}
+}
+
+func TestPredefinedErrorCodes(t *testing.T) {
+	// Verify all ErrorCode constants are non-empty and map to valid HTTP statuses
+	codes := []ErrorCode{
+		ErrMissingAuth, ErrInvalidCredentials, ErrTokenExpired, ErrTokenInvalid,
+		ErrAccountLocked, ErrAccountDisabled, ErrInsufficientPerms, ErrEmailNotVerified,
+		ErrPasswordTooWeak, ErrDuplicateEmail, ErrAPIKeyInvalid,
+		ErrInvalidBody, ErrMissingField, ErrInvalidEmail, ErrInvalidID,
+		ErrPayloadTooLarge, ErrInvalidQuery, ErrInvalidPagination,
+		ErrNotFound, ErrAlreadyExists, ErrConflict, ErrDeleted,
+		ErrScanFailed, ErrScanTimeout, ErrScanInputEmpty, ErrUnsupportedLang,
+		ErrReviewFailed, ErrNoLLMProvider,
+		ErrSkillNotFound, ErrSkillNotPublished, ErrSkillVersionInvalid,
+		ErrSkillUploadFailed, ErrSkillScanFailed, ErrSkillSearchFailed,
+		ErrBillingNotConfigured, ErrCheckoutFailed, ErrSubscriptionNotFound, ErrPaymentFailed,
+		ErrRateLimited, ErrServiceDown, ErrDBError, ErrCacheError, ErrQueueError, ErrWebhookFailed,
+	}
+
+	for _, code := range codes {
+		if code == "" {
+			t.Error("found empty ErrorCode constant")
+			continue
+		}
+		err := New(code, "test")
+		if err.HTTPStatus() == 0 {
+			t.Errorf("code %s: HTTPStatus() returned 0", code)
+		}
+	}
+}
+
+func TestCustomHTTPStatus(t *testing.T) {
+	err := New(ErrNotFound, "custom status")
+	err.Status = 418 // I'm a teapot
+	if err.HTTPStatus() != 418 {
+		t.Errorf("expected custom HTTP status 418, got %d", err.HTTPStatus())
+	}
+}
+
+func TestWithDetailsPreservesCodeAndMessage(t *testing.T) {
+	err := New(ErrDBError, "db failed").WithDetails(map[string]string{"table": "users"})
+	if err.Code != ErrDBError {
+		t.Errorf("expected code %s, got %s", ErrDBError, err.Code)
+	}
+	if err.Message != "db failed" {
+		t.Errorf("expected message 'db failed', got %q", err.Message)
 	}
 }

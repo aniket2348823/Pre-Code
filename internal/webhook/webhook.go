@@ -58,6 +58,7 @@ type Engine struct {
 	maxRetry    int
 	cache       []Endpoint
 	cacheExpiry time.Time
+	validator   *SSRFValidator
 }
 
 // NewEngine creates a DB-backed webhook engine.
@@ -67,7 +68,8 @@ func NewEngine(pool *pgxpool.Pool) *Engine {
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		maxRetry: 3,
+		maxRetry:  3,
+		validator: NewSSRFValidator(),
 	}
 }
 

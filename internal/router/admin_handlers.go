@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -40,11 +41,15 @@ func (r *Router) adminStatsHandler(w http.ResponseWriter, req *http.Request) {
 
 	// Get org count
 	var totalOrgs int
-	_ = r.orgs.Count(ctx, &totalOrgs)
+	if err := r.orgs.Count(ctx, &totalOrgs); err != nil {
+			slog.Warn("failed to count organizations", "error", err)
+		}
 
 	// Get project count
 	var totalProjects int
-	_ = r.projects.Count(ctx, &totalProjects)
+	if err := r.projects.Count(ctx, &totalProjects); err != nil {
+			slog.Warn("failed to count projects", "error", err)
+		}
 
 	response.JSON(w, http.StatusOK, map[string]interface{}{
 		"total_users":      totalUsers,

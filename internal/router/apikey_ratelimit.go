@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"github.com/vigilagent/vigilagent/internal/auth"
-	ratelimit "github.com/vigilagent/vigilagent/internal/middleware"
-	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
 // apiKeyRateLimitMiddleware applies per-API-key rate limiting.

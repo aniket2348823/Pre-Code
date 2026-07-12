@@ -11,6 +11,8 @@ type UserRepositoryInterface interface {
 	FindByID(ctx context.Context, id string) (*User, error)
 	FindByEmail(ctx context.Context, email string) (*User, error)
 	UpdateProfile(ctx context.Context, userID, name, avatarURL string) error
+	UpdatePassword(ctx context.Context, userID, passwordHash string) error
+	UpdateEmailVerified(ctx context.Context, userID string) error
 	UpdateLastLogin(ctx context.Context, userID string) error
 	UpdateRole(ctx context.Context, userID, role string) error
 	Delete(ctx context.Context, userID string) error

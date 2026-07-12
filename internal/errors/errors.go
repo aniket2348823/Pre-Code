@@ -4,146 +4,207 @@
 package errors
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
-	"time"
 )
 
-// Code is a stable machine-readable error identifier.
-type Code string
+// ErrorCode represents a machine-readable error code.
+type ErrorCode string
 
+// Auth errors
 const (
-	CodeNotFound        Code = "RESOURCE_NOT_FOUND"
-	CodeInvalidToken    Code = "AUTH_INVALID_TOKEN"
-	CodeInsufficient    Code = "AUTH_INSUFFICIENT_SCOPE"
-	CodeConflict        Code = "RESOURCE_CONFLICT"
-	CodeValidation      Code = "VALIDATION_ERROR"
-	CodeRateLimit       Code = "RATE_LIMIT_EXCEEDED"
-	CodeQuota           Code = "QUOTA_EXCEEDED"
-	CodeTaskFailed      Code = "TASK_FAILED"
-	CodeProviderDown    Code = "PROVIDER_UNAVAILABLE"
-	CodeUnauthorized    Code = "UNAUTHORIZED"
-	CodeForbidden       Code = "FORBIDDEN"
-	CodeBudgetExceeded  Code = "BUDGET_EXCEEDED"
+	ErrMissingAuth        ErrorCode = "AUTH_001"
+	ErrInvalidCredentials ErrorCode = "AUTH_002"
+	ErrTokenExpired       ErrorCode = "AUTH_003"
+	ErrTokenInvalid       ErrorCode = "AUTH_004"
+	ErrAccountLocked      ErrorCode = "AUTH_005"
+	ErrAccountDisabled    ErrorCode = "AUTH_006"
+	ErrInsufficientPerms  ErrorCode = "AUTH_007"
+	ErrEmailNotVerified   ErrorCode = "AUTH_008"
+	ErrPasswordTooWeak    ErrorCode = "AUTH_009"
+	ErrDuplicateEmail     ErrorCode = "AUTH_010"
+	ErrAPIKeyInvalid      ErrorCode = "AUTH_011"
+	ErrHashFailed         ErrorCode = "AUTH_012"
 )
 
-// AppError is the canonical application error.
-type AppError struct {
-	Code      Code
-	Message   string
-	Details   map[string]any
-	RequestID string
-	Timestamp time.Time
-	Err       error
-}
-
-func (e *AppError) Error() string {
-	if e.Err != nil {
-		return fmt.Sprintf("%s: %s: %v", e.Code, e.Message, e.Err)
-	}
-	return fmt.Sprintf("%s: %s", e.Code, e.Message)
-}
-
-func (e *AppError) Unwrap() error { return e.Err }
-
-// HTTPStatus maps the error code to an HTTP status code.
-func (e *AppError) HTTPStatus() int {
-	switch e.Code {
-	case CodeNotFound:
-		return http.StatusNotFound
-	case CodeInvalidToken, CodeUnauthorized:
-		return http.StatusUnauthorized
-	case CodeInsufficient, CodeForbidden:
-		return http.StatusForbidden
-	case CodeConflict:
-		return http.StatusConflict
-	case CodeValidation:
-		return http.StatusUnprocessableEntity
-	case CodeQuota, CodeBudgetExceeded:
-		return http.StatusPaymentRequired
-	case CodeRateLimit:
-		return http.StatusTooManyRequests
-	case CodeProviderDown:
-		return http.StatusServiceUnavailable
-	case CodeTaskFailed:
-		return http.StatusInternalServerError
-	default:
-		return http.StatusInternalServerError
-	}
-}
-
-func (e *AppError) when() time.Time {
-	if e.Timestamp.IsZero() {
-		return time.Now().UTC()
-	}
-	return e.Timestamp
-}
-
-// Body is the standard error response body per API contract §3.1.
-type Body struct {
-	Error BodyInner `json:"error"`
-}
-
-type BodyInner struct {
-	Code      Code           `json:"code"`
-	Message   string         `json:"message"`
-	Details   map[string]any `json:"details,omitempty"`
-	RequestID string         `json:"request_id"`
-	Timestamp string         `json:"timestamp"`
-}
-
-// ToBody converts the error into the wire format.
-func (e *AppError) ToBody() Body {
-	return Body{
-		Error: BodyInner{
-			Code:      e.Code,
-			Message:   e.Message,
-			Details:   e.Details,
-			RequestID: e.RequestID,
-			Timestamp: e.when().Format(time.RFC3339),
-		},
-	}
-}
-
-// New constructs an AppError.
-func New(code Code, message string) *AppError {
-	return &AppError{Code: code, Message: message}
-}
-
-func Wrap(err error, code Code, message string) *AppError {
-	return &AppError{Code: code, Message: message, Err: err}
-}
-
-func Validation(message string, details map[string]any) *AppError {
-	return &AppError{Code: CodeValidation, Message: message, Details: details}
-}
-
-func NotFound(resource string) *AppError {
-	return &AppError{Code: CodeNotFound, Message: resource + " not found"}
-}
-
-func WithRequestID(e *AppError, id string) *AppError {
-	e.RequestID = id
-	return e
-}
-
-// AsAppError walks the error chain and returns the first *AppError.
-func AsAppError(err error) (*AppError, bool) {
-	var ae *AppError
-	if errors.As(err, &ae) {
-		return ae, true
-	}
-	return nil, false
-}
-
-// Predefined errors per API contract.
-var (
-	ErrNotFound       = NotFound("Resource")
-	ErrUnauthorized   = New(CodeUnauthorized, "Authentication required")
-	ErrForbidden      = New(CodeForbidden, "Insufficient permissions")
-	ErrValidation     = New(CodeValidation, "Invalid request")
-	ErrRateLimit      = New(CodeRateLimit, "Rate limit exceeded")
-	ErrBudgetExceeded = New(CodeBudgetExceeded, "Budget limit exceeded")
-	ErrProviderDown   = New(CodeProviderDown, "LLM provider temporarily unavailable")
+// Validation errors
+const (
+	ErrInvalidBody       ErrorCode = "VAL_001"
+	ErrMissingField      ErrorCode = "VAL_002"
+	ErrInvalidEmail      ErrorCode = "VAL_003"
+	ErrInvalidID         ErrorCode = "VAL_004"
+	ErrPayloadTooLarge   ErrorCode = "VAL_005"
+	ErrInvalidQuery      ErrorCode = "VAL_006"
+	ErrInvalidPagination ErrorCode = "VAL_007"
 )
+
+// Resource errors
+const (
+	ErrNotFound      ErrorCode = "RES_001"
+	ErrAlreadyExists ErrorCode = "RES_002"
+	ErrConflict      ErrorCode = "RES_003"
+	ErrDeleted       ErrorCode = "RES_004"
+)
+
+// Scanner/Engine errors
+const (
+	ErrScanFailed      ErrorCode = "SCAN_001"
+	ErrScanTimeout     ErrorCode = "SCAN_002"
+	ErrScanInputEmpty  ErrorCode = "SCAN_003"
+	ErrUnsupportedLang ErrorCode = "SCAN_004"
+	ErrReviewFailed    ErrorCode = "SCAN_005"
+	ErrNoLLMProvider   ErrorCode = "SCAN_006"
+)
+
+// Skill marketplace errors
+const (
+	ErrSkillNotFound       ErrorCode = "SKILL_001"
+	ErrSkillNotPublished   ErrorCode = "SKILL_002"
+	ErrSkillUploadFailed   ErrorCode = "SKILL_003"
+	ErrSkillScanFailed     ErrorCode = "SKILL_004"
+	ErrSkillVersionInvalid ErrorCode = "SKILL_005"
+	ErrSkillSearchFailed   ErrorCode = "SKILL_006"
+)
+
+// Billing errors
+const (
+	ErrBillingNotConfigured ErrorCode = "BILL_001"
+	ErrCheckoutFailed       ErrorCode = "BILL_002"
+	ErrSubscriptionNotFound ErrorCode = "BILL_003"
+	ErrPaymentFailed        ErrorCode = "BILL_004"
+)
+
+// Infrastructure errors
+const (
+	ErrRateLimited   ErrorCode = "INFRA_001"
+	ErrServiceDown   ErrorCode = "INFRA_002"
+	ErrDBError       ErrorCode = "INFRA_003"
+	ErrCacheError    ErrorCode = "INFRA_004"
+	ErrQueueError    ErrorCode = "INFRA_005"
+	ErrWebhookFailed ErrorCode = "INFRA_006"
+)
+
+// APIError is a structured error response.
+type APIError struct {
+	Code    ErrorCode   `json:"code"`
+	Message string      `json:"message"`
+	Status  int         `json:"-"`
+	Details interface{} `json:"details,omitempty"`
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+}
+
+// HTTPStatus returns the HTTP status code for the error.
+func (e *APIError) HTTPStatus() int {
+	if e.Status > 0 {
+		return e.Status
+	}
+	return errorCodeToStatus(e.Code)
+}
+
+// New creates a new APIError with the given code and message.
+func New(code ErrorCode, message string) *APIError {
+	return &APIError{
+		Code:    code,
+		Message: message,
+		Status:  errorCodeToStatus(code),
+	}
+}
+
+// Newf creates a new APIError with a formatted message.
+func Newf(code ErrorCode, format string, args ...interface{}) *APIError {
+	return &APIError{
+		Code:    code,
+		Message: fmt.Sprintf(format, args...),
+		Status:  errorCodeToStatus(code),
+	}
+}
+
+// WithDetails returns a copy of the error with additional details.
+func (e *APIError) WithDetails(details interface{}) *APIError {
+	return &APIError{
+		Code:    e.Code,
+		Message: e.Message,
+		Status:  e.Status,
+		Details: details,
+	}
+}
+
+// errorCodeToStatus maps error codes to HTTP status codes using explicit map lookup.
+func errorCodeToStatus(code ErrorCode) int {
+	statusMap := map[ErrorCode]int{
+		// Auth — 401
+		ErrMissingAuth:        http.StatusUnauthorized,
+		ErrInvalidCredentials: http.StatusUnauthorized,
+		ErrTokenExpired:       http.StatusUnauthorized,
+		ErrTokenInvalid:       http.StatusUnauthorized,
+		ErrAccountDisabled:    http.StatusUnauthorized,
+		ErrEmailNotVerified:   http.StatusUnauthorized,
+		ErrAPIKeyInvalid:      http.StatusUnauthorized,
+		// Auth — 400
+		ErrHashFailed: http.StatusBadRequest,
+		// Auth — 403
+		ErrInsufficientPerms: http.StatusForbidden,
+		// Auth — 429
+		ErrAccountLocked: http.StatusTooManyRequests,
+		// Auth — 400
+		ErrPasswordTooWeak: http.StatusBadRequest,
+		ErrDuplicateEmail:  http.StatusConflict,
+		// Validation — 400
+		ErrInvalidBody:       http.StatusBadRequest,
+		ErrMissingField:      http.StatusBadRequest,
+		ErrInvalidEmail:      http.StatusBadRequest,
+		ErrInvalidID:         http.StatusBadRequest,
+		ErrPayloadTooLarge:   http.StatusRequestEntityTooLarge,
+		ErrInvalidQuery:      http.StatusBadRequest,
+		ErrInvalidPagination: http.StatusBadRequest,
+		// Resource — 404
+		ErrNotFound: http.StatusNotFound,
+		// Resource — 409
+		ErrAlreadyExists: http.StatusConflict,
+		ErrConflict:      http.StatusConflict,
+		// Resource — 410
+		ErrDeleted: http.StatusGone,
+		// Scanner — 400
+		ErrScanInputEmpty:  http.StatusBadRequest,
+		ErrUnsupportedLang: http.StatusBadRequest,
+		// Scanner — 503
+		ErrNoLLMProvider: http.StatusServiceUnavailable,
+		// Scanner — 500
+		ErrScanFailed:   http.StatusInternalServerError,
+		ErrScanTimeout:  http.StatusGatewayTimeout,
+		ErrReviewFailed: http.StatusInternalServerError,
+		// Skill — 404
+		ErrSkillNotFound:     http.StatusNotFound,
+		ErrSkillNotPublished: http.StatusNotFound,
+		// Skill — 400
+		ErrSkillVersionInvalid: http.StatusBadRequest,
+		// Skill — 500
+		ErrSkillUploadFailed: http.StatusInternalServerError,
+		ErrSkillScanFailed:   http.StatusInternalServerError,
+		ErrSkillSearchFailed: http.StatusInternalServerError,
+		// Billing — 503
+		ErrBillingNotConfigured: http.StatusServiceUnavailable,
+		// Billing — 404
+		ErrSubscriptionNotFound: http.StatusNotFound,
+		// Billing — 400/500
+		ErrCheckoutFailed: http.StatusBadRequest,
+		ErrPaymentFailed:  http.StatusPaymentRequired,
+		// Infrastructure — 429
+		ErrRateLimited: http.StatusTooManyRequests,
+		// Infrastructure — 503
+		ErrServiceDown: http.StatusServiceUnavailable,
+		// Infrastructure — 500
+		ErrDBError:       http.StatusInternalServerError,
+		ErrCacheError:    http.StatusServiceUnavailable,
+		ErrQueueError:    http.StatusInternalServerError,
+		ErrWebhookFailed: http.StatusInternalServerError,
+	}
+
+	if status, ok := statusMap[code]; ok {
+		return status
+	}
+	return http.StatusInternalServerError
+}

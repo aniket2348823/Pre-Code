@@ -12,24 +12,32 @@ RUN go mod download
 COPY . .
 
 # Build static binaries
-RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/vigilagent/vigilagent/cmd/cli.version=prod -X github.com/vigilagent/vigilagent/cmd/cli.commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=prod -X main.commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
     -o /app/vigil-api ./cmd/api
 
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" \
     -o /app/vigil-migrate ./cmd/migrate
 
 # --- Runtime stage ---
-FROM scratch
+FROM alpine:3.19
 
 # Import CA certs for HTTPS
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN apk add --no-cache ca-certificates tzdata wget
 
-# Copy binaries and config
+WORKDIR /app
+
+# Copy binaries, config, and migrations
 COPY --from=builder /app/vigil-api /app/vigil-api
 COPY --from=builder /app/vigil-migrate /app/vigil-migrate
 COPY --from=builder /app/migrations /app/migrations
 COPY --from=builder /app/configs /app/configs
 
 EXPOSE 8080
+
+# Use production config by default
+ENV VIGILAGENT_CONFIG_PATH=/app/configs/config.prod.yaml
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD wget -qO- http://localhost:8080/api/v1/health || exit 1
 
 ENTRYPOINT ["/app/vigil-api"]

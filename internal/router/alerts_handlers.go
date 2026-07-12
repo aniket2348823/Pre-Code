@@ -102,7 +102,7 @@ func (r *Router) getAlertHandler(w http.ResponseWriter, req *http.Request) {
 	alertID := chi.URLParam(req, "alertID")
 	alert, err := r.alerts.FindByID(req.Context(), alertID)
 	if err != nil {
-		response.NotFound(w, err.Error())
+		response.NotFound(w, "alert not found")
 		return
 	}
 	if alert.UserID != claims.UserID {
@@ -122,7 +122,7 @@ func (r *Router) updateAlertHandler(w http.ResponseWriter, req *http.Request) {
 	alertID := chi.URLParam(req, "alertID")
 	alert, err := r.alerts.FindByID(req.Context(), alertID)
 	if err != nil {
-		response.NotFound(w, err.Error())
+		response.NotFound(w, "alert not found")
 		return
 	}
 	if alert.UserID != claims.UserID {
@@ -176,7 +176,7 @@ func (r *Router) deleteAlertHandler(w http.ResponseWriter, req *http.Request) {
 	alertID := chi.URLParam(req, "alertID")
 	alert, err := r.alerts.FindByID(req.Context(), alertID)
 	if err != nil {
-		response.NotFound(w, err.Error())
+		response.NotFound(w, "alert not found")
 		return
 	}
 	if alert.UserID != claims.UserID {
