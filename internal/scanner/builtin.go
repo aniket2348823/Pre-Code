@@ -37,8 +37,16 @@ func isTestFile(filename string) bool {
 	return strings.HasSuffix(filename, "_test.go") ||
 		strings.Contains(filename, "_test.") ||
 		strings.Contains(filename, "/test/") ||
-		strings.Contains(filename, "/tests/") ||
-		strings.Contains(filename, "/testdata/")
+		strings.Contains(filename, "/tests/")
+}
+
+// isTestDataFile returns true if the file is in a testdata directory.
+// Testdata files are fixture/data files that should have all findings
+// fully suppressed (not just downgraded) since they are intentional test inputs.
+func isTestDataFile(filename string) bool {
+	return strings.Contains(filename, "/testdata/") ||
+		strings.HasPrefix(filename, "testdata/") ||
+		strings.Contains(filename, "\\testdata\\")
 }
 
 // isGeneratedFile returns true if the file appears to be generated.

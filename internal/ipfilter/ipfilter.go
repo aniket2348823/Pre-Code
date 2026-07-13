@@ -71,11 +71,13 @@ func (f *Filter) DenyIP(cidr string) error {
 	return nil
 }
 
-// AllowAll clears the allow list and permits all IPs.
+// AllowAll clears all lists and permits all IPs.
 func (f *Filter) AllowAll() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.allowList = nil
+	f.denyList = nil
+	f.denyAll = false
 	f.allowAll = true
 }
 

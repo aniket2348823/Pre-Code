@@ -58,7 +58,7 @@ func newTestRouter() *router.Router {
 	llmRouter.RegisterProvider("openai", &mockProvider{
 		name: "openai",
 		resp: &llm.ChatResponse{
-			Content:      `{"steps": [{"tool":"list_directory","description":"Explore project structure","params":{"path":"."}}]}`,
+			Content:      `Plan created`,
 			InputTokens:  100,
 			OutputTokens: 50,
 			Cost:         0.001,

@@ -19,11 +19,11 @@ type Event struct {
 
 // Streamer manages an SSE connection to a client.
 type Streamer struct {
-	w        io.Writer
-	flusher  http.Flusher
-	mu       sync.Mutex
-	closed   bool
-	eventID  int
+	w       io.Writer
+	flusher http.Flusher
+	mu      sync.Mutex
+	closed  bool
+	eventID int
 }
 
 // NewStreamer creates a new SSE streamer from an HTTP response writer.
@@ -53,16 +53,20 @@ func (s *Streamer) Send(evt Event) error {
 		evt.ID = fmt.Sprintf("%d", s.eventID)
 	}
 
-	// Write event fields
+	// Write event fields directly — the mutex serializes all access.
 	if evt.Event != "" {
 		fmt.Fprintf(s.w, "event: %s\n", evt.Event)
 	}
 	fmt.Fprintf(s.w, "id: %s\n", evt.ID)
 
-	// Marshal data as JSON
-	dataBytes, err := json.Marshal(evt.Data)
-	if err != nil {
-		dataBytes = []byte(fmt.Sprintf("%v", evt.Data))
+	// Marshal data as JSON; fall back to a safe string representation.
+	var dataBytes []byte
+	if evt.Data != nil {
+		if d, err := json.Marshal(evt.Data); err != nil {
+			dataBytes = safeStringify(evt.Data)
+		} else {
+			dataBytes = d
+		}
 	}
 	fmt.Fprintf(s.w, "data: %s\n\n", string(dataBytes))
 
@@ -115,4 +119,19 @@ func (s *Streamer) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
+}
+
+// safeStringify safely converts a value to a byte slice without triggering
+// a stack overflow on circular references. fmt.Sprintf("%v", ...) recurses
+// infinitely on self-referencing maps, so we use a type switch to avoid
+// calling fmt.Sprintf on collection types. json.Marshal already detected
+// the failure, so we return a safe placeholder for those types.
+func safeStringify(v interface{}) []byte {
+	switch v.(type) {
+	case map[string]interface{}, map[interface{}]interface{},
+		[]interface{}:
+		return []byte("null")
+	default:
+		return []byte(fmt.Sprintf("%v", v))
+	}
 }

@@ -188,8 +188,11 @@ func TestResponseFormats(t *testing.T) {
 		}
 
 		result := parseJSON(t, w)
-		if _, ok := result["error"]; !ok {
-			t.Error("expected 'error' field in response")
+		// response.JSON serializes the AppError struct which has "code" and "message" fields
+		if _, ok := result["code"]; !ok {
+			if _, ok := result["error"]; !ok {
+				t.Error("expected 'code' or 'error' field in response")
+			}
 		}
 	})
 
@@ -199,8 +202,10 @@ func TestResponseFormats(t *testing.T) {
 		r.createOrgHandler(w, req)
 
 		result := parseJSON(t, w)
-		if _, ok := result["error"]; !ok {
-			t.Error("expected 'error' field in response")
+		if _, ok := result["code"]; !ok {
+			if _, ok := result["error"]; !ok {
+				t.Error("expected 'code' or 'error' field in response")
+			}
 		}
 	})
 }

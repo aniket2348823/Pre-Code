@@ -59,19 +59,34 @@ func EscapeHTML(input string) string {
 // heuristic for sanitizing user-provided text before display. Use parameterized
 // queries for actual SQL injection prevention.
 func StripSQLInjection(input string) string {
-	dangerous := []string{
-		"--", ";--", "/*", "*/", "@@", "@",
+	// Symbol patterns: match literally (no word boundaries)
+	symbols := []string{"--", ";--", "/*", "*/", "@@", "@"}
+	// Word patterns: use word boundaries to avoid stripping partial words
+	// (e.g., "selection" should not be stripped for containing "select")
+	words := []string{
 		"char", "nchar", "varchar", "nvarchar",
 		"alter", "begin", "cast", "create", "cursor",
 		"declare", "delete", "drop", "end", "exec",
 		"execute", "fetch", "insert", "kill", "select",
 		"sys", "sysobjects", "syscolumns", "table", "update",
 	}
+	// lower is computed once from the original input for existence checks only.
+	// After symbol stripping, input may change, but we still check against original lower
+	// to ensure we attempt removal of all patterns that were present.
 	lower := strings.ToLower(input)
-	for _, d := range dangerous {
+	// Strip symbol patterns literally (order does not affect correctness;
+	// longer patterns like ;-- and @@ work regardless of ordering since
+	// we check existence against the original lowercased input)
+	for _, d := range symbols {
 		if strings.Contains(lower, d) {
-			// Remove the dangerous pattern
 			reg := regexp.MustCompile("(?i)" + regexp.QuoteMeta(d))
+			input = reg.ReplaceAllString(input, "")
+		}
+	}
+	// Strip word patterns with word boundaries
+	for _, d := range words {
+		if strings.Contains(lower, d) {
+			reg := regexp.MustCompile("(?i)\\b" + regexp.QuoteMeta(d) + "\\b")
 			input = reg.ReplaceAllString(input, "")
 		}
 	}
@@ -161,5 +176,5 @@ func ValidateAPIKey(key, prefix string) bool {
 		return false
 	}
 	body := strings.TrimPrefix(key, prefix+"_")
-	return len(body) >= 32 && len(body) <= 128
+	return len(body) >= 32 && len(body) <= 256
 }

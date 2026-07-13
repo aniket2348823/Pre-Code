@@ -75,7 +75,7 @@ func TestScanDetectsVuln(t *testing.T) {
 
 func TestScanTooLarge(t *testing.T) {
 	r := scanTestRouter()
-	huge := strings.Repeat("a", maxScanBytes+1024)
+	huge := strings.Repeat("a", maxRequestBodySize+1024)
 	req := reqWithClaims("POST", "/api/v1/scan", map[string]string{"code": huge}, testClaims)
 	w := httptest.NewRecorder()
 	r.scanHandler(w, req)

@@ -44,6 +44,9 @@ func WithAttrs(logger *slog.Logger, attrs ...any) *slog.Logger {
 
 // FromContext extracts a logger from context, or returns a default one.
 func FromContext(ctx context.Context) *slog.Logger {
+	if ctx == nil {
+		return New("default")
+	}
 	logger, ok := ctx.Value(loggerKey).(*slog.Logger)
 	if !ok || logger == nil {
 		return New("default")

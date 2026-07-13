@@ -103,6 +103,11 @@ func (e *Engine) mergeScoreAndFilter(raw []Finding, filename string) []Finding {
 		f := byFP[fp]
 		f.Confidence = ConfidenceWithFile(f.Severity, f.Analyzers, f.Filename, f.Snippet)
 
+		// Fully suppress findings in testdata directories — these are fixture files.
+		if isTestDataFile(f.Filename) {
+			continue
+		}
+
 		// Apply suppression rules.
 		if e.suppressTestFP && isTestFile(f.Filename) {
 			f = suppressTestFP(f)

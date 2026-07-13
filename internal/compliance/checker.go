@@ -154,9 +154,9 @@ func builtinRules() []entityRule {
 		// Auth triggers SOC2 + GDPR
 		{
 			entity:   "auth",
-			keywords: []string{"authentication", "login", "sign in", "sign-in", "auth service", "identity provider"},
+			keywords: []string{"authentication", "authenticate", "login", "sign in", "sign-in", "auth service", "identity provider"},
 			excludes: []string{"authorization", "oauth client"}, // exclude authz-only references
-			minScore: 0.15,
+			minScore: 0.13,
 			controls: []Control{
 				{ID: "soc2_access", Framework: FrameworkSOC2, Title: "SOC2: Logical access controls", Severity: scanner.SeverityHigh, Description: "Logical access controls must be in place per SOC2 CC6.1."},
 				{ID: "soc2_mfa", Framework: FrameworkSOC2, Title: "SOC2: Multi-factor authentication", Severity: scanner.SeverityHigh, Description: "MFA must be available for sensitive access per SOC2 CC6.1."},

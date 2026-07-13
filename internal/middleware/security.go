@@ -3,7 +3,6 @@ package middleware
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"html"
 	"net/http"
 	"regexp"
 	"strings"
@@ -13,9 +12,9 @@ import (
 // --- Input Sanitization ---
 
 var (
-	sqlInjectionPattern = regexp.MustCompile(`(?i)(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE|UNION|DECLARE|CAST|CONVERT)\b\s)`)
-	xssPattern          = regexp.MustCompile(`(?i)(<script|javascript:|on\w+\s*=|<iframe|<object|<embed|<applet)`)
-	pathTraversalPattern = regexp.MustCompile(`(\.\.\/|\.\\.\\|%2e%2e%2f|%2e%2e\/)`)
+	sqlInjectionPattern = regexp.MustCompile(`(?i)(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE|UNION|DECLARE|CAST|CONVERT|OR)\b\s)`)
+	xssPattern          = regexp.MustCompile(`(?i)(<script|<\/script|script\s*>|javascript:|on\w+\s*=|<iframe|<object|<embed|<applet)`)
+	pathTraversalPattern = regexp.MustCompile(`(\.\.\/|\.\\.\\|%2e%2e%2f|%2e%2e\/|%2e%2e%5c)`)
 )
 
 // SanitizeInput sanitizes user input to prevent injection attacks.
@@ -23,7 +22,6 @@ func SanitizeInput(input string) string {
 	if input == "" {
 		return input
 	}
-	input = html.EscapeString(input)
 	input = strings.TrimSpace(input)
 	return input
 }
@@ -52,7 +50,12 @@ func DetectXSS(input string) bool {
 // SanitizeMiddleware returns middleware that sanitizes common injection patterns.
 func SanitizeMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Use RawPath to detect encoded attacks that Go's URL decoding has already
+		// resolved in r.URL.Path. This catches payloads like %2e%2e%2f or %2e%2e%5c.
 		path := r.URL.Path
+		if r.URL.RawPath != "" {
+			path = r.URL.RawPath
+		}
 		if pathTraversalPattern.MatchString(path) {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return

@@ -95,8 +95,20 @@ func (r Rule) Validate(value interface{}, vr *ValidationResult) {
 // ValidateEmail checks if a string is a valid email address.
 func ValidateEmail(email string) error {
 	email = strings.TrimSpace(email)
-	if !strings.Contains(email, "@") || !strings.Contains(email, ".") {
+	parts := strings.SplitN(email, "@", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return fmt.Errorf("invalid email address")
+	}
+	domain := parts[1]
+	// Domain must have at least one dot, no leading/trailing dots, no empty labels
+	domainParts := strings.Split(domain, ".")
+	if len(domainParts) < 2 {
+		return fmt.Errorf("invalid email address")
+	}
+	for _, dp := range domainParts {
+		if dp == "" {
+			return fmt.Errorf("invalid email address")
+		}
 	}
 	return nil
 }

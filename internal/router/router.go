@@ -627,8 +627,7 @@ func (r *Router) loginHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) refreshTokenHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		apiErr := apperrors.New(apperrors.ErrMissingAuth, "missing authentication")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 
@@ -645,8 +644,7 @@ func (r *Router) refreshTokenHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) currentUserHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		apiErr := apperrors.New(apperrors.ErrMissingAuth, "missing authentication")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 
@@ -663,8 +661,7 @@ func (r *Router) currentUserHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) updateProfileHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		apiErr := apperrors.New(apperrors.ErrMissingAuth, "missing authentication")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	var input struct {
@@ -741,8 +738,7 @@ func (r *Router) createOrgHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) listOrgsHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		apiErr := apperrors.New(apperrors.ErrMissingAuth, "missing authentication")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	orgs, err := r.orgs.ListByUser(req.Context(), claims.UserID)
@@ -760,7 +756,7 @@ func (r *Router) listOrgsHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) getOrgHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	orgID := chi.URLParam(req, "orgID")
@@ -775,7 +771,7 @@ func (r *Router) getOrgHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) updateOrgHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	orgID := chi.URLParam(req, "orgID")
@@ -810,7 +806,7 @@ func (r *Router) updateOrgHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) deleteOrgHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	orgID := chi.URLParam(req, "orgID")
@@ -834,8 +830,7 @@ func (r *Router) deleteOrgHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) createProjectHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		apiErr := apperrors.New(apperrors.ErrMissingAuth, "missing authentication")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	var input struct {
@@ -883,8 +878,7 @@ func (r *Router) createProjectHandler(w http.ResponseWriter, req *http.Request) 
 func (r *Router) listProjectsHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		apiErr := apperrors.New(apperrors.ErrMissingAuth, "missing authentication")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	orgID := req.URL.Query().Get("org_id")
@@ -914,7 +908,7 @@ func (r *Router) listProjectsHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) getProjectHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	projectID := chi.URLParam(req, "projectID")
@@ -929,7 +923,7 @@ func (r *Router) getProjectHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) updateProjectHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	projectID := chi.URLParam(req, "projectID")
@@ -964,7 +958,7 @@ func (r *Router) updateProjectHandler(w http.ResponseWriter, req *http.Request) 
 func (r *Router) deleteProjectHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	projectID := chi.URLParam(req, "projectID")
@@ -1624,9 +1618,7 @@ func (r *Router) adminMiddleware(next http.Handler) http.Handler {
 func (r *Router) authRateLimitMiddleware(next http.Handler) http.Handler {
 	if r.authRL == nil {
 		slog.Warn("auth rate limiting disabled: Redis-backed limiter not configured")
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			response.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "rate limiting not available"})
-		})
+		return next // pass through when no rate limiter configured
 	}
 	return r.authRL.Middleware(func(req *http.Request) string {
 		return mw.RateLimitByIPKey(req)

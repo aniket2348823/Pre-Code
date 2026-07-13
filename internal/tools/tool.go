@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -32,6 +33,7 @@ type ToolResult struct {
 
 // ToolRegistry manages available tools.
 type ToolRegistry struct {
+	mu    sync.RWMutex
 	tools map[string]Tool
 }
 
@@ -44,17 +46,23 @@ func NewToolRegistry() *ToolRegistry {
 
 // Register adds a tool to the registry.
 func (r *ToolRegistry) Register(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tools[tool.Name()] = tool
 }
 
 // Get retrieves a tool by name.
 func (r *ToolRegistry) Get(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	tool, ok := r.tools[name]
 	return tool, ok
 }
 
 // List returns all registered tools.
 func (r *ToolRegistry) List() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	tools := make([]Tool, 0, len(r.tools))
 	for _, tool := range r.tools {
 		tools = append(tools, tool)
@@ -64,6 +72,8 @@ func (r *ToolRegistry) List() []Tool {
 
 // ListDefs returns tool definitions for LLM function calling.
 func (r *ToolRegistry) ListDefs() []ToolDef {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	defs := make([]ToolDef, 0, len(r.tools))
 	for _, tool := range r.tools {
 		defs = append(defs, ToolDef{

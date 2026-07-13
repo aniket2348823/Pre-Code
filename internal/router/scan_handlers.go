@@ -3,6 +3,7 @@ package router
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/scanner"
@@ -19,12 +20,19 @@ func (r *Router) scanHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Enforce body size limit directly in the handler for defense-in-depth.
+	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodySize)
+
 	var input struct {
 		Language string `json:"language"`
 		Code     string `json:"code"`
 		Filename string `json:"filename"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			response.JSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "payload too large"})
+			return
+		}
 		response.BadRequest(w, "invalid request body")
 		return
 	}
