@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigilagent-config
+  namespace: vigilagent
+data:
+  VIGILAGENT_SERVER_PORT: "8080"
+  VIGILAGENT_SERVER_ENV: "production"
+  VIGILAGENT_LOG_LEVEL: "info"
+  VIGILAGENT_LLM_DEFAULT_MODEL: "claude-sonnet-4-20250514"
+  VIGILAGENT_LLM_BUDGET_PER_TASK: "1.00"
+  VIGILAGENT_CORS_ALLOWED_ORIGINS: "https://app.vigilagent.com"
+  VIGILAGENT_RATE_LIMIT_PER_MINUTE: "100"

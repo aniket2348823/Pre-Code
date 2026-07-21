@@ -1,0 +1,1168 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — Comprehensive Risk Register
+Version: 3.0 | Date: June 2026 | Status: Final Scope: All risks across the 12 optimized project
+documents, enriched with real-world industry research (2024-2026)
+1. Risk Register Overview
+1.1 Purpose
+This register consolidates every risk identified across the 12 VigilAgent documents, enriched with real-
+world incidents, CVEs, and industry lessons from 2024-2026. It serves as the single reference for risk
+management throughout the project lifecycle.
+1.2 Risk Rating Scale
+Rating Probability Impact
+Critical > 80% likely Catastrophic — project failure, data loss, legal liability
+High 60-80% likely Severe — major delays, significant cost, reputation damage
+Medium 30-60% likely Moderate — delays, workarounds needed
+Low < 30% likely Minor — inconveniences, easy fixes
+Risk Score = Probability × Impact (1-5 scale each, max 25)
+Score Range Priority Action Required
+15-25 P0 Immediate mitigation required — blocks Sprint 2
+8-14 P1 Mitigate before Sprint 3
+4-7 P2 Monitor and plan mitigation
+1-3 P3 Accept and monitor
+
+--- PAGE 2 ---
+
+1.3 Document Sources
+Doc Abbreviation Primary Risk Areas
+00 Master Pricing, GTM, competitive, hiring
+01 PRD Product-market fit, adoption, compliance
+02 Architecture Infrastructure, scalability, security, observability
+03 Schema Data integrity, migration, scaling, retention
+04 API Contract API design, rate limiting, authentication
+05 Test Plan Test coverage, chaos engineering, security testing
+06 LLM Strategy Provider lock-in, routing, failover, costs
+07 Token Cost Cost optimization, caching, budget management
+08 Skills Marketplace Quality control, supply chain, revenue
+09 Go Build Guide Build system, dependencies, CI/CD
+10 Database Strategy PostgreSQL, Redis, NATS, backup/recovery
+11 Continuation Session persistence, recovery, cost
+2. LLM Provider Risks (Deep Analysis)
+2.1 R01 — LLM API Price Increases
+Field Value
+ID R01
+Source Master (00), PRD (01), Token Cost (07)
+Probability High (4)
+Impact High (4)
+Score 16 — P0
+Owner CTO
+Real-World Context: In June 2026, GitHub joined Cursor and Windsurf in retiring "unlimited"
+Premium requests in favor of token-based credit systems. Companies reported bills increasing 20x as
+agents were given recursive, long-running tasks. The "unlimited flat-rate" era for coding agents has
+ended.
+Detailed Mitigation:
+1. Multi-provider routing — Never depend on one provider; implement 4+ providers (Anthropic,
+OpenAI, Google, DeepSeek, Ollama)
+
+--- PAGE 3 ---
+
+2. Local model fallback — Ollama for simple tasks (formatting, renaming) eliminates API costs
+entirely
+3. Aggressive caching — Prompt caching (40-80% savings on input tokens), semantic caching (20-
+60% on repeated queries)
+4. Batch processing — 50% discount on non-urgent tasks via provider batch APIs
+5. Model routing — Route simple tasks to cheap models (GPT-4o-mini: $0.15/1M input), complex to
+powerful
+6. Budget hard-stops — Per-user, per-project, per-organization budget limits that stop execution
+7. Monthly pricing review — Track provider pricing changes; maintain cost projection model
+Monitoring:
+Track cost-per-task weekly (target: < $0.50)
+Alert on > 2x hourly average cost spike
+Monthly pricing review against provider announcements
+2.2 R02 — LLM API Availability / Downtime
+Field Value
+ID R02
+Source PRD (01), LLM Strategy (06), Architecture (02)
+Probability High (4)
+Impact High (4)
+Score 16 — P0
+Owner CTO
+Real-World Context: In early 2026, concurrent outages in major inference APIs (powering Cursor,
+Copilot, and other tools) caused widespread developer paralysis. Unlike local IDE outages, agentic
+outages prevent automated PR generation, codebase indexing, and complex refactoring — effectively
+halting DevOps pipelines.
+Detailed Mitigation:
+1. 4-provider failover chain — Primary →  Fallback 1 →  Fallback 2 →  Fallback 3 →  Cache →  Queue
+2. Circuit breaker pattern — Auto-open after 3 consecutive failures; half-open after 30s timeout
+3. Max 2s failover time — Health checks every 10s; mark unhealthy after 3 consecutive failures
+4. Cache last successful responses — Redis-backed; serve cached on all-provider failure
+5. Queue for retry — NATS JetStream dead letter queue for tasks that fail all providers
+6. Graceful degradation — If no providers available, queue task and notify user; never fail silently
+7. Provider health dashboard — Real-time status of all providers in Grafana
+Monitoring:
+Provider error rate per hour (alert > 5%)
+
+--- PAGE 4 ---
+
+Failover frequency (should be < 1% of requests)
+Mean time to recovery per provider
+2.3 R03 — LLM Quality Regression
+Field Value
+ID R03
+Source LLM Strategy (06), PRD (01)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner CTO
+Real-World Context: Security researchers reported that approximately 25% of startup apps created in
+late 2025/early 2026 contained high-risk security flaws (SQL injection, hardcoded secrets, insecure
+authentication) because AI models were trained on legacy, unvetted public code repositories. Quality
+varies significantly by provider and model version.
+Detailed Mitigation:
+1. A/B testing framework — Compare model outputs on benchmark tasks; track success rate per
+model
+2. Automated quality checks — Run linter, type checker, security scanner on all generated code
+3. Regression detection — When switching models, run regression suite; compare before/after
+4. Task success rate tracking — Per-model, per-complexity-class success metrics
+5. Model performance table — Update monthly with real production data (not just benchmarks)
+6. Human-in-the-loop for critical tasks — Security fixes and architecture changes always get
+human review
+Monitoring:
+Task success rate per model (alert < 70%)
+Code quality score per model (lint errors, type errors)
+User satisfaction ratings per model
+
+--- PAGE 5 ---
+
+2.4 R04 — LLM Rate Limiting
+Field Value
+ID R04
+Source LLM Strategy (06)
+Probability High (4)
+Impact Medium (3)
+Score 12 — P1
+Owner CTO
+Detailed Mitigation:
+1. Distribute load across providers — Never exceed 80% of any single provider's rate limit
+2. Request queuing — Buffer requests when approaching limits; serve FIFO
+3. Batch API — 50% discount + higher rate limits for non-urgent tasks
+4. Rate limit headers — Parse X-RateLimit-*  headers; proactive throttling
+5. Pre-warm connections — Maintain persistent connections to reduce handshake overhead
+6. Provider-specific optimizations — Anthropic prompt caching reduces API calls; OpenAI
+structured outputs reduce retries
+2.5 R05 — Context Window Limitations
+Field Value
+ID R05
+Source LLM Strategy (06)
+Probability Medium (3)
+Impact Medium (3)
+Score 9 — P1
+Owner CTO
+Detailed Mitigation:
+1. Context compression — LLM-based summarization when context exceeds 80% of window
+2. Sliding window — Keep system prompt + last 10 messages; summarize older
+3. Prompt caching — Cache static content (system prompt, project conventions)
+4. Semantic caching — Redis vector search for similar past queries
+5. File pruning — Only include relevant files (not entire codebase) in context
+6. Token budget per task — Hard limit; stop when exceeded
+
+--- PAGE 6 ---
+
+2.6 R06 — Prompt Injection Attacks
+Field Value
+ID R06
+Source LLM Strategy (06), Test Plan (05)
+Probability Medium (3)
+Impact Critical (5)
+Score 15 — P0
+Owner CTO
+Real-World Context: CVE-2025-53773: A critical vulnerability (CVSS 9.6) involving hidden prompt
+injection in pull request descriptions that enabled Remote Code Execution (RCE) via GitHub Copilot.
+Attackers are using "Indirect Prompt Injection" by tricking agents into ingesting malicious files, enabling
+code exfiltration and lateral movement within cloud environments.
+Detailed Mitigation:
+1. Input sanitization — Strip or escape special tokens from user prompts
+2. Sandboxed execution — gVisor isolation prevents any code execution from escaping
+3. HITL gates — All destructive actions (file writes, git operations, deployments) require human
+approval
+4. Security scanning skill — Automated detection of injection patterns in prompts and file contents
+5. Rate limiting — Limit prompt frequency per user to prevent brute-force injection
+6. Zero-trust for agents — Treat AI agents as "unprivileged insiders"; least-privilege access
+7. Audit logging — Log all prompts and agent decisions for forensic analysis
+Monitoring:
+Flag prompts containing injection keywords
+Monitor for unusual agent behavior (unexpected file access, network calls)
+Alert on any agent action outside expected tool set
+2.7 R30 — LLM Quality Plateau
+Field Value
+ID R30
+Source LLM Strategy (06), PRD (01)
+Probability High (4)
+Impact Minimal (1)
+Score 4 — P2
+Owner CTO
+
+--- PAGE 7 ---
+
+Real-World Context: LLM performance improvements are slowing as models approach human-level
+benchmarks on coding tasks. The gap between top models (Claude, GPT-4, Gemini) is narrowing, making
+it harder to achieve significant quality gains through model switching alone.
+Detailed Mitigation:
+1. Multi-model approach — Use different models for different tasks; no single model is best at
+everything
+2. Fine-tuning on domain data — Train on VigilAgent-specific patterns when possible
+3. Ensemble approaches — Combine outputs from multiple models for critical decisions
+4. Focus on prompt engineering — Often yields better results than model switching
+5. Monitor benchmark performance — Track task success rates; switch models if plateau detected
+3. Infrastructure Risks (Deep Analysis)
+3.1 R07 — PostgreSQL Failure
+Field Value
+ID R07
+Source Architecture (02), Database Strategy (10)
+Probability Low (2)
+Impact Critical (5)
+Score 10 — P1
+Owner Founding Eng
+Detailed Mitigation:
+1. Managed PostgreSQL — RDS/Neon handles backups, patching, HA
+2. WAL archiving — Point-in-time recovery to any moment in last 30 days
+3. Automated snapshots — Every 6 hours; retained for 30 days
+4. Read replicas — Promote to primary on failure; RTO < 5 min
+5. Connection pooling — pgxpool with MaxConns=25; prevents exhaustion
+6. Regular restore tests — Monthly test restores to verify backup integrity
+
+--- PAGE 8 ---
+
+3.2 R08 — Redis Failure
+Field Value
+ID R08
+Source Architecture (02), Database Strategy (10)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner Founding Eng
+Detailed Mitigation:
+1. Redis Cluster — 3-node cluster for HA
+2. RDB + AOF persistence — Dual persistence for durability
+3. Graceful degradation — Database-only mode when Redis is down
+4. Cache rebuild — Rebuild from DB on Redis recovery
+5. Memory monitoring — Alert at 80% memory usage
+6. RTO < 2 min, RPO < 15 min
+3.3 R09 — NATS JetStream Failure
+Field Value
+ID R09
+Source Architecture (02)
+Probability Low (2)
+Impact High (4)
+Score 8 — P1
+Owner Founding Eng
+Detailed Mitigation:
+1. JetStream persistence — Real-time message persistence
+2. Dead letter queues — Capture failed messages for retry
+3. Fallback to HTTP polling — If NATS unavailable, poll for tasks
+4. RTO < 1 min
+
+--- PAGE 9 ---
+
+3.4 R10 — S3/MinIO Storage Failure
+Field Value
+ID R10
+Source Architecture (02)
+Probability Low (2)
+Impact Medium (3)
+Score 6 — P2
+Owner Founding Eng
+Detailed Mitigation:
+1. Cross-region replication
+2. Versioning enabled
+3. Lifecycle policies for cost management
+3.5 R11 — Region-Wide Outage
+Field Value
+ID R11
+Source Architecture (02)
+Probability Low (2)
+Impact Critical (5)
+Score 10 — P1
+Owner CTO
+Detailed Mitigation:
+1. Multi-region deployment (Phase 3)
+2. DNS failover — Route53 health checks
+3. RTO < 30 min, RPO < 1 hour
+4. CDN for static assets — CloudFront/Cloudflare
+
+--- PAGE 10 ---
+
+3.6 R12 — Container Runtime (gVisor) Issues
+Field Value
+ID R12
+Source Architecture (02), PRD (01)
+Probability Medium (3)
+Impact Medium (3)
+Score 9 — P1
+Owner CTO
+Real-World Context: CVE-2024-0132 / CVE-2025-23359: Researchers (Wiz) discovered a TOC/TOU
+vulnerability in the NVIDIA Container Toolkit that can trick the toolkit into mounting the host's
+filesystem root into the container. While gVisor is designed for stronger isolation, this vulnerability
+impacts gVisor deployments because the toolkit executes operations from the host before the container's
+runtime security boundaries are fully enforced.
+Detailed Mitigation:
+1. Test gVisor compatibility early (Week 2) — Run sample skill execution
+2. Fallback to process isolation — seccomp + AppArmor with resource limits
+3. Update NVIDIA Container Toolkit — If GPU workloads are needed (future)
+4. Layered security — gVisor + VM-based sandboxing for multi-tenant workloads
+5. Document gVisor-specific issues — Create known-issues list
+3.7 R13 — Docker Image Vulnerability
+Field Value
+ID R13
+Source Go Build Guide (09)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner CTO
+Detailed Mitigation:
+1. go vuln check  — Automated dependency scanning in CI
+2. Container scanning — Trivy/Snyk in CI pipeline
+3. Minimal base images — Alpine-based; no unnecessary packages
+4. Non-root user — All containers run as non-root
+5. Regular updates — Weekly dependency updates; monthly base image rebuilds
+
+--- PAGE 11 ---
+
+6. Read-only filesystem — Except for explicitly mounted volumes
+4. Data & Schema Risks (Deep Analysis)
+4.1 R14 — Database Migration Failure
+Field Value
+ID R14
+Source Schema (03)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner Founding Eng
+Detailed Mitigation:
+1. Zero-downtime migrations — CREATE TABLE  without locks; ALTER TABLE  with NOT VALID
+2. Every migration has a down migration — Rollback safety
+3. Test against copy of production data — Staging environment mirror
+4. Background jobs for backfills — Never block migrations with data transforms
+5. Migration review process — CTO reviews all migrations before merge
+4.2 R15 — Data Corruption
+Field Value
+ID R15
+Source Database Strategy (10)
+Probability Low (2)
+Impact Critical (5)
+Score 10 — P1
+Owner Founding Eng
+Detailed Mitigation:
+1. WAL archiving — Point-in-time recovery
+2. Checksums on backups — Verify integrity
+3. Regular restore tests — Monthly
+
+--- PAGE 12 ---
+
+4. Append-only audit logs — Immutable
+5. Soft deletes — Never hard delete
+4.3 R16 — Embedding Dimension Mismatch
+Field Value
+ID R16
+Source Schema (03), LLM Strategy (06)
+Probability Low (2)
+Impact Severe (4)
+Score 8 — P1
+Owner CTO
+Real-World Context: Embedding dimensions vary by model (Ollama: 384, OpenAI: 1536, Anthropic:
+1536). Using the wrong dimension causes silent failures where vectors are stored but never match
+queries. This is particularly dangerous because the error isn't caught until runtime.
+Detailed Mitigation:
+1. Dimension validation — Check embedding dimensions on first use; reject mismatches
+2. Migration scripts — Handle dimension changes with zero-downtime migrations
+3. Model compatibility matrix — Document which models work with which dimensions
+4. Test with all providers — Verify embedding compatibility in integration tests
+5. Monitoring — Alert on embedding dimension changes
+4.4 R17 — pgvector Performance at Scale
+Field Value
+ID R17
+Source Schema (03), Database Strategy (10)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner CTO
+Real-World Context:
+The "10 Million Threshold": pgvector is highly performant under 10M vectors. Beyond that,
+dedicated vector databases (Pinecone, Weaviate) become preferable.
+
+--- PAGE 13 ---
+
+pgvectorscale achieves ~470 QPS at 99% recall on 50M vectors, but is NOT available on AWS RDS.
+HNSW indexes are memory-hungry — Building on millions of rows can consume tens of GB of
+RAM, starving the database.
+Write contention — Heavy concurrent inserts with large HNSW indexes cause lock contention.
+"Effective" filtering — Earlier versions had "overfiltering" issues; pgvector 0.8.0+ introduced
+Iterative Scans to fix this.
+Detailed Mitigation:
+1. HNSW indexes — Not IVFFlat; better for production workloads
+2. Quantization — Use halfvec  (16-bit) or binary quantization to reduce storage 16-32x
+3. Benchmark with 1M+ vectors — Before launch; measure p95 query latency
+4. Monitor index build memory — Set maintenance_work_mem  carefully; too high = OOM, too
+slow = long builds
+5. REINDEX CONCURRENTLY  — Avoid downtime during index rebuilds
+6. ANALYZE  regularly — Prevent query plan drift
+7. Partition high-volume tables — Time-based partitioning for tasks, auditlog, usagerecords
+8. Plan for pgvectorscale — If using RDS, plan migration to self-managed Postgres when exceeding
+10M vectors
+9. Hybrid search — Build Reciprocal Rank Fusion in application layer; pgvector doesn't support this
+natively
+Monitoring:
+pgvector query latency p95 (target: < 100ms; alert: > 500ms)
+Index size vs. available RAM
+Write contention (locks held > 100ms)
+4.5 R18 — Memory System Storage Growth
+Field Value
+ID R18
+Source Schema (03)
+Probability High (4)
+Impact Medium (3)
+Score 12 — P1
+Owner CTO
+Detailed Mitigation:
+1. Importance-based decay — Memory episodes with low importance expire
+2. Configurable TTL — Per-user retention settings
+3. Compaction/summarization — LLM-based summarization of old sessions
+
+--- PAGE 14 ---
+
+4. Monitor storage costs — Alert when approaching budget
+5. Archival strategy — Move cold data to S3 after 90 days
+5. Security Risks (Deep Analysis)
+5.1 R19 — Agent Generates Insecure Code
+Field Value
+ID R19
+Source Master (00), PRD (01)
+Probability Medium (3)
+Impact Critical (5)
+Score 15 — P0
+Owner CTO
+Real-World Context: Approximately 25% of startup apps created in late 2025/early 2026 contained
+high-risk security flaws (SQL injection, hardcoded secrets, insecure authentication) because AI models
+were trained on legacy, unvetted public code repositories. Organizations have moved to "AI-augmented
+security pipelines" with automated SAST/SCA scanning specifically configured to detect AI-hallucinated
+insecure patterns.
+Detailed Mitigation:
+1. Security scanning skill — Automated OWASP pattern detection on all generated code
+2. Sandboxed execution — gVisor isolation for all skill runs
+3. HITL gates — All code writes require human approval
+4. Code provenance tracking — Record which model generated what code
+5. Automated security review — SAST/SCA scanning before code reaches main branch
+6. Security test cases — SQL injection, XSS, sandbox escape tests in test suite
+7. Dependency scanning — go vuln check  on every PR
+Monitoring:
+Security scan results per task
+Vulnerability count in generated code (target: 0 critical, 0 high)
+Time-to-fix for security findings
+
+--- PAGE 15 ---
+
+5.2 R20 — Sandbox Escape
+Field Value
+ID R20
+Source Architecture (02), Test Plan (05)
+Probability Low (2)
+Impact Critical (5)
+Score 10 — P1
+Owner CTO
+Detailed Mitigation:
+1. gVisor kernel-level isolation — syscall filtering
+2. Resource limits — CPU: 2 cores, Memory: 2GB, Disk: 10GB
+3. Filesystem isolation — Read-only base; writable only for project directory
+4. Network policies — Allowlist: api.openai.com, api.anthropic.com,
+generativelanguage.googleapis.com
+5. Time limits — 5 minutes max execution
+6. Security tests — Test /etc/passwd  access, network escape, filesystem escape
+7. Fallback to process isolation — seccomp + AppArmor if gVisor unavailable
+5.3 R21 — SQL Injection
+Field Value
+ID R21
+Source API Contract (04), Test Plan (05)
+Probability Low (2)
+Impact Critical (5)
+Score 10 — P1
+Owner CTO
+Detailed Mitigation:
+1. Parameterized queries — pgx uses $1, $2  placeholders; never string concatenation
+2. Input validation — Strict schema validation on all endpoints
+3. SQL injection test cases — In security test suite (see Test Plan doc)
+4. ORM-level protection — pgx doesn't use ORM; manual parameterization required
+
+--- PAGE 16 ---
+
+5.4 R22 — XSS in API Responses
+Field Value
+ID R22
+Source API Contract (04), Test Plan (05)
+Probability Possible (3)
+Impact Minor (2)
+Score 6 — P2
+Owner CTO
+Real-World Context: JSON-only APIs have minimal XSS attack surface, but responses containing
+user-generated content (like code snippets, comments, or skill descriptions) could still be vulnerable if
+rendered in a browser without proper escaping.
+Detailed Mitigation:
+1. Content-Type enforcement — Always return application/json  with charset=utf-8
+2. Output encoding — HTML-encode any user-generated content in JSON responses
+3. CSP headers — Content-Security-Policy for web dashboard
+4. Input sanitization — Strip HTML tags from user-generated content
+5. Security scanning — Include XSS test cases in security test suite
+5.5 R23 — API Key / Secret Exposure
+Field Value
+ID R23
+Source Architecture (02), Go Build Guide (09)
+Probability Medium (3)
+Impact Critical (5)
+Score 15 — P0
+Owner CTO
+Real-World Context: CVE-2025-30066 (tj-actions/changed-files): Attackers compromised the widely
+used GitHub Action tj-actions/changed-files  by injecting malicious code that forced CI/CD runners
+to dump memory, exposing project secrets (API keys, authentication tokens). Even "trusted" and popular
+third-party CI/CD actions are high-value targets.
+Detailed Mitigation:
+1. HashiCorp Vault / AWS Secrets Manager — Never store secrets in code or env files
+2. Never log API keys — Redact in all logging middleware
+
+--- PAGE 17 ---
+
+3. Environment variable injection — Secrets injected at runtime, not build time
+4. Key rotation policy — Rotate API keys quarterly
+5. Audit logging of key usage — Track which key accessed what
+6. Pin GitHub Actions to SHA-256 — Never use @latest  or @main
+7. Monitor CI/CD runners — Alert on unexpected outbound connections
+5.6 R24 — Unauthorized Data Access
+Field Value
+ID R24
+Source Architecture (02), API Contract (04)
+Probability Medium (3)
+Impact Critical (5)
+Score 15 — P0
+Owner CTO
+Detailed Mitigation:
+1. RBAC with 4 roles — viewer, developer, admin, super_admin
+2. JWT with short expiry — 1 hour + refresh tokens
+3. API key scoping — Limited to specific endpoints/projects
+4. Rate limiting per user — Prevent brute-force
+5. Audit trail for all access — Immutable append-only log
+6. Row-level security — Users can only access their own data
+5.7 R25 — Marketplace Supply Chain Attack
+Field Value
+ID R25
+Source Skills Marketplace (08)
+Probability Medium (3)
+Impact Critical (5)
+Score 15 — P0
+Owner CTO
+Real-World Context: The integration of third-party plugins and MCP servers has created "Agentic
+Supply Chain Compromise." Maliciously crafted plugins or poisoned training data in RAG pipelines
+
+--- PAGE 18 ---
+
+perform "Indirect Prompt Injection," tricking agents into exfiltrating private codebases or performing
+lateral movement within cloud environments.
+Detailed Mitigation:
+1. Automated security scanning — On every skill publish
+2. Checksum verification — SHA-256 on install; verify integrity
+3. Sandboxed execution — Skills run in gVisor with limited permissions
+4. Community ratings and moderation — Report abuse mechanism
+5. Human curation — Verified skills get manual review
+6. Dependency validation — Scan skill dependencies before publish
+7. Zero-trust for agents — Least-privilege access; deny network/DB writes unless explicitly
+authorized
+6. Go Application Security Risks (Deep Analysis)
+6.1 R46 — Go cgo  RCE (CVE-2025-61732)
+Field Value
+ID R46
+Source Go Build Guide (09) — NEW
+Probability Low (2)
+Impact Critical (5)
+Score 10 — P1
+Owner CTO
+Real-World Context: CVE-2025-61732: A critical code injection vulnerability affecting Go's cgo
+tooling. A "parser differential" allows malicious code to be smuggled within what appears as a comment
+in a Go file but is interpreted as executable code when passed to the C compiler.
+Detailed Mitigation:
+1. Set CGO_ENABLED=0  — If C interop is not required (recommended for VigilAgent)
+2. Update Go version — Patched in latest Go release
+3. Dependency scanning — go vuln check  catches known vulnerabilities
+4. No C dependencies — VigilAgent's stack is pure Go; minimize cgo usage
+
+--- PAGE 19 ---
+
+6.2 R47 — Go database/sql  Race Condition (CVE-2025-47907)
+Field Value
+ID R47
+Source Go Build Guide (09) — NEW
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner CTO
+Real-World Context: CVE-2025-47907: A race condition in Go's standard database/sql  package.
+When a query is cancelled via context while a Scan  operation is running, internal result buffers can be
+incorrectly reassigned, leading to silent data corruption (result sets from one query returned as
+another's).
+Detailed Mitigation:
+1. Use pgx directly — Not database/sql ; pgx has its own connection pool
+2. Update Go version — Fixed in Go 1.24.6 / 1.23.12
+3. Context timeout on all queries — Prevent indefinite waits
+4. Connection pool limits — Prevent concurrent access issues
+5. Integration tests — Test concurrent query scenarios
+6.3 R48 — Go Dependency Supply Chain Attack
+Field Value
+ID R48
+Source Go Build Guide (09) — NEW
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner CTO
+Real-World Context: CVE-2025-30066: Attackers compromised the widely used GitHub Action tj-a
+ctions/changed-files  by modifying version tags, meaning workflows configured to automatically
+update to "latest" were compromised. Supply chain attacks in 2025-2026 have moved beyond
+typosquatting to compromise of established CI/CD automation tools.
+Detailed Mitigation:
+1. Pin all GitHub Actions to SHA-256 — Never use @latest  or @main
+
+--- PAGE 20 ---
+
+2. go mod verify  — Verify dependency checksums
+3. go mod tidy  — Remove unused dependencies
+4. Audit CI/CD runners — Monitor for unexpected outbound connections
+5. Dependency review process — CTO reviews all new dependencies
+6. Automated vulnerability scanning — go vuln check  in CI
+7. Business & Market Risks (Deep Analysis)
+7.1 R26 — Slow Developer Adoption
+Field Value
+ID R26
+Source Master (00), PRD (01)
+Probability High (4)
+Impact High (4)
+Score 16 — P0
+Owner Product
+Detailed Mitigation:
+1. Open-source core — Build trust and community contributions
+2. Generous free tier — 100 tasks/mo, no credit card required
+3. CLI-first — Developers' preferred interface; fast, scriptable
+4. Content marketing — Blog posts, YouTube tutorials, conference talks
+5. Community Discord — Direct feedback channel
+6. 10 "hero" skills — Pre-built skills for common workflows
+7. Competitive pricing — $29/mo Pro tier (vs. Cursor $20, Devin $500)
+
+--- PAGE 21 ---
+
+7.2 R27 — Competitor Launches Similar Product
+Field Value
+ID R27
+Source Master (00), PRD (01)
+Probability High (4)
+Impact Medium (3)
+Score 12 — P1
+Owner All
+Detailed Mitigation:
+1. Speed to market — 16 weeks to MVP
+2. Community moat — Skills marketplace creates network effects
+3. Proprietary skill graph — Learning from user interactions
+4. Cost advantage — 5-10x cheaper than raw API usage
+5. Open-source core — Community can't be out-competed
+7.3 R28 — Regulatory Changes (AI Code Liability)
+Field Value
+ID R28
+Source Master (00), PRD (01)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner Product
+Real-World Context: The EU AI Act enforcement milestone on August 2, 2026 requires companies to
+document human oversight for "high-risk" AI systems. Companies that rely on agents for critical
+infrastructure (automated CI/CD deployment, payments) face severe fines (up to 7% of global turnover)
+for failing to prove human oversight at the point of deployment.
+Detailed Mitigation:
+1. Proactive compliance framework — Audit trails for all AI actions
+2. HITL gates — Mandatory human sign-off for critical decisions
+3. Code provenance tracking — Record which model generated what code
+4. Legal counsel — On standby for regulatory questions
+5. Compliance scanning skill — Automated OWASP/SOC2 pattern detection
+
+--- PAGE 22 ---
+
+6. Mandatory sign-off audit logs — Record when AI suggests and when human approves
+7.4 R29 — Key Person Dependency
+Field Value
+ID R29
+Source PRD (01)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner Product
+Detailed Mitigation:
+1. 14 comprehensive documents — Single source of truth
+2. CLAUDE.md — AI-assisted onboarding
+3. Knowledge sharing — Code reviews, architecture decision records
+4. Hiring plan — Phase 2 growth team (Month 3-6)
+5. Documentation culture — Every decision documented
+8. Operational Risks (Deep Analysis)
+8.1 R31 — Token Cost Spiraling
+Field Value
+ID R31
+Source Master (00), Token Cost (07)
+Probability High (4)
+Impact High (4)
+Score 16 — P0
+Owner CTO
+Real-World Context: Companies reported exponential bills (some increasing 20x) as agents were
+given recursive, long-running tasks. In June 2026, GitHub retired "unlimited" Premium requests in favor
+of token-based credit systems. Usage-based unit economics is now required.
+Detailed Mitigation:
+
+--- PAGE 23 ---
+
+1. Hard budget limits — Per user, per project, per organization
+2. Real-time cost tracking — Every LLM call tracked
+3. Model routing — 40-70% savings by routing to appropriate models
+4. Prompt caching — 40-80% savings on input tokens
+5. Batch processing — 30-50% savings on async tasks
+6. Cost alerts — At 80% threshold; hard-stop at 100%
+7. Circuit breaker on costs — Pause agentic processes if exceeding threshold
+8.2 R32 — High Error Rate (> 5%)
+Field Value
+ID R32
+Source Architecture (02)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner CTO
+Detailed Mitigation:
+1. Automated retry — Exponential backoff (1s, 2s, 4s, 8s)
+2. Circuit breaker — Open after 3 consecutive failures
+3. Error aggregation — Grafana dashboards
+4. Alert on-call — For > 5% error rate sustained 5 min
+5. Error categorization — Transient vs. permanent; different handling
+8.3 R33 — High Latency (p95 > 60s)
+Field Value
+ID R33
+Source Architecture (02), PRD (01)
+Probability Medium (3)
+Impact Medium (3)
+Score 9 — P1
+Owner CTO
+Detailed Mitigation:
+
+--- PAGE 24 ---
+
+1. Model routing — Fast models for simple tasks (GPT-4o-mini: < 1s)
+2. Connection pooling — Persistent connections
+3. Prompt caching — Skip LLM for cached queries
+4. Context compression — Reduce token count
+5. Load testing — Before launch; verify p95 targets
+8.4 R34 — Cost Spike (> 2x hourly average)
+Field Value
+ID R34
+Source Architecture (02)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner CTO
+Detailed Mitigation:
+1. Auto-throttle — Reduce concurrency on cost spike
+2. Budget hard-stops — Stop execution at limit
+3. Real-time monitoring — Grafana cost dashboard
+4. Alert at 2x threshold — Immediate notification
+5. Model downgrade — Switch to cheaper model for cost-sensitive tasks
+8.5 R35 — Session Context Loss on Crash
+Field Value
+ID R35
+Source Continuation (11), Architecture (02)
+Probability Possible (3)
+Impact Moderate (3)
+Score 9 — P1
+Owner CTO
+Real-World Context: Long-running agent sessions can crash due to OOM, provider timeouts, or
+infrastructure failures. Without proper session persistence, users lose all context and must restart from
+scratch. This is a common pain point in agentic systems.
+Detailed Mitigation:
+
+--- PAGE 25 ---
+
+1. Periodic session snapshots — Save state every 30 seconds to Redis + PostgreSQL
+2. Graceful shutdown handling — Capture state before process termination
+3. Session recovery API — POST /sessions/:id/recover  restores last known state
+4. Context compression before crash — If crash detected, compress and save immediately
+5. User notification — Alert user when session recovers from crash
+Monitoring:
+Session recovery success rate (target: > 95%)
+Average recovery time (target: < 30s)
+Crash frequency per session type
+8.6 R36 — Queue Depth > 1000
+Field Value
+ID R36
+Source Architecture (02), Database Strategy (10)
+Probability High (4)
+Impact Minimal (1)
+Score 4 — P2
+Owner CTO
+Real-World Context: During peak usage or LLM provider outages, task queues can accumulate
+rapidly. While auto-scaling handles this, unbounded queue growth can cause memory pressure and
+increased latency.
+Detailed Mitigation:
+1. Queue depth monitoring — Alert at 500, hard-stop at 2000
+2. Auto-scaling workers — Scale from 2 to 10 workers based on queue depth
+3. Task prioritization — Critical tasks (security scans) jump queue
+4. Dead letter queue — Capture tasks stuck > 5 minutes
+5. Graceful degradation — Slow down new task acceptance when queue is deep
+
+--- PAGE 26 ---
+
+8.7 R37 — LLM Response Parsing Failures
+Field Value
+ID R37
+Source LLM Strategy (06), API Contract (04)
+Probability Possible (3)
+Impact Moderate (3)
+Score 9 — P1
+Owner CTO
+Real-World Context: LLMs sometimes return malformed JSON, truncated responses, or outputs that
+don't match expected schemas. This is especially common with complex tool-calling formats and
+structured outputs.
+Detailed Mitigation:
+1. Schema validation — Validate all LLM responses against expected JSON schema
+2. Retry on parse failure — Up to 3 retries with simplified prompt
+3. Structured output mode — Use OpenAI/Anthropic structured output features when available
+4. Fallback to simpler model — If complex model fails parsing, retry with simpler model
+5. Response length limits — Truncate responses exceeding token budget
+Monitoring:
+Parse failure rate per model (alert > 5%)
+Retry success rate
+Average response quality score
+8.8 R38 — Agent Tool Execution Timeout
+Field Value
+ID R38
+Source Architecture (02), Test Plan (05)
+Probability Possible (3)
+Impact Moderate (3)
+Score 9 — P1
+Owner CTO
+Real-World Context: Agent tools (file operations, git commands, test runners) can hang indefinitely if
+not properly timeout-bounded. This blocks the entire agent loop and wastes LLM tokens waiting for
+responses.
+
+--- PAGE 27 ---
+
+Detailed Mitigation:
+1. Per-tool timeouts — File ops: 10s, Git: 30s, Tests: 120s, Deploys: 300s
+2. Context cancellation — Pass context with timeout to all tool executions
+3. Watchdog timer — Kill stuck processes after 2x timeout
+4. Graceful failure — Return timeout error to LLM; let it decide next action
+5. Resource limits — CPU/memory limits prevent runaway processes
+Monitoring:
+Tool timeout rate per tool type (alert > 2%)
+Average tool execution time
+Resource usage per tool execution
+9. Marketplace & Community Risks (Deep Analysis)
+9.1 R39 — Marketplace Quality Control
+Field Value
+ID R39
+Source Master (00), Skills Marketplace (08)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner CTO
+Detailed Mitigation:
+1. 5-gate quality system — Security, TestCoverage (≥80%), Documentation, Performance,
+Compatibility
+2. Community ratings and reviews — 1-5 stars with written reviews
+3. Human curation — Verified skills get manual review
+4. Automated testing — Skills must pass test suite before publish
+5. Security scanning — On every publish
+6. Report abuse mechanism — Community-driven moderation
+
+--- PAGE 28 ---
+
+9.2 R40 — Revenue Sharing Disputes
+Field Value
+ID R40
+Source Skills Marketplace (08)
+Probability High (4)
+Impact Minor (2)
+Score 8 — P1
+Owner Product
+Real-World Context: Marketplace revenue sharing is a common source of friction. Authors may
+dispute calculation methods, payment timing, or attribution of sales. Transparent dashboards and clear
+terms reduce disputes but don't eliminate them.
+Detailed Mitigation:
+1. Transparent revenue dashboard — Real-time earnings visibility for authors
+2. Clear terms of service — Revenue share calculation method documented
+3. Automated billing — Stripe Connect for direct author payouts
+4. Dispute resolution process — 30-day SLA for revenue disputes
+5. Monthly reconciliation reports — Automated reports sent to authors
+6. Audit trail — Complete transaction history for 12 months
+Monitoring:
+Dispute rate (target: < 1% of transactions)
+Average resolution time (target: < 7 days)
+Author satisfaction score
+9.3 R41 — Low Skill Publishing Rate
+Field Value
+ID R41
+Source Skills Marketplace (08)
+Probability Medium (3)
+Impact Medium (3)
+Score 9 — P1
+Owner Product
+Detailed Mitigation:
+1. 10 "hero" skills at launch — Internally developed
+
+--- PAGE 29 ---
+
+2. Author tools — vigil skill create  scaffolding
+3. Revenue sharing guarantees — 85% to authors
+4. Developer advocate program — Onboard 20 beta authors
+5. Documentation — Clear publishing guide
+9.4 R42 — Community Moderation Challenges
+Field Value
+ID R42
+Source Skills Marketplace (08)
+Probability Possible (3)
+Impact Minor (2)
+Score 6 — P2
+Owner Product
+Real-World Context: Open marketplaces face moderation challenges: spam skills, low-quality
+submissions, copy-pasted content, and potential abuse. Manual moderation doesn't scale, while
+automated systems can be too aggressive.
+Detailed Mitigation:
+1. Automated quality filters — Detect spam, duplicates, and low-quality submissions
+2. Community reporting — Easy-to-use abuse reporting mechanism
+3. Tiered moderation — Auto-approve trusted authors, review new authors
+4. Content policies — Clear guidelines for skill quality and naming
+5. Appeal process — Authors can appeal rejected submissions
+Monitoring:
+Spam submission rate (target: < 5%)
+Appeal success rate
+Time to moderate new submissions (target: < 24h)
+
+--- PAGE 30 ---
+
+10. Compliance & Legal Risks (Deep Analysis)
+10.1 R43 — GDPR / CCPA Non-Compliance
+Field Value
+ID R43
+Source PRD (01), Schema (03)
+Probability Medium (3)
+Impact Critical (5)
+Score 15 — P0
+Owner Product
+Detailed Mitigation:
+1. Right-to-deletion — deleted_at  soft delete; data purge on request
+2. Data residency controls — Region-aware storage
+3. Privacy policy — Clear, developer-friendly language
+4. Cookie consent — For web dashboard
+5. Data processing agreements — For enterprise customers
+6. Data minimization — Collect only what's needed
+10.2 R44 — Audit Trail Completeness Gaps
+Field Value
+ID R44
+Source Architecture (02), Test Plan (05)
+Probability Possible (3)
+Impact Severe (4)
+Score 12 — P1
+Owner CTO
+Real-World Context: Incomplete audit trails are a common SOC2/GDPR failure. If agent actions
+aren't fully logged with timestamps, user attribution, and action details, compliance audits will fail. The
+EU AI Act (Aug 2026) specifically requires human oversight documentation.
+Detailed Mitigation:
+1. Append-only audit logs — Immutable, tamper-evident logging
+2. Complete action capture — Log all agent actions: file reads/writes, API calls, git operations
+3. User attribution — Every action linked to user ID and session ID
+
+--- PAGE 31 ---
+
+4. Timestamp precision — Microsecond timestamps for sequence ordering
+5. Log retention — 12 months minimum; 7 years for compliance
+6. Audit completeness checks — Weekly automated checks for missing logs
+Monitoring:
+Audit log completeness (target: 100%; alert: < 95%)
+Log write latency (target: < 10ms p99)
+Missing log detection rate
+10.3 R45 — SOC2 Compliance Gaps
+Field Value
+ID R45
+Source PRD (01)
+Probability Medium (3)
+Impact High (4)
+Score 12 — P1
+Owner Product
+Detailed Mitigation:
+1. Proactive compliance framework — Start SOC2 prep in Month 3
+2. Automated compliance scanning skill — OWASP/SOC2 patterns
+3. Access controls — RBAC with audit trails
+4. Data encryption — TLS 1.3 in transit, AES-256 at rest
+5. Vendor management — Assess all third-party dependencies
+
+--- PAGE 32 ---
+
+11. Risk Heat Map
+                         IMPACT
+              1-Minimal  2-Minor  3-Moderate  4-Severe  5-Critical
+           ┌──────────┬─────────┬───────────┬─────────┬──────────┐
+  5-Almost │          │         │           │         │          │
+  4-Likely │  R30,R36 │  R40    │  R27,R28  │ R01,R02 │ R06,R19  │
+           │          │         │  R03,R05  │ R08,R13 │ R23,R24  │
+  3-Possible│         │  R10,R22│  R33,R35  │ R17,R18 │ R25,R43  │
+           │          │  R41,R42│  R37,R38  │ R29,R32 │ R47      │
+           │          │         │           │ R34,R39 │          │
+           │          │         │           │ R44,R45 │          │
+  2-Unlikely│         │         │  R09,R46  │ R07,R16 │ R11,R15  │
+           │          │         │           │ R48     │ R20,R21  │
+  1-Rare   │          │         │           │         │          │
+           └──────────┴─────────┴───────────┴─────────┴──────────┘
+  Legend: P0 (15-25) = Red | P1 (8-14) = Orange | P2 (4-7) = Yellow | P3 (1-3) = Gree
+n
+
+--- PAGE 33 ---
+
+12. Top 15 Risks by Score
+Rank ID Risk Score Priority Owner Category
+1 R01 LLM API price increases 16 P0 CTO LLM Provider
+2 R02 LLM API availability / downtime 16 P0 CTO LLM Provider
+3 R26 Slow developer adoption 16 P0 Product Business
+4 R31 Token cost spiraling 16 P0 CTO Operational
+5 R06 Prompt injection attacks 15 P0 CTO Security
+6 R19 Agent generates insecure code 15 P0 CTO Security
+7 R23 API key / secret exposure 15 P0 CTO Security
+8 R24 Unauthorized data access 15 P0 CTO Security
+9 R25 Marketplace supply chain attack 15 P0 CTO Security
+10 R43 GDPR / CCPA non-compliance 15 P0 Product Compliance
+11 R03 LLM quality regression 12 P1 CTO LLM Provider
+12 R04 LLM rate limiting 12 P1 CTO LLM Provider
+13 R08 Redis failure 12 P1 Founding Eng Infrastructure
+14 R13 Docker image vulnerability 12 P1 CTO Infrastructure
+15 R14 Database migration failure 12 P1 Founding Eng Data
+
+--- PAGE 34 ---
+
+13. Risk Mitigation Timeline
+Phase 1: Weeks 1-4 (Sprint 1) — Foundation
+Risk Mitigation Task Owner Deadline
+R07 Set up PostgreSQL with WAL archiving Founding Eng Week 1
+R08 Set up Redis with RDB + AOF persistence Founding Eng Week 1
+R09 Set up NATS JetStream with persistence Founding Eng Week 1
+R21 Use parameterized queries (pgx) from day 1 CTO Week 1
+R23 Set up environment variable injection; no secrets in code CTO Week 1
+R46 Set CGO_ENABLED=0  in build CTO Week 1
+R14 Create migration framework with rollback safety Founding Eng Week 2
+R12 Test gVisor compatibility in Docker Compose CTO Week 2
+R48 Pin all GitHub Actions to SHA-256 hashes CTO Week 1
+Phase 2: Weeks 5-8 (Sprint 2) — Agent Core
+Risk Mitigation Task Owner Deadline
+R01, R02 Implement 4-provider failover chain with circuit breaker CTO Week 6
+R04 Implement rate limit monitoring and proactive throttling CTO Week 6
+R06 Add input sanitization middleware CTO Week 6
+R47 Use pgx (not database/sql) to avoid race condition CTO Week 5
+R20 Security test sandbox escape attempts CTO Week 7
+R31 Implement budget hard-stops (per-user, per-project) CTO Week 7
+R17 Benchmark pgvector with 100K vectors; measure p95 latency CTO Week 8
+Phase 3: Weeks 9-12 (Sprint 3) — Memory & Skills
+Risk Mitigation Task Owner Deadline
+R19 Create security scanning skill CTO Week 10
+R25 Implement skill checksum verification + dependency scanning CTO Week 10
+R18 Add memory episode TTL and compaction CTO Week 10
+R39 Implement 5-gate quality system for skills CTO Week 11
+R16 Verify embedding dimension compatibility (1536 primary) CTO Week 11
+R05 Implement context compression and sliding window CTO Week 12
+
+--- PAGE 35 ---
+
+Phase 4: Weeks 13-16 (Sprint 4) — Testing & Launch
+Risk Mitigation Task Owner Deadline
+R32 Load testing (50 concurrent users, p95 < 2s) Founding Eng Week 14
+R33 Latency benchmarking (p95 targets per model) CTO Week 14
+R34 Cost spike detection and auto-throttle CTO Week 15
+R26 Beta onboarding and feedback pipeline Product Week 15
+R29 Documentation review and completion Product Week 16
+R03 A/B testing framework for model quality CTO Week 16
+Phase 5: Months 3-6 (Post-MVP) — Growth & Compliance
+Risk Mitigation Task Owner Deadline
+R43 GDPR compliance review and right-to-deletion Product Month 3
+R45 SOC2 compliance framework Product Month 4
+R11 Multi-region deployment (Phase 2) CTO Month 5
+R28 EU AI Act compliance audit (Aug 2026 deadline) Product Month 5
+R27 Competitive analysis update Product Monthly
+R44 Audit trail completeness verification CTO Monthly
+
+--- PAGE 36 ---
+
+14. Risk Monitoring Dashboard
+14.1 Key Metrics to Track
+Metric Target Alert Threshold Source
+LLM API error rate < 1% > 5% Architecture §6
+LLM API latency (p95) < 30s > 60s Architecture §6
+Cost per task < $0.50 > $1.00 Token Cost §8
+Task success rate > 85% < 70% PRD §6
+Cache hit rate > 30% < 10% Token Cost §8
+pgvector query latency (p95) < 100ms > 500ms Database Strategy §6
+Redis memory usage < 80% > 80% Database Strategy §6
+Audit log completeness 100% < 95% Architecture §4
+Skill quality score > 0.8 < 0.6 Skills Marketplace §5
+Security scan findings (critical) 0 > 0 Test Plan §7
+Go version currency Latest patch > 2 versions behind Go Build Guide §7
+14.2 Review Cadence
+Review Frequency Attendees Purpose
+Risk register review Bi-weekly All Update probabilities, add new risks
+Security review Monthly CTO Review security risks and CVEs
+Cost review Weekly CTO Monitor LLM costs and optimization
+Compliance review Quarterly Product GDPR, SOC2, EU AI Act status
+Competitive review Monthly Product Market risks and competitor analysis
+pgvector performance review Monthly CTO Query latency, index health, storage
+
+--- PAGE 37 ---
+
+15. Risk Acceptance Criteria
+15.1 Accepted Risks
+ID Risk Rationale for Acceptance
+R10 S3/MinIO storage
+failure
+Cross-region replication mitigates; low probability
+R22 XSS in API responses JSON-only API; minimal attack surface
+R30 LLM quality plateau Multi-model approach provides flexibility
+R36 Queue depth > 1000 Auto-scaling handles this; low probability
+R40 Revenue sharing
+disputes
+P1 — accepted due to clear ToS and transparent dashboards; monitor dispute
+rate monthly
+15.2 Residual Risks (Post-Mitigation)
+ID Risk Residual Impact Acceptance Rationale
+R01 LLM API price
+increases
+Costs increase 20-50% Multi-provider routing limits exposure; local fallback
+R06 Prompt injection Residual risk remains HITL gates + sandboxing reduce blast radius; cannot
+eliminate entirely
+R26 Slow developer
+adoption
+Revenue delayed 3-6
+months
+Free tier + open-source core mitigate; impossible to
+guarantee adoption
+R28 Regulatory changes 2-4 weeks compliance
+work
+Audit trails + HITL gates provide foundation; proactive
+compliance
+R46 Go cgo RCE Residual if cgo needed CGO_ENABLED=0 eliminates; document risk if cgo
+required later
+
+--- PAGE 38 ---
+
+16. Summary
+Category Total Risks P0 (Critical) P1 (High) P2 (Medium) P3 (Low)
+LLM Provider 7 2 4 1 0
+Infrastructure 7 0 6 1 0
+Data & Schema 5 0 5 0 0
+Security 7 5 2 0 0
+Go Security 3 0 3 0 0
+Business & Market 4 1 3 0 0
+Operational 8 1 6 1 0
+Marketplace 4 0 3 1 0
+Compliance 3 1 2 0 0
+Total 48 10 34 4 0
+Key Takeaways
+1. 10 risks are rated P0 — must begin mitigation in Sprint 1
+2. Security is the highest-risk category — 5 of 10 P0 risks are security-related
+3. LLM provider risks are the most likely — price increases and outages are near-certain
+4. pgvector is a technical risk — benchmark early; plan for scale beyond 10M vectors
+5. EU AI Act (Aug 2026) is a hard deadline — HITL audit trails must be in place
+6. Go-specific CVEs exist — keep Go updated; use pgx not database/sql; set CGO_ENABLED=0
+7. Supply chain attacks are real — pin all dependencies to hashes; scan CI/CD runners
+This risk register is a living document. Review bi-weekly. Update as new risks are identified during
+development. Next review: End of Sprint 1.

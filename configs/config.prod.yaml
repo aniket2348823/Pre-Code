@@ -1,0 +1,60 @@
+# VigilAgent Production Configuration
+# Used inside Docker containers — defaults to Docker Compose service names.
+# Override with environment variables (VIGILAGENT_*) for custom deployments.
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  env: production
+  read_timeout: 10s
+  write_timeout: 10s
+  idle_timeout: 120s
+
+database:
+  host: postgres
+  port: 5432
+  user: vigilagent
+  password: changeme  # MUST override via VIGILAGENT_DATABASE_PASSWORD env var
+  name: vigilagent
+  sslmode: disable
+  max_open_conns: 25
+  max_idle_conns: 10
+  max_lifetime: 5m
+
+redis:
+  host: redis
+  port: 6379
+  password: ""
+  db: 0
+
+nats:
+  url: "nats://nats:4222"
+  stream: "vigilagent"
+
+auth:
+  jwt_secret: change-me-in-production
+  jwt_expiration: 24h
+  api_key_prefix: va_
+
+cors:
+  allowed_origins:
+    - "https://app.vigilagent.com"
+  allowed_methods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+  allowed_headers:
+    - Accept
+    - Authorization
+    - Content-Type
+    - X-API-Key
+    - X-Request-ID
+  allow_credentials: true
+  max_age: 86400
+
+log:
+  level: info
+  format: json

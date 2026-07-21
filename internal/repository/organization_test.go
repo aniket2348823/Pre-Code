@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 func setupTestDB(t *testing.T) *pgxpool.Pool {
@@ -24,15 +25,20 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+func setupTestDBConn(t *testing.T) *database.Conn {
+	t.Helper()
+	return database.NewConn(setupTestDB(t))
+}
+
 func cleanupOrg(t *testing.T, pool *pgxpool.Pool, id string) {
 	pool.Exec(context.Background(), "DELETE FROM organization_members WHERE organization_id = $1", id)
 	pool.Exec(context.Background(), "DELETE FROM organizations WHERE id = $1", id)
 }
 
 func TestOrganizationRepository_Create(t *testing.T) {
-	pool := setupTestDB(t)
-	defer pool.Close()
-	r := NewOrganizationRepository(pool)
+	conn := setupTestDBConn(t)
+	defer conn.Close()
+	r := NewOrganizationRepository(conn)
 
 	t.Run("creates org and returns id and timestamps", func(t *testing.T) {
 		o := &Organization{
@@ -46,7 +52,7 @@ func TestOrganizationRepository_Create(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
-		defer cleanupOrg(t, pool, o.ID)
+		defer cleanupOrg(t, conn.Pool(), o.ID)
 
 		if o.ID == "" {
 			t.Error("expected non-empty ID")
@@ -62,26 +68,26 @@ func TestOrganizationRepository_Create(t *testing.T) {
 	t.Run("duplicate slug returns error", func(t *testing.T) {
 		o1 := &Organization{Name: "Org A", Slug: "dup-slug", OwnerID: "00000000-0000-0000-0000-000000000001", Plan: "free"}
 		r.Create(context.Background(), o1)
-		defer cleanupOrg(t, pool, o1.ID)
+		defer cleanupOrg(t, conn.Pool(), o1.ID)
 
 		o2 := &Organization{Name: "Org B", Slug: "dup-slug", OwnerID: "00000000-0000-0000-0000-000000000001", Plan: "free"}
 		err := r.Create(context.Background(), o2)
 		if err == nil {
-			cleanupOrg(t, pool, o2.ID)
+			cleanupOrg(t, conn.Pool(), o2.ID)
 			t.Fatal("expected error for duplicate slug")
 		}
 	})
 }
 
 func TestOrganizationRepository_FindByID(t *testing.T) {
-	pool := setupTestDB(t)
-	defer pool.Close()
-	r := NewOrganizationRepository(pool)
+	conn := setupTestDBConn(t)
+	defer conn.Close()
+	r := NewOrganizationRepository(conn)
 
 	t.Run("finds existing org", func(t *testing.T) {
 		o := &Organization{Name: "Find Me", Slug: "find-me", OwnerID: "00000000-0000-0000-0000-000000000001", Plan: "free"}
 		r.Create(context.Background(), o)
-		defer cleanupOrg(t, pool, o.ID)
+		defer cleanupOrg(t, conn.Pool(), o.ID)
 
 		found, err := r.FindByID(context.Background(), o.ID)
 		if err != nil {
@@ -104,13 +110,13 @@ func TestOrganizationRepository_FindByID(t *testing.T) {
 }
 
 func TestOrganizationRepository_FindBySlug(t *testing.T) {
-	pool := setupTestDB(t)
-	defer pool.Close()
-	r := NewOrganizationRepository(pool)
+	conn := setupTestDBConn(t)
+	defer conn.Close()
+	r := NewOrganizationRepository(conn)
 
 	o := &Organization{Name: "Slug Test", Slug: "slug-test", OwnerID: "00000000-0000-0000-0000-000000000001", Plan: "free"}
 	r.Create(context.Background(), o)
-	defer cleanupOrg(t, pool, o.ID)
+	defer cleanupOrg(t, conn.Pool(), o.ID)
 
 	found, err := r.FindBySlug(context.Background(), "slug-test")
 	if err != nil {
@@ -122,13 +128,13 @@ func TestOrganizationRepository_FindBySlug(t *testing.T) {
 }
 
 func TestOrganizationRepository_Update(t *testing.T) {
-	pool := setupTestDB(t)
-	defer pool.Close()
-	r := NewOrganizationRepository(pool)
+	conn := setupTestDBConn(t)
+	defer conn.Close()
+	r := NewOrganizationRepository(conn)
 
 	o := &Organization{Name: "Original", Slug: "update-test", OwnerID: "00000000-0000-0000-0000-000000000001", Plan: "free"}
 	r.Create(context.Background(), o)
-	defer cleanupOrg(t, pool, o.ID)
+	defer cleanupOrg(t, conn.Pool(), o.ID)
 
 	err := r.Update(context.Background(), o.ID, "Updated Name", "New desc", "pro", map[string]interface{}{"key": "val"})
 	if err != nil {
@@ -145,9 +151,9 @@ func TestOrganizationRepository_Update(t *testing.T) {
 }
 
 func TestOrganizationRepository_Delete(t *testing.T) {
-	pool := setupTestDB(t)
-	defer pool.Close()
-	r := NewOrganizationRepository(pool)
+	conn := setupTestDBConn(t)
+	defer conn.Close()
+	r := NewOrganizationRepository(conn)
 
 	o := &Organization{Name: "Delete Me", Slug: "delete-test", OwnerID: "00000000-0000-0000-0000-000000000001", Plan: "free"}
 	r.Create(context.Background(), o)
@@ -164,14 +170,14 @@ func TestOrganizationRepository_Delete(t *testing.T) {
 }
 
 func TestOrganizationRepository_ListByUser(t *testing.T) {
-	pool := setupTestDB(t)
-	defer pool.Close()
-	r := NewOrganizationRepository(pool)
+	conn := setupTestDBConn(t)
+	defer conn.Close()
+	r := NewOrganizationRepository(conn)
 	ownerID := "00000000-0000-0000-0000-000000000099"
 
 	o1 := &Organization{Name: "Owned Org", Slug: "owned-list", OwnerID: ownerID, Plan: "free"}
 	r.Create(context.Background(), o1)
-	defer cleanupOrg(t, pool, o1.ID)
+	defer cleanupOrg(t, conn.Pool(), o1.ID)
 
 	orgs, err := r.ListByUser(context.Background(), ownerID)
 	if err != nil {
@@ -192,15 +198,15 @@ func TestOrganizationRepository_ListByUser(t *testing.T) {
 }
 
 func TestOrganizationRepository_Membership(t *testing.T) {
-	pool := setupTestDB(t)
-	defer pool.Close()
-	r := NewOrganizationRepository(pool)
+	conn := setupTestDBConn(t)
+	defer conn.Close()
+	r := NewOrganizationRepository(conn)
 	ownerID := "00000000-0000-0000-0000-000000000001"
 	memberID := "00000000-0000-0000-0000-000000000002"
 
 	o := &Organization{Name: "Member Org", Slug: "member-test", OwnerID: ownerID, Plan: "free"}
 	r.Create(context.Background(), o)
-	defer cleanupOrg(t, pool, o.ID)
+	defer cleanupOrg(t, conn.Pool(), o.ID)
 
 	t.Run("owner is owner and member", func(t *testing.T) {
 		isOwner, _ := r.IsOwner(context.Background(), o.ID, ownerID)

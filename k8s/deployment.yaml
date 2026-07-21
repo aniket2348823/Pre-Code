@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigilagent-api
+  namespace: vigilagent
+  labels:
+    app: vigilagent
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vigilagent
+      component: api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: vigilagent
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/api/v1/metrics"
+    spec:
+      serviceAccountName: vigilagent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: api
+        image: vigilagent/api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        env:
+        - name: VIGILAGENT_SERVER_PORT
+          value: "8080"
+        - name: VIGILAGENT_SERVER_ENV
+          value: "production"
+        - name: VIGILAGENT_DATABASE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: vigilagent-secrets
+              key: db-host
+        - name: VIGILAGENT_DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: vigilagent-secrets
+              key: db-password
+        - name: VIGILAGENT_REDIS_HOST
+          valueFrom:
+            secretKeyRef:
+              name: vigilagent-secrets
+              key: redis-host
+        - name: VIGILAGENT_NATS_HOST
+          value: "nats://nats:4222"
+        - name: VIGILAGENT_AUTH_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: vigilagent-secrets
+              key: jwt-secret
+        - name: VIGILAGENT_LLM_OPENAI_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vigilagent-secrets
+              key: openai-key
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /api/v1/health
+            port: http
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/v1/ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 10"]
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - vigilagent
+              topologyKey: kubernetes.io/hostname

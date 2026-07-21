@@ -1,0 +1,36 @@
+-- Rollback performance indexes
+
+DROP INDEX IF EXISTS idx_alerts_active;
+DROP INDEX IF EXISTS idx_alerts_user;
+DROP INDEX IF EXISTS idx_skill_installations_user;
+DROP INDEX IF EXISTS idx_skill_installations_skill;
+DROP INDEX IF EXISTS idx_skill_ratings_skill;
+DROP INDEX IF EXISTS idx_skills_downloads;
+DROP INDEX IF EXISTS idx_skills_published;
+DROP INDEX IF EXISTS idx_skills_category;
+DROP INDEX IF EXISTS idx_api_keys_user;
+DROP INDEX IF EXISTS idx_api_keys_hash;
+DROP INDEX IF EXISTS idx_tasks_created;
+DROP INDEX IF EXISTS idx_tasks_status;
+DROP INDEX IF EXISTS idx_tasks_user;
+DROP INDEX IF EXISTS idx_tasks_project;
+DROP INDEX IF EXISTS idx_events_session_created;
+DROP INDEX IF EXISTS idx_events_cost;
+DROP INDEX IF EXISTS idx_events_created;
+DROP INDEX IF EXISTS idx_events_type;
+DROP INDEX IF EXISTS idx_events_session;
+DROP INDEX IF EXISTS idx_sessions_status;
+DROP INDEX IF EXISTS idx_sessions_user;
+DROP INDEX IF EXISTS idx_sessions_project;
+DROP INDEX IF EXISTS idx_sessions_agent;
+DROP INDEX IF EXISTS idx_agents_status;
+DROP INDEX IF EXISTS idx_agents_project;
+DROP INDEX IF EXISTS idx_projects_status;
+DROP INDEX IF EXISTS idx_projects_org;
+DROP INDEX IF EXISTS idx_org_members_org;
+DROP INDEX IF EXISTS idx_org_members_user;
+DROP INDEX IF EXISTS idx_organizations_owner;
+DROP INDEX IF EXISTS idx_organizations_slug;
+DROP INDEX IF EXISTS idx_users_last_login;
+DROP INDEX IF EXISTS idx_users_role;
+DROP INDEX IF EXISTS idx_users_email;

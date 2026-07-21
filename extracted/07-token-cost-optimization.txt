@@ -1,0 +1,760 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — Token Cost Optimization
+Version: 3.0 | Date: June 2026 | Status: Final
+1. Cost Optimization Philosophy
+VigilAgent's cost optimization strategy is designed to achieve 40-90% reduction in LLM 
+operational expenditure compared to naive API usage. This is accomplished through five core 
+levers: Prompt Caching, Model Routing, Batch Processing, Token Compression, and Semantic 
+Caching.
+1.1 Cost Reduction Targets
+Technique Estimated Savings Implementation 
+Complexity
+Impact
+Prompt Caching 40-80% on input tokens Medium High
+Model Routing 40-70% on overall bill High Very High
+Batch Processing 30-50% on async tasks Low Medium
+Token Compression 6-15% per request Medium Medium
+Semantic Caching 20-60% on repeated 
+queries
+High High
+Combined Target: 50-70% total cost reduction vs. naive implementation
+2. Prompt Caching
+2.1 Strategy
+Prompt caching reuses Key-Value (KV) tensors from previous inference runs to avoid redundant re-
+computation of static prompt prefixes. This includes system instructions, RAG context, and few-
+shot examples.
+2.2 Implementation
+type PromptCache struct {
+    redis        *redis.Client
+    provider     LLMProvider
+    hitCounter   prometheus.Counter
+    missCounter  prometheus.Counter
+    savingsGauge prometheus.Gauge
+}
+func (pc *PromptCache) CacheSystemPrompt(ctx context.Context, systemPrompt 
+string) (string, error) {
+    // Hash the system prompt
+    hash := sha256.Sum256([]byte(systemPrompt))
+
+--- PAGE 2 ---
+
+    cacheKey := fmt.Sprintf("prompt:cache:%x", hash[:16])
+    
+    // Check if cached
+    cached, err := pc.redis.Get(ctx, cacheKey).Result()
+    if err == nil {
+        pc.hitCounter.Inc()
+        // Return the cached prompt ID for provider to use
+        return cached, nil
+    }
+    
+    pc.missCounter.Inc()
+    
+    // Cache the prompt
+    pc.redis.Set(ctx, cacheKey, systemPrompt, 24*time.Hour)
+    
+    return systemPrompt, nil
+}
+// Provider-specific caching
+func (pc *PromptCache) CacheForProvider(ctx context.Context, provider string, 
+prompt string) string {
+    switch provider {
+    case "anthropic":
+        // Anthropic uses cache_control breakpoints
+        return pc.addCacheBreakpoints(prompt)
+    case "openai":
+        // OpenAI uses prompt caching automatically for prompts > 1024 tokens
+        return prompt
+    case "google":
+        // Google uses context caching
+        return pc.wrapWithContextCache(prompt)
+    default:
+        return prompt
+    }
+}
+func (pc *PromptCache) addCacheBreakpoints(prompt string) string {
+    // Add cache breakpoints at logical boundaries
+    return fmt.Sprintf(`<cache_breakpoint>%s</cache_breakpoint>`, prompt)
+}
+2.3 Cache Key Design
+Cache Key Structure:
+├── User Hash (first 8 chars of user_id)
+├── Project Hash (first 8 chars of project_id)
+├── System Prompt Hash (first 16 chars of SHA-256)
+└── Model Version (e.g., "claude-sonnet-4-20250514")
+Key Format: {user}:{project}:{system_hash}:{model}
+Example: a1b2c3d4:e5f6g7h8:i9j0k1l2m3n4o5p6:claude-sonnet-4-20250514
+3. Model Routing for Cost Optimization
+3.1 Cost-Based Routing
+type CostRouter struct {
+    priceTable  *PriceTable
+    performance *PerformanceTracker
+
+--- PAGE 3 ---
+
+    budgetMgr   *BudgetManager
+}
+type PriceTable struct {
+    Prices map[string]ModelPrice
+}
+type ModelPrice struct {
+    InputPer1K   float64  // Cost per 1K input tokens
+    OutputPer1K  float64  // Cost per 1K output tokens
+    BatchDiscount float64  // Discount for batch processing
+}
+func (cr *CostRouter) RouteByCost(task *Task, complexity Complexity) 
+*RoutingDecision {
+    // Get all available models for this complexity
+    candidates := cr.getModelsForComplexity(complexity)
+    
+    // Estimate token usage
+    inputTokens := cr.estimateInputTokens(task)
+    outputTokens := cr.estimateOutputTokens(task)
+    
+    // Calculate cost for each candidate
+    type candidate struct {
+        model string
+        cost  float64
+    }
+    
+    var costs []candidate
+    for _, model := range candidates {
+        price := cr.priceTable.Prices[model]
+        cost := (float64(inputTokens)/1000 * price.InputPer1K) +
+                (float64(outputTokens)/1000 * price.OutputPer1K)
+        costs = append(costs, candidate{model: model, cost: cost})
+    }
+    
+    // Sort by cost
+    sort.Slice(costs, func(i, j int) bool {
+        return costs[i].cost < costs[j].cost
+    })
+    
+    // Select cheapest that meets quality requirements
+    selected := costs[0]
+    
+    // Check budget
+    if !cr.budgetMgr.HasBudget(selected.cost) {
+        // Find alternative within budget
+        for _, c := range costs {
+            if cr.budgetMgr.HasBudget(c.cost) {
+                selected = c
+                break
+            }
+        }
+    }
+    
+    return &RoutingDecision{
+        Model:   selected.model,
+        EstCost: selected.cost,
+        Reason:  "cost_optimized",
+    }
+}
+// Model selection by complexity
+func (cr *CostRouter) getModelsForComplexity(c Complexity) []string {
+
+--- PAGE 4 ---
+
+    switch {
+    case c <= 0.3: // Simple
+        return []string{"gpt-4o-mini", "claude-haiku-3.5", "gemini-2.0-flash"}
+    case c <= 0.6: // Moderate
+        return []string{"claude-sonnet-4-20250514", "gpt-4o", "gemini-2.5-pro"}
+    case c <= 0.85: // Complex
+        return []string{"claude-opus-4", "gpt-4.5", "deepseek-r1"}
+    default: // Critical
+        return []string{"claude-opus-4", "gpt-4.5"}
+    }
+}
+3.2 Cost Tracking Dashboard
+type CostTracker struct {
+    db      *sql.DB
+    cache   *redis.Client
+    metrics *MetricsCollector
+}
+type CostSummary struct {
+    Period       time.Duration
+    TotalCost    float64
+    ByModel      map[string]float64
+    ByProvider   map[string]float64
+    ByUser       map[string]float64
+    ByProject    map[string]float64
+    SavingsFromRouting float64  // Estimated savings from smart routing
+    SavingsFromCaching float64  // Estimated savings from caching
+}
+func (ct *CostTracker) GetSummary(ctx context.Context, userID string, period 
+time.Duration) (*CostSummary, error) {
+    query := `
+        SELECT 
+            model,
+            provider,
+            SUM(cost) as total_cost,
+            COUNT(*) as request_count
+        FROM usage_records
+        WHERE user_id = $1 
+        AND recorded_at > NOW() - $2::interval
+        GROUP BY model, provider
+    `
+    
+    rows, err := ct.db.QueryContext(ctx, query, userID, period.String())
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+    
+    summary := &CostSummary{
+        ByModel:    make(map[string]float64),
+        ByProvider: make(map[string]float64),
+    }
+    
+    for rows.Next() {
+        var model, provider string
+        var cost float64
+        var count int
+        
+        if err := rows.Scan(&model, &provider, &cost, &count); err != nil {
+            continue
+
+--- PAGE 5 ---
+
+        }
+        
+        summary.TotalCost += cost
+        summary.ByModel[model] += cost
+        summary.ByProvider[provider] += cost
+    }
+    
+    // Calculate savings
+    summary.SavingsFromRouting = ct.estimateRoutingSavings(userID, period)
+    summary.SavingsFromCaching = ct.estimateCachingSavings(userID, period)
+    
+    return summary, nil
+}
+4. Batch Processing Optimization
+4.1 Batch API Strategy
+type BatchProcessor struct {
+    client    *http.Client
+    queue     *TaskQueue
+    batchSize int
+    maxWait   time.Duration
+}
+type BatchRequest struct {
+    ID       string
+    Model    string
+    Messages []Message
+    MaxTokens int
+}
+type BatchResult struct {
+    ID       string
+    Response *LLMResponse
+    Error    error
+}
+func (bp *BatchProcessor) SubmitBatch(ctx context.Context, requests 
+[]BatchRequest) (string, error) {
+    // Group by model
+    groups := groupByModel(requests)
+    
+    var batchIDs []string
+    for model, batch := range groups {
+        // Submit to provider's batch API
+        batchID, err := bp.submitToProvider(ctx, model, batch)
+        if err != nil {
+            return "", err
+        }
+        batchIDs = append(batchIDs, batchID)
+    }
+    
+    return strings.Join(batchIDs, ","), nil
+}
+func (bp *BatchProcessor) submitToProvider(ctx context.Context, model string, 
+requests []BatchRequest) (string, error) {
+    switch {
+    case strings.HasPrefix(model, "gpt"):
+
+--- PAGE 6 ---
+
+        return bp.submitOpenAIBatch(ctx, model, requests)
+    case strings.HasPrefix(model, "claude"):
+        return bp.submitAnthropicBatch(ctx, model, requests)
+    default:
+        return "", fmt.Errorf("batch not supported for model: %s", model)
+    }
+}
+// Batch pricing benefits
+func (bp *BatchProcessor) CalculateSavings(individualCost float64, batchSize 
+int) float64 {
+    // OpenAI batch API: 50% discount
+    // Anthropic batch API: 50% discount
+    
+    batchCost := individualCost * 0.5 // 50% discount
+    savings := individualCost - batchCost
+    
+    return savings
+}
+4.2 Batch Eligibility Rules
+func (bp *BatchProcessor) IsBatchEligible(task *Task) bool {
+    // Batch eligible tasks:
+    // - Non-time-sensitive (background processing)
+    // - Large context window (cost savings more significant)
+    // - Multiple similar tasks (can be grouped)
+    
+    nonUrgent := task.Priority != PriorityCritical
+    hasLargeContext := task.EstimatedTokens > 5000
+    isBackground := task.Type == "analysis" || task.Type == "documentation"
+    
+    return nonUrgent && (hasLargeContext || isBackground)
+}
+func (bp *BatchProcessor) EstimateBatchSavings(tasks []*Task) float64 {
+    totalSavings := 0.0
+    
+    for _, task := range tasks {
+        if bp.IsBatchEligible(task) {
+            individualCost := bp.estimateCost(task)
+            batchCost := individualCost * 0.5 // 50% discount
+            totalSavings += individualCost - batchCost
+        }
+    }
+    
+    return totalSavings
+}
+5. Token Compression
+5.1 Prompt Compression
+type PromptCompressor struct {
+    llm LLMProvider
+}
+func (pc *PromptCompressor) CompressPrompt(ctx context.Context, prompt string, 
+targetTokens int) (string, error) {
+
+--- PAGE 7 ---
+
+    currentTokens := estimateTokens(prompt)
+    
+    if currentTokens <= targetTokens {
+        return prompt, nil
+    }
+    
+    // Strategy 1: Remove redundant instructions
+    compressed := pc.removeRedundancy(prompt)
+    
+    // Strategy 2: Consolidate examples
+    if estimateTokens(compressed) > targetTokens {
+        compressed = pc.consolidateExamples(compressed)
+    }
+    
+    // Strategy 3: Summarize context
+    if estimateTokens(compressed) > targetTokens {
+        compressed = pc.summarizeContext(ctx, compressed)
+    }
+    
+    return compressed, nil
+}
+func (pc *PromptCompressor) removeRedundancy(prompt string) string {
+    // Remove repeated instructions
+    lines := strings.Split(prompt, "\n")
+    seen := make(map[string]bool)
+    var unique []string
+    
+    for _, line := range lines {
+        trimmed := strings.TrimSpace(line)
+        if trimmed == "" || !seen[trimmed] {
+            seen[trimmed] = true
+            unique = append(unique, line)
+        }
+    }
+    
+    return strings.Join(unique, "\n")
+}
+func (pc *PromptCompressor) consolidateExamples(prompt string) string {
+    // Find all example blocks and consolidate
+    exampleRegex := regexp.MustCompile(`(?s)Examples?:\s*\n(.*?)(?=\n\n|\Z)`)
+    
+    return exampleRegex.ReplaceAllStringFunc(prompt, func(match string) string {
+        // Keep only the most relevant examples
+        examples := extractExamples(match)
+        if len(examples) > 3 {
+            return "Examples: " + strings.Join(examples[:3], "\n")
+        }
+        return match
+    })
+}
+5.2 Context Window Optimization
+type ContextOptimizer struct {
+    maxTokens int
+}
+func (co *ContextOptimizer) OptimizeContext(ctx context.Context, messages 
+[]Message, task *Task) []Message {
+    totalTokens := co.countTokens(messages)
+    
+
+--- PAGE 8 ---
+
+    if totalTokens <= co.maxTokens {
+        return messages
+    }
+    
+    // Strategy 1: Remove old messages
+    optimized := co.removeOldMessages(messages, totalTokens-co.maxTokens)
+    
+    // Strategy 2: Compress long messages
+    if co.countTokens(optimized) > co.maxTokens {
+        optimized = co.compressLongMessages(optimized)
+    }
+    
+    // Strategy 3: Summarize conversation history
+    if co.countTokens(optimized) > co.maxTokens {
+        optimized = co.summarizeHistory(optimized)
+    }
+    
+    return optimized
+}
+func (co *ContextOptimizer) removeOldMessages(messages []Message, tokensToRemove 
+int) []Message {
+    if len(messages) <= 2 {
+        return messages
+    }
+    
+    // Keep system message and last N messages
+    systemMsg := messages[0]
+    remaining := messages[1:]
+    
+    removed := 0
+    var kept []Message
+    
+    // Keep from the end, removing oldest first
+    for i := len(remaining) - 1; i >= 0; i-- {
+        msgTokens := estimateTokens(remaining[i].Content)
+        if removed+msgTokens > tokensToRemove {
+            // Can't remove more without going over
+            kept = append([]Message{remaining[i]}, kept...)
+        } else {
+            removed += msgTokens
+        }
+    }
+    
+    return append([]Message{systemMsg}, kept...)
+}
+6. Semantic Caching
+6.1 Implementation
+type SemanticCache struct {
+    redis      *redis.Client
+    embedding  EmbeddingProvider
+    similarity float64  // Minimum similarity threshold
+}
+type CachedResponse struct {
+    Query       string
+    Response    string
+
+--- PAGE 9 ---
+
+    Model       string
+    Tokens      int
+    Cost        float64
+    Embedding   []float32
+    CreatedAt   time.Time
+    AccessCount int
+}
+func (sc *SemanticCache) Search(ctx context.Context, query string) 
+(*CachedResponse, bool) {
+    // Generate embedding for query
+    queryEmbedding, err := sc.embedding.Embed(ctx, query)
+    if err != nil {
+        return nil, false
+    }
+    
+    // Search for similar cached responses
+    results, err := sc.redis.VectorSearch(ctx, "semantic:cache", queryEmbedding, 
+5, sc.similarity)
+    if err != nil || len(results) == 0 {
+        return nil, false
+    }
+    
+    // Return most similar result
+    var cached CachedResponse
+    json.Unmarshal([]byte(results[0].Payload), &cached)
+    
+    // Update access count
+    cached.AccessCount++
+    sc.updateAccessCount(ctx, cached.Query)
+    
+    return &cached, true
+}
+func (sc *SemanticCache) Store(ctx context.Context, query string, response 
+*LLMResponse) error {
+    // Generate embedding
+    embedding, err := sc.embedding.Embed(ctx, query)
+    if err != nil {
+        return err
+    }
+    
+    cached := CachedResponse{
+        Query:     query,
+        Response:  response.Content,
+        Model:     response.Model,
+        Tokens:    response.Tokens,
+        Cost:      response.Cost,
+        Embedding: embedding,
+        CreatedAt: time.Now(),
+    }
+    
+    // Store in Redis with vector index
+    data, _ := json.Marshal(cached)
+    key := fmt.Sprintf("semantic:cache:%s", generateKey(query))
+    
+    sc.redis.Set(ctx, key, data, 7*24*time.Hour) // 7 day TTL
+    
+    // Add to vector index
+    sc.redis.VectorAdd(ctx, "semantic:cache", embedding, key)
+    
+    return nil
+}
+
+--- PAGE 10 ---
+
+6.2 Cache Invalidation Strategy
+type CacheInvalidator struct {
+    cache     *SemanticCache
+    ttl       time.Duration
+    maxAccess int
+}
+func (ci *CacheInvalidator) InvalidateStale(ctx context.Context) error {
+    // Remove entries older than TTL
+    query := `
+        SELECT key FROM semantic_cache 
+        WHERE created_at < NOW() - $1::interval
+        AND access_count < $2
+    `
+    
+    keys, err := ci.cache.db.QueryContext(ctx, query, ci.ttl, ci.maxAccess)
+    if err != nil {
+        return err
+    }
+    defer keys.Close()
+    
+    for keys.Next() {
+        var key string
+        if err := keys.Scan(&key); err != nil {
+            continue
+        }
+        ci.cache.redis.Del(ctx, key)
+    }
+    
+    return nil
+}
+func (ci *CacheInvalidator) InvalidateByModel(ctx context.Context, model string) 
+error {
+    // When model is updated, invalidate all cached responses for that model
+    query := `
+        DELETE FROM semantic_cache 
+        WHERE model = $1
+    `
+    
+    _, err := ci.cache.db.ExecContext(ctx, query, model)
+    return err
+}
+7. Cost Budget Management
+7.1 Budget System
+type BudgetManager struct {
+    db       *sql.DB
+    cache    *redis.Client
+    alerter  *AlertManager
+}
+type Budget struct {
+    ID           string
+    UserID       string
+    Scope        string  // "user", "project", "organization"
+    ScopeID      string
+
+--- PAGE 11 ---
+
+    Period       string  // "daily", "weekly", "monthly", "total"
+    Limit        float64
+    CurrentUsage float64
+    AlertThreshold float64
+    HardLimit    bool
+}
+func (bm *BudgetManager) CheckBudget(ctx context.Context, userID string, 
+estimatedCost float64) (bool, string) {
+    budgets, err := bm.getUserBudgets(ctx, userID)
+    if err != nil {
+        return true, "" // Allow if can't check
+    }
+    
+    for _, budget := range budgets {
+        // Check if within budget
+        if budget.CurrentUsage+estimatedCost > budget.Limit {
+            if budget.HardLimit {
+                return false, fmt.Sprintf("Budget exceeded: $%.2f / $%.2f", 
+                    budget.CurrentUsage, budget.Limit)
+            }
+            
+            // Soft limit - alert but allow
+            if budget.CurrentUsage+estimatedCost > 
+budget.Limit*budget.AlertThreshold {
+                bm.alerter.SendAlert(ctx, &Alert{
+                    UserID:  userID,
+                    Type:    "budget_warning",
+                    Message: fmt.Sprintf("Budget at %.1f%%: $%.2f / $%.2f",
+                        (budget.CurrentUsage/budget.Limit)*100,
+                        budget.CurrentUsage,
+                        budget.Limit),
+                })
+            }
+        }
+    }
+    
+    return true, ""
+}
+func (bm *BudgetManager) UpdateUsage(ctx context.Context, userID string, cost 
+float64) error {
+    query := `
+        UPDATE budgets 
+        SET current_usage = current_usage + $1,
+            updated_at = NOW()
+        WHERE user_id = $2 
+        AND (period = 'monthly' OR period = 'daily')
+    `
+    
+    _, err := bm.db.ExecContext(ctx, query, cost, userID)
+    return err
+}
+7.2 Cost Alerting
+type AlertManager struct {
+    slack     *slack.Client
+    email     *email.Client
+    dashboard *Dashboard
+}
+type Alert struct {
+
+--- PAGE 12 ---
+
+    UserID    string
+    Type      string
+    Severity  string
+    Message   string
+    Details   map[string]interface{}
+}
+func (am *AlertManager) SendAlert(ctx context.Context, alert *Alert) error {
+    // Send to multiple channels based on severity
+    switch alert.Severity {
+    case "critical":
+        // Page on-call, send Slack, send email
+        am.slack.SendChannel("alerts-critical", alert.Message)
+        am.email.Send(alert.UserID, "Budget Critical", alert.Message)
+    case "warning":
+        // Send Slack notification
+        am.slack.SendChannel("alerts-warning", alert.Message)
+    case "info":
+        // Log only
+        log.Printf("Alert: %s", alert.Message)
+    }
+    
+    // Store in database for audit
+    am.storeAlert(ctx, alert)
+    
+    return nil
+}
+8. Cost Optimization Metrics
+8.1 Key Metrics
+var (
+    costSavings = prometheus.NewGaugeVec(
+        prometheus.GaugeOpts{
+            Name: "vigilagent_cost_savings_dollars",
+            Help: "Estimated cost savings from optimizations",
+        },
+        []string{"technique"},
+    )
+    
+    cacheHitRate = prometheus.NewGauge(
+        prometheus.GaugeOpts{
+            Name: "vigilagent_cache_hit_rate",
+            Help: "Cache hit rate percentage",
+        },
+    )
+    
+    avgCostPerTask = prometheus.NewGauge(
+        prometheus.GaugeOpts{
+            Name: "vigilagent_avg_cost_per_task",
+            Help: "Average cost per task",
+        },
+    )
+)
+8.2 Optimization Report
+type OptimizationReport struct {
+
+--- PAGE 13 ---
+
+    Period             time.Duration
+    TotalSavings       float64
+    SavingsBreakdown   map[string]float64
+    CacheHitRate       float64
+    BatchSavings       float64
+    RoutingSavings     float64
+    CompressionSavings float64
+    Recommendations    []string
+}
+func GenerateOptimizationReport(ctx context.Context, db *sql.DB, period 
+time.Duration) (*OptimizationReport, error) {
+    report := &OptimizationReport{
+        Period:           period,
+        SavingsBreakdown: make(map[string]float64),
+    }
+    
+    // Calculate savings from each technique
+    report.RoutingSavings = calculateRoutingSavings(ctx, db, period)
+    report.CacheSavings = calculateCacheSavings(ctx, db, period)
+    report.BatchSavings = calculateBatchSavings(ctx, db, period)
+    report.CompressionSavings = calculateCompressionSavings(ctx, db, period)
+    
+    report.TotalSavings = report.RoutingSavings + report.CacheSavings + 
+                          report.BatchSavings + report.CompressionSavings
+    
+    // Generate recommendations
+    report.Recommendations = generateRecommendations(report)
+    
+    return report, nil
+}
+func generateRecommendations(report *OptimizationReport) []string {
+    var recs []string
+    
+    if report.CacheHitRate < 0.3 {
+        recs = append(recs, "Cache hit rate is low. Consider increasing cache 
+TTL or improving cache key design.")
+    }
+    
+    if report.BatchSavings < 100 {
+        recs = append(recs, "Batch processing savings are low. Consider batching 
+more non-urgent tasks.")
+    }
+    
+    if report.RoutingSavings < 200 {
+        recs = append(recs, "Routing savings are low. Review complexity 
+classification thresholds.")
+    }
+    
+    return recs
+}
+9. Implementation Roadmap
+Phase 1: Quick Wins (Week 1-2)
+• Implement basic prompt caching (system prompts)
+• Add cost tracking per task
+
+--- PAGE 14 ---
+
+• Set up budget alerts
+Phase 2: Model Routing (Week 3-4)
+• Implement complexity classification
+• Add model routing based on task type
+• Set up provider health monitoring
+Phase 3: Advanced Optimization (Week 5-8)
+• Implement semantic caching
+• Add batch processing for background tasks
+• Optimize context window management
+Phase 4: Monitoring & Tuning (Ongoing)
+• Track cost savings metrics
+• Tune routing algorithms based on performance
+• Optimize cache hit rates
+This cost optimization strategy ensures VigilAgent delivers maximum value while minimizing LLM 
+operational expenditure.

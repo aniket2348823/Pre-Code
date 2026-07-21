@@ -1,0 +1,901 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — System Architecture
+Version: 3.0 | Date: June 2026 | Status: Final
+1. Architecture Overview
+1.1 Design Philosophy
+VigilAgent's architecture follows five core principles:
+1. Interface-Driven — Every external dependency (LLM providers, databases, storage) is 
+accessed through Go interfaces, enabling testing, switching, and future-proofing
+2. Fail-Safe by Default — Agents never take destructive actions without explicit human 
+approval; all failures are handled gracefully
+3. Cost-Aware — Every LLM call tracks tokens and cost; agents have configurable budgets
+4. Observable — Every action is traceable, every decision explainable, every token accounted 
+for
+5. Horizontally Scalable — Stateless API servers, stateful agents, distributed by design
+1.2 High-Level Architecture
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           CLIENT LAYER                                   │
+│                                                                          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
+│  │   CLI    │  │ VS Code  │  │   Web    │  │   API    │  │  SDK     │  │
+│  │  (Go)    │  │ Extension│  │Dashboard │  │ Client   │  │ (Go/Py)  │  │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  │
+│       │              │              │              │              │        │
+└───────┼──────────────┼──────────────┼──────────────┼──────────────┼────────┘
+        │              │              │              │              │
+        ▼              ▼              ▼              ▼              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         API GATEWAY LAYER                                │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  chi Router + Middleware Stack                                    │   │
+│  │                                                                   │   │
+│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐  │   │
+│  │  │  Auth   │ │  Rate   │ │ Request │ │  CORS   │ │ Logging │  │   │
+│  │  │ (JWT/   │ │ Limiter │ │ ID Gen  │ │ Handler │ │ (slog)  │  │   │
+│  │  │  APIKey)│ │         │ │         │ │         │ │         │  │   │
+│  │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘  │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Transport Layer                                                  │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │   │
+│  │  │   HTTP   │  │   SSE    │  │WebSocket │  │  gRPC    │        │   │
+│  │  │ REST API │  │ Streaming│  │  Realtime│  │ Internal │        │   │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘        │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────┬────────────────────────────────────────┘
+
+--- PAGE 2 ---
+
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      AGENT ORCHESTRATION LAYER                           │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Task Manager                                                     │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐                 │   │
+│  │  │   Task     │  │   Task     │  │   Task     │                 │   │
+│  │  │  Queue     │  │  Executor  │  │  Monitor   │                 │   │
+│  │  │ (NATS)     │  │ (goroutine)│  │ (metrics)  │                 │   │
+│  │  └────────────┘  └────────────┘  └────────────┘                 │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Agent Runtime                                                    │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐│   │
+│  │  │   State    │  │   Tool     │  │  Memory    │  │   HITL     ││   │
+│  │  │  Machine   │  │  Registry  │  │  Manager   │  │  Checkpoint││   │
+│  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘│   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Tool Execution                                                   │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐│   │
+│  │  │   File     │  │  Terminal  │  │   Code     │  │   Skill    ││   │
+│  │  │   System   │  │  Executor  │  │  Analyzer  │  │  Executor  ││   │
+│  │  │ (read/     │  │ (gVisor    │  │ (AST/      │  │ (sandboxed ││   │
+│  │  │  write)    │  │  sandbox)  │  │  ripgrep)  │  │  Docker)   ││   │
+│  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘│   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       LLM ROUTING LAYER                                  │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Model Router                                                     │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐                 │   │
+│  │  │ Complexity │  │   Cost     │  │  Provider  │                 │   │
+│  │  │ Classifier │  │  Optimizer │  │  Health    │                 │   │
+│  │  │            │  │            │  │  Monitor   │                 │   │
+│  │  └────────────┘  └────────────┘  └────────────┘                 │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Provider Adapters                                                │   │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐│   │
+│  │  │ OpenAI   │ │Anthropic │ │ Google   │ │  Ollama  │ │Custom  ││   │
+│  │  │ Adapter  │ │ Adapter  │ │ Adapter  │ │ Adapter  │ │Adapter ││   │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘│   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+│                                                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │  Optimization Pipeline                                            │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐                 │   │
+│  │  │   Prompt   │  │  Response  │  │   Token    │                 │   │
+│  │  │  Cache     │  │  Cache     │  │  Counter   │                 │   │
+│  │  │ (Redis)    │  │ (Redis)    │  │ (atomic)   │                 │   │
+│  │  └────────────┘  └────────────┘  └────────────┘                 │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+
+--- PAGE 3 ---
+
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DATA LAYER                                       │
+│                                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │
+│  │ PostgreSQL   │  │    Redis     │  │  NATS JetStream│  │ S3/MinIO  │  │
+│  │ + pgvector   │  │              │  │              │  │            │  │
+│  │              │  │  • Sessions  │  │  • Task Queue │  │  • Code    │  │
+│  │  • Users     │  │  • Cache     │  │  • Events    │  │    Snapshots│  │
+│  │  • Projects  │  │  • Rate      │  │  • Streaming │  │  • Artifacts│  │
+│  │  • Tasks     │  │    Limits    │  │    Events    │  │  • Skill   │  │
+│  │  • Skills    │  │  • Semantic  │  │              │  │    Packages│  │
+│  │  • Memory    │  │    Cache     │  │              │  │            │  │
+│  │  • Audit     │  │              │  │              │  │            │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+2. Component Deep Dive
+2.1 API Gateway
+Technology: Go chi router with custom middleware stack
+Middleware Pipeline:
+Request → RequestID → Logger → CORS → RateLimiter → Auth → Handler
+Key Design Decisions:
+• chi chosen over Gin/Echo for stdlib compatibility and lightweight design
+• Rate limiting uses token bucket algorithm (Redis-backed for distributed)
+• Authentication supports both JWT (interactive) and API keys (programmatic)
+• All middleware is composable and testable independently
+Middleware Implementation:
+func NewRouter(cfg *config.Config, auth AuthService, metrics Metrics) *chi.Mux {
+    r := chi.NewRouter()
+    
+    // Global middleware
+    r.Use(middleware.RequestID)
+    r.Use(middleware.RealIP)
+    r.Use(NewLoggerMiddleware(metrics))
+    r.Use(middleware.Recoverer)
+    r.Use(NewCORSMiddleware(cfg.CORS))
+    
+    // Public routes
+    r.Group(func(r chi.Router) {
+        r.Post("/api/v1/auth/login", authHandler.Login)
+        r.Post("/api/v1/auth/register", authHandler.Register)
+        r.Get("/api/v1/health", healthHandler.Check)
+    })
+    
+    // Protected routes
+    r.Group(func(r chi.Router) {
+        r.Use(auth.Middleware())
+
+--- PAGE 4 ---
+
+        r.Use(NewRateLimiter(cfg.RateLimit))
+        
+        r.Route("/api/v1", func(r chi.Router) {
+            r.Post("/tasks", taskHandler.Create)
+            r.Get("/tasks/{id}", taskHandler.Get)
+            r.Post("/tasks/{id}/cancel", taskHandler.Cancel)
+            r.Get("/tasks/{id}/stream", taskHandler.Stream)
+            
+            r.Get("/skills", skillHandler.List)
+            r.Post("/skills/install", skillHandler.Install)
+            r.Delete("/skills/{id}", skillHandler.Uninstall)
+            
+            r.Get("/usage", usageHandler.Get)
+            r.Get("/usage/costs", usageHandler.Costs)
+        })
+    })
+    
+    return r
+}
+2.2 Agent Orchestrator
+Core Loop:
+Task Received
+    │
+    ▼
+┌─────────────────┐
+│  Parse Task     │  Extract intent, entities, constraints
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Plan Execution │  Decompose into steps, select tools
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Execute Step   │  Run tool, capture output, update state
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐     ┌─────────────────┐
+│  Evaluate       │──── │  HITL Checkpoint│  (if needed)▶
+│  Progress       │     │  Wait for Human │
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐
+│  Next Step?     │ ────│  Resume after   │◀
+│  (loop/finish)  │     │  approval       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Deliver Result │  Apply changes, update memory, report
+└─────────────────┘
+State Machine:
+type TaskState string
+const (
+
+--- PAGE 5 ---
+
+    StatePending    TaskState = "pending"
+    StatePlanning   TaskState = "planning"
+    StateExecuting  TaskState = "executing"
+    StateWaitingHITL TaskState = "waiting_hitl"
+    StateReviewing  TaskState = "reviewing"
+    StateCompleted  TaskState = "completed"
+    StateFailed     TaskState = "failed"
+    StateCancelled  TaskState = "cancelled"
+)
+func (a *Agent) Transition(task *Task, event Event) error {
+    switch task.State {
+    case StatePending:
+        if event == EventStart {
+            task.State = StatePlanning
+            return a.planTask(task)
+        }
+    case StatePlanning:
+        if event == EventPlanReady {
+            task.State = StateExecuting
+            return a.executeNextStep(task)
+        }
+    case StateExecuting:
+        if event == EventStepComplete {
+            if a.requiresHITL(task.CurrentStep) {
+                task.State = StateWaitingHITL
+                return a.requestHITLApproval(task)
+            }
+            return a.executeNextStep(task)
+        }
+        if event == EventStepFailed {
+            return a.handleStepFailure(task)
+        }
+    case StateWaitingHITL:
+        if event == EventHITLApproved {
+            task.State = StateExecuting
+            return a.executeNextStep(task)
+        }
+        if event == EventHITLRejected {
+            task.State = State.Failed
+            return a.recordRejection(task)
+        }
+    case StateReviewing:
+        if event == EventReviewPassed {
+            task.State = StateCompleted
+            return a.deliverResult(task)
+        }
+        if event == EventReviewFailed {
+            task.State = StateExecuting
+            return a.fixIssues(task)
+        }
+    }
+    return fmt.Errorf("invalid transition: %s + %s", task.State, event)
+}
+2.3 Tool Registry
+Interface:
+type Tool interface {
+    Name() string
+    Description() string
+    Parameters() Schema
+
+--- PAGE 6 ---
+
+    Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, 
+error)
+    RequiresHITL(params map[string]interface{}) bool
+}
+type ToolResult struct {
+    Output    string
+    Metadata  map[string]interface{}
+    Cost      float64
+    Duration  time.Duration
+    Success   bool
+}
+type ToolRegistry struct {
+    tools map[string]Tool
+    mu    sync.RWMutex
+}
+func (r *ToolRegistry) Register(tool Tool) {
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    r.tools[tool.Name()] = tool
+}
+func (r *ToolRegistry) Get(name string) (Tool, bool) {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    tool, ok := r.tools[name]
+    return tool, ok
+}
+func (r *ToolRegistry) List() []Tool {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    tools := make([]Tool, 0, len(r.tools))
+    for _, tool := range r.tools {
+        tools = append(tools, tool)
+    }
+    return tools
+}
+Built-in Tools: | Tool | Description | HITL Required | |:---|:---|:---| | read_file | Read file 
+contents | No | | write_file | Write/overwrite file | Yes (for existing files) | | edit_file | 
+Targeted string replacement | Yes | | list_directory | List directory contents | No | | 
+search_code | Ripgrep-based code search | No | | run_command | Execute terminal command | 
+Yes (always) | | install_package | Install dependency | Yes | | run_tests | Execute test suite 
+| No | | git_commit | Create git commit | Yes | | git_push | Push to remote | Yes (always) |
+2.4 Memory Manager
+Architecture:
+type MemoryManager struct {
+    episodic    *EpisodicStore    // PostgreSQL - past interactions
+    semantic    *SemanticStore    // pgvector - codebase patterns
+    procedural  *ProceduralStore  // PostgreSQL - learned workflows
+    working     *WorkingMemory    // In-memory - current session
+    cache       *CacheStore       // Redis - fast lookups
+}
+
+--- PAGE 7 ---
+
+type EpisodicStore struct {
+    db *sql.DB
+}
+type EpisodicMemory struct {
+    ID        uuid.UUID
+    SessionID string
+    UserID    string
+    Task      string
+    Decision  string
+    Outcome   string
+    Timestamp time.Time
+    Tokens    int
+    Cost      float64
+    Embedding []float32  // For semantic search
+}
+func (m *MemoryManager) Recall(ctx context.Context, query string, limit int) 
+([]EpisodicMemory, error) {
+    // 1. Check working memory (current session)
+    results := m.working.Search(query, limit)
+    if len(results) >= limit {
+        return results, nil
+    }
+    
+    // 2. Check semantic cache (Redis)
+    cached, err := m.cache.SemanticSearch(ctx, query, limit-len(results))
+    if err == nil && len(cached) > 0 {
+        results = append(results, cached...)
+    }
+    if len(results) >= limit {
+        return results, nil
+    }
+    
+    // 3. Search pgvector (PostgreSQL)
+    vectorResults, err := m.semantic.VectorSearch(ctx, query, limit-
+len(results))
+    if err != nil {
+        return results, nil
+    }
+    results = append(results, vectorResults...)
+    
+    return results, nil
+}
+2.5 LLM Router
+Routing Algorithm:
+type ModelRouter struct {
+    providers    map[string]LLMProvider
+    costTracker  *CostTracker
+    healthMonitor *HealthMonitor
+    config       *RouterConfig
+}
+type RoutingDecision struct {
+    Provider  string
+    Model     string
+    Reason    string
+    EstCost   float64
+    EstTokens int
+}
+
+--- PAGE 8 ---
+
+func (r *ModelRouter) Route(ctx context.Context, task *Task) (*RoutingDecision, 
+error) {
+    // 1. Classify task complexity
+    complexity := r.classifyComplexity(task)
+    
+    // 2. Get available healthy providers
+    available := r.healthMonitor.GetHealthyProviders()
+    
+    // 3. Filter by required capabilities
+    capable := r.filterByCapabilities(available, task.RequiredCapabilities)
+    
+    // 4. Rank by cost-effectiveness
+    ranked := r.rankByCostEffectiveness(capable, complexity)
+    
+    // 5. Select top provider
+    selected := ranked[0]
+    
+    // 6. Check budget
+    if !r.costTracker.HasBudget(ctx, selected.EstCost) {
+        // Fall back to cheaper option or cached response
+        return r.fallbackRoute(ctx, task, complexity)
+    }
+    
+    return selected, nil
+}
+func (r *ModelRouter) classifyComplexity(task *Task) Complexity {
+    // Canonical implementation — see LLM Strategy doc §3.2 for full scoring 
+formula
+    score := 0.0
+    
+    // Factor 1: Task type
+    switch task.Type {
+    case "formatting", "rename", "documentation":
+        score += 0.1
+    case "bug_fix", "small_feature":
+        score += 0.3
+    case "refactoring", "feature":
+        score += 0.5
+    case "architecture", "security":
+        score += 0.7
+    }
+    
+    // Factor 2: Scope (files affected)
+    fileCount := len(task.FilesChanged)
+    if fileCount > 10 {
+        score += 0.3
+    } else if fileCount > 5 {
+        score += 0.2
+    } else if fileCount > 1 {
+        score += 0.1
+    }
+    
+    // Factor 3: Reasoning depth
+    if task.RequiresReasoning {
+        score += 0.2
+    }
+    
+    // Factor 4: Novelty (new patterns vs. known patterns)
+    if task.IsNovel {
+        score += 0.15
+    }
+    
+
+--- PAGE 9 ---
+
+    // Factor 5: Risk level
+    if task.Tags.Contains("security") || task.Tags.Contains("production") {
+        score += 0.3
+    }
+    
+    return Complexity(math.Min(1.0, score))
+    
+    // Threshold mapping:
+    // score < 0.3  → ComplexitySimple   (GPT-4o-mini, Claude Haiku)
+    // score < 0.6  → ComplexityModerate (GPT-4o, Claude Sonnet)
+    // score < 0.85 → ComplexityComplex  (Claude Opus, GPT-4.5)
+    // score ≥ 0.85 → ComplexityCritical (Best model + HITL)
+}
+3. Data Flow Diagrams
+3.1 Task Execution Flow
+┌──────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│ User │──── │   API    │──── │  Task    │──── │  Agent   │▶ ▶ ▶
+│      │     │ Gateway  │     │  Queue   │     │ Runtime  │
+└──────┘     └──────────┘     └──────────┘     └────┬─────┘
+                                                     │
+         ┌───────────────────────────────────────────┤
+         │                                           │
+         ▼                                           ▼
+┌──────────────────┐                    ┌──────────────────┐
+│  LLM Router      │                    │  Tool Executor   │
+│                  │                    │                  │
+│  ┌────────────┐  │                    │  ┌────────────┐  │
+│  │ Complexity │  │                    │  │ File Ops   │  │
+│  │ Classifier │  │                    │  │ Terminal   │  │
+│  └─────┬──────┘  │                    │  │ Code Search│  │
+│        │         │                    │  └────────────┘  │
+│        ▼         │                    └────────┬─────────┘
+│  ┌────────────┐  │                             │
+│  │  Provider  │  │                             │
+│  │  Selector  │  │                             │
+│  └─────┬──────┘  │                             │
+│        │         │                             │
+│        ▼         │                             │
+│  ┌────────────┐  │                             │
+│  │   LLM API  │  │                             │
+│  │   Call      │  │                             │
+│  └────────────┘  │                             │
+└──────────────────┘                             │
+         │                                       │
+         ▼                                       ▼
+┌──────────────────────────────────────────────────────────┐
+│                    Result Aggregation                      │
+│                                                           │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐          │
+│  │  Update    │  │  Update    │  │  Notify    │          │
+│  │  Memory    │  │  Metrics   │  │  User      │          │
+│  └────────────┘  └────────────┘  └────────────┘          │
+└──────────────────────────────────────────────────────────┘
+
+--- PAGE 10 ---
+
+3.2 Multi-Model Failover Flow
+Task Complexity Assessment
+    │
+    ├─► Complexity: Simple
+    │     │
+    │     ▼
+    │   Provider: GPT-4o-mini
+    │     │
+    │     ├─► Success ──────────────────────────────  Return Response▶
+    │     │
+    │     └─► Failure (rate limit / timeout)
+    │           │
+    │           ▼
+    │         Provider: Claude Haiku
+    │           │
+    │           ├─► Success ────────────────────────  Return Response▶
+    │           │
+    │           └─► Failure
+    │                 │
+    │                 ▼
+    │               Provider: Gemini Flash
+    │                 │
+    │                 ├─► Success ──────────────────  Return Response▶
+    │                 │
+    │                 └─► Failure ─────────────────  Queue for Retry▶
+    │
+    ├─► Complexity: Moderate
+    │     │
+    │     ▼
+    │   Provider: GPT-4o
+    │     │
+    │     ├─► Success ──────────────────────────────  Return Response▶
+    │     │
+    │     └─► Failure
+    │           │
+    │           ▼
+    │         Provider: Claude Sonnet
+    │           │
+    │           ├─► Success ────────────────────────  Return Response▶
+    │           │
+    │           └─► Failure
+    │                 │
+    │                 ▼
+    │               Provider: Gemini Pro
+    │                 │
+    │                 ├─► Success ──────────────────  Return Response▶
+    │                 │
+    │                 └─► Failure ─────────────────  Queue for Retry▶
+    │
+    └─► Complexity: Complex/Critical
+          │
+          ▼
+        Provider: Claude Opus
+          │
+          ├─► Success ──────────────────────────────  Return Response + HITL▶
+          │
+          └─► Failure
+                │
+                ▼
+              Provider: GPT-4.5
+                │
+                ├─► Success ────────────────────────  Return Response + HITL▶
+                │
+
+--- PAGE 11 ---
+
+                └─► Failure ───────────────────────  Escalate to Human▶
+4. Security Architecture
+4.1 Authentication & Authorization
+┌──────────────────────────────────────────────────────────────┐
+│                    AUTHENTICATION FLOW                         │
+│                                                               │
+│  ┌─────────┐     ┌─────────┐     ┌─────────┐                │
+│  │  Login  │──── │ Verify  │──── │  Issue  │                │▶ ▶
+│  │ Request │     │Credentials│   │  JWT    │                │
+│  └─────────┘     └─────────┘     └────┬────┘                │
+│                                        │                      │
+│                                        ▼                      │
+│                               ┌─────────────┐                │
+│                               │ JWT Claims: │                │
+│                               │ - user_id   │                │
+│                               │ - role      │                │
+│                               │ - exp       │                │
+│                               │ - scope     │                │
+│                               └─────────────┘                │
+└──────────────────────────────────────────────────────────────┘
+Roles: | Role | Permissions | |:---|:---| | viewer | Read-only access to own tasks and data | | 
+developer | Create/execute tasks, manage own skills | | admin | Manage team members, billing, 
+shared skills | | super_admin | System-wide settings, user management |
+4.2 Code Sandboxing
+Isolation Layers:
+1. gVisor Container — Kernel-level isolation for skill execution
+2. Resource Limits — CPU, memory, and network restrictions per container
+3. Filesystem Isolation — Read-only base filesystem, writable volumes only for project 
+directory
+4. Network Policies — Outbound connections only to allowed LLM APIs
+5. Time Limits — Maximum execution time per skill (default: 5 minutes)
+Sandbox Configuration:
+sandbox:
+  runtime: gvisor
+  resources:
+    cpu: "2.0"           # 2 CPU cores
+    memory: "2Gi"        # 2GB RAM
+    disk: "10Gi"         # 10GB disk
+  network:
+    enabled: true
+    allowed_hosts:
+      - "api.openai.com"
+      - "api.anthropic.com"
+      - "generativelanguage.googleapis.com"
+  filesystem:
+
+--- PAGE 12 ---
+
+    base: "/sandbox/base"
+    writable:
+      - "/sandbox/project"
+    readonly:
+      - "/sandbox/skills"
+  timeout: 300s          # 5 minutes max
+4.3 Data Security
+Data Type Storage Encryption Retention
+User credentials PostgreSQL AES-256 at rest Until deleted
+API keys HashiCorp Vault Encrypted in transit Until rotated
+Code snippets S3/MinIO AES-256 at rest User-controlled
+LLM responses Redis (temp) TLS in transit 24h TTL
+Audit logs PostgreSQL AES-256 at rest 7 years
+Embeddings pgvector AES-256 at rest Until deleted
+5. Deployment Architecture
+5.1 Development Environment
+# docker-compose.dev.yml
+version: '3.8'
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://vigil:vigil@localhost:5432/vigilagent?
+sslmode=disable
+      - REDIS_URL=redis://localhost:6379
+      - NATS_URL=nats://localhost:4222
+    volumes:
+      - .:/app
+    command: go run ./cmd/api
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=vigilagent
+      - POSTGRES_USER=vigil
+      - POSTGRES_PASSWORD=vigil
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+--- PAGE 13 ---
+
+  nats:
+    image: nats:2-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+volumes:
+  pgdata:
+5.2 Production Environment
+# Kubernetes Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigilagent-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vigilagent-api
+  template:
+    spec:
+      containers:
+        - name: api
+          image: vigilagent/api:latest
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 3
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: vigilagent-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: vigilagent-secrets
+                  key: redis-url
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigilagent-api
+
+--- PAGE 14 ---
+
+spec:
+  selector:
+    app: vigilagent-api
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: LoadBalancer
+5.3 Infrastructure Requirements
+Environment CPU Memory Storage Instances
+Development 4 cores 8GB 50GB SSD 1
+Staging 8 cores 16GB 200GB SSD 2
+Production (small) 16 cores 32GB 500GB SSD 3
+Production (large) 32 cores 64GB 1TB SSD 6
+Enterprise (self-
+hosted)
+64 cores 128GB 2TB SSD 12
+6. Observability Stack
+6.1 Metrics Collection
+// OpenTelemetry metrics
+var (
+    tasksTotal = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "vigilagent_tasks_total",
+            Help: "Total number of tasks processed",
+        },
+        []string{"status", "model", "complexity"},
+    )
+    
+    taskDuration = prometheus.NewHistogramVec(
+        prometheus.HistogramOpts{
+            Name:    "vigilagent_task_duration_seconds",
+            Help:    "Task execution duration in seconds",
+            Buckets: []float64{1, 5, 10, 30, 60, 120, 300},
+        },
+        []string{"model", "complexity"},
+    )
+    
+    tokensUsed = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "vigilagent_tokens_total",
+            Help: "Total tokens consumed",
+        },
+        []string{"model", "type"},
+    )
+    
+    costIncurred = prometheus.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "vigilagent_cost_dollars_total",
+            Help: "Total cost in dollars",
+        },
+
+--- PAGE 15 ---
+
+        []string{"model"},
+    )
+)
+6.2 Distributed Tracing
+// OpenTelemetry tracing
+func (a *Agent) ExecuteTask(ctx context.Context, task *Task) error {
+    ctx, span := tracer.Start(ctx, "agent.execute_task",
+        trace.WithAttributes(
+            attribute.String("task.id", task.ID),
+            attribute.String("task.type", task.Type),
+        ),
+    )
+    defer span.End()
+    
+    // Each step gets its own span
+    ctx, planSpan := tracer.Start(ctx, "agent.plan_task")
+    plan, err := a.planTask(ctx, task)
+    planSpan.End()
+    
+    for i, step := range plan.Steps {
+        ctx, stepSpan := tracer.Start(ctx, fmt.Sprintf("agent.execute_step.%d", 
+i))
+        result, err := a.executeStep(ctx, task, step)
+        stepSpan.SetAttributes(
+            attribute.String("step.tool", step.Tool),
+            attribute.Int("step.tokens", result.Tokens),
+            attribute.Float64("step.cost", result.Cost),
+        )
+        stepSpan.End()
+    }
+    
+    return nil
+}
+6.3 Alerting Rules
+Alert Condition Severity Action
+High Error Rate > 5% tasks failing Critical Page on-call
+High Latency p95 > 60s for 5 min Warning Slack notification
+Cost Spike > 2x hourly average Critical Auto-throttle
+Provider Down All providers unhealthy Critical Page on-call
+Memory Usage > 80% for 10 min Warning Scale up
+Queue Depth > 1000 pending tasks Warning Scale workers
+7. Scalability Design
+7.1 Horizontal Scaling
+API Servers: Stateless, scale horizontally with load balancer Task Workers: Scale based on queue 
+depth LLM Connections: Connection pooling per provider
+
+--- PAGE 16 ---
+
+7.2 Vertical Scaling Considerations
+Memory: Increase for larger codebases and more concurrent sessions CPU: Increase for more 
+concurrent LLM streaming connections Storage: Scale PostgreSQL with read replicas and 
+connection pooling
+7.3 Caching Strategy
+┌─────────────────────────────────────────────────────────────┐
+│                    CACHING LAYERS                            │
+│                                                              │
+│  L1: In-Memory (per instance)                               │
+│  ├── Hot data: current session context, active tasks         │
+│  ├── TTL: Session duration                                   │
+│  └── Invalidation: On session end                            │
+│                                                              │
+│  L2: Redis (shared)                                          │
+│  ├── Warm data: recent tasks, user preferences, skill cache  │
+│  ├── TTL: 1 hour - 24 hours                                 │
+│  └── Invalidation: Event-driven (write-through)              │
+│                                                              │
+│  L3: PostgreSQL (persistent)                                 │
+│  ├── Cold data: full history, embeddings, audit logs         │
+│  ├── TTL: Never (archived after 90 days)                    │
+│  └── Invalidation: Direct DB operations                      │
+└─────────────────────────────────────────────────────────────┘
+8. Disaster Recovery
+8.1 Backup Strategy
+Component Method Frequency Retention
+PostgreSQL Automated snapshots Every 6 hours 30 days
+Redis RDB + AOF Every 15 minutes 7 days
+S3/MinIO Cross-region 
+replication
+Real-time Indefinite
+NATS JetStream persistence Real-time 7 days
+8.2 Recovery Procedures
+Scenario RTO RPO Procedure
+API server failure < 1 min 0 Load balancer removes 
+instance, new instance 
+spins up
+Database failure < 5 min 15 min Promote read replica, 
+restore from snapshot
+Redis failure < 2 min 15 min Failover to replica, 
+rebuild from DB
+
+--- PAGE 17 ---
+
+Scenario RTO RPO Procedure
+Region failure < 30 min 1 hour DNS failover to 
+secondary region
+This architecture document is the technical foundation for all VigilAgent development. All 
+implementation decisions must align with these patterns.

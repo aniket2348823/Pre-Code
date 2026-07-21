@@ -66,7 +66,31 @@ func (n *NATS) HealthCheck() error {
 	return nil
 }
 
-// Close gracefully closes the NATS connection.
+// Drain gracefully drains in-flight messages before closing.
+func (n *NATS) Drain(ctx context.Context) error {
+	if n.Conn == nil {
+		return nil
+	}
+	slog.Info("nats: draining in-flight messages")
+	// nats.Conn.Drain() is synchronous but we respect the context for timeout
+	done := make(chan error, 1)
+	go func() {
+		done <- n.Conn.Drain()
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			slog.Warn("nats drain failed", "error", err)
+		}
+		return err
+	case <-ctx.Done():
+		slog.Warn("nats drain timed out, forcing close")
+		n.Conn.Close()
+		return ctx.Err()
+	}
+}
+
+// Close forcefully closes the NATS connection.
 func (n *NATS) Close() {
 	if n.Conn != nil {
 		n.Conn.Close()

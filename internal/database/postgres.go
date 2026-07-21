@@ -48,6 +48,13 @@ func NewPostgres(ctx context.Context, cfg *config.DatabaseConfig) (*Postgres, er
 	return &Postgres{Pool: pool}, nil
 }
 
+// Conn returns a context-aware connection wrapper that checks for dedicated
+// connections/transactions in context before falling back to the pool.
+// This is the recommended way to execute queries when RLS is enabled.
+func (p *Postgres) Conn() *Conn {
+	return NewConn(p.Pool)
+}
+
 // HealthCheck pings the database to verify connectivity.
 func (p *Postgres) HealthCheck(ctx context.Context) error {
 	return p.Pool.Ping(ctx)

@@ -1,3 +1,6 @@
+# NOTE: Local Postgres is for development only. Production uses Supabase.
+# To use Supabase: set VIGILAGENT_DATABASE_* vars in .env file.
+
 version: "3.8"
 
 services:

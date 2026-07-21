@@ -1,0 +1,861 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — Skills Marketplace
+Version: 3.0 | Date: June 2026 | Status: Final
+1. Marketplace Vision
+The Skills Marketplace is VigilAgent's community layer — a curated ecosystem where developers 
+share, discover, and monetize reusable agent capabilities. It transforms VigilAgent from a single 
+product into a platform with network effects.
+1.1 Core Concept
+A skill is a packaged, versioned, testable unit of agent behavior that can be installed, configured, 
+and composed with other skills.
+┌─────────────────────────────────────────────────────────────┐
+│                    SKILL ARCHITECTURE                         │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │                    Skill Package                         ││
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐             ││
+│  │  │  Manifest │  │   Code   │  │  Tests   │             ││
+│  │  │  (YAML)   │  │  (Go/Py) │  │  (Go/Py) │             ││
+│  │  └──────────┘  └──────────┘  └──────────┘             ││
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐             ││
+│  │  │  Config  │  │  README  │  │  License │             ││
+│  │  │  Schema  │  │  Docs    │  │          │             ││
+│  │  └──────────┘  └──────────┘  └──────────┘             ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │                   Runtime Environment                    ││
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐             ││
+│  │  │  Sandbox  │  │  Tools   │  │  Memory  │             ││
+│  │  │ (gVisor)  │  │ (limited)│  │ (read)   │             ││
+│  │  └──────────┘  └──────────┘  └──────────┘             ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+1.2 Marketplace Principles
+1. Quality Over Quantity — Every published skill must pass automated quality gates
+2. Safety First — Skills run in sandboxed environments with limited permissions
+3. Fair Revenue Sharing — Authors earn 85% of revenue, VigilAgent takes 15%
+4. Open Standards — Skills use open formats (YAML, JSON Schema) for portability
+5. Community Driven — Ratings, reviews, and contributions shape the ecosystem
+
+--- PAGE 2 ---
+
+2. Skill Specification
+2.1 Skill Manifest
+# skill.yaml
+name: lint-and-fix
+display_name: "Lint & Fix"
+version: 1.2.0
+description: |
+  Automatically lint code and fix common issues.
+  Supports multiple languages and linters.
+author:
+  name: "VigilAgent Team"
+  url: "https://github.com/vigilagent"
+  email: team@vigilagent.com
+license: MIT
+category: code_quality
+tags:
+  - linting
+  - formatting
+  - auto-fix
+# Requirements
+requires:
+  platform_version: ">=3.0.0"
+  permissions:
+    - read_file
+    - write_file
+    - run_command
+  tools:
+    - golangci-lint
+    - prettier
+  runtime: go
+# Configuration schema (JSON Schema)
+config_schema:
+  type: object
+  properties:
+    linters:
+      type: array
+      items:
+        type: string
+        enum: [golangci-lint, staticcheck, eslint, prettier]
+      default: ["golangci-lint"]
+      description: "Linters to run"
+    auto_fix:
+      type: boolean
+      default: true
+      description: "Automatically fix issues"
+    fix_types:
+      type: array
+      items:
+        type: string
+        enum: [formatting, imports, naming, complexity]
+      default: ["formatting", "imports"]
+      description: "Types of issues to auto-fix"
+  required: []
+# Entry point
+entry_point: main.Execute
+# Metadata
+metadata:
+
+--- PAGE 3 ---
+
+  min_task_time_ms: 5000
+  avg_task_time_ms: 15000
+  success_rate: 0.95
+  popular: true
+2.2 Skill Code Structure
+skill/
+├── skill.yaml              # Manifest
+├── main.go                 # Entry point
+├── go.mod                  # Dependencies
+├── go.sum                  # Dependency checksums
+├── README.md               # Documentation
+├── LICENSE                 # License file
+├── config.go               # Configuration parsing
+├── linter.go               # Core logic
+├── fixer.go                # Auto-fix logic
+├── testdata/               # Test fixtures
+│   ├── input/
+│   └── expected/
+└── main_test.go            # Tests
+2.3 Skill Interface
+// Skill interface that all skills must implement
+type Skill interface {
+    // Name returns the skill's unique identifier
+    Name() string
+    
+    // Execute runs the skill with given parameters
+    Execute(ctx context.Context, params *SkillParams) (*SkillResult, error)
+    
+    // Validate checks if parameters are valid
+    Validate(params *SkillParams) error
+    
+    // Help returns usage information
+    Help() string
+}
+type SkillParams struct {
+    Config    map[string]interface{}
+    Files     []string
+    Project   *Project
+    Context   string
+}
+type SkillResult struct {
+    Success   bool
+    Message   string
+    Changes   []FileChange
+    Metrics   *SkillMetrics
+}
+type FileChange struct {
+    Path    string
+    Action  string  // "created", "modified", "deleted"
+    Diff    string
+}
+type SkillMetrics struct {
+    Duration    time.Duration
+    FilesScanned int
+
+--- PAGE 4 ---
+
+    IssuesFound  int
+    IssuesFixed  int
+}
+3. Skill Lifecycle
+3.1 Development Flow
+┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐
+│  Create │─── │  Test   │─── │ Publish │─── │  Live   │▶ ▶ ▶
+│  Skill  │    │  Skill  │    │  Skill  │    │  Skill  │
+└─────────┘    └─────────┘    └─────────┘    └─────────┘
+     │              │              │              │
+     ▼              ▼              ▼              ▼
+  scaffolding    unit tests    review gates    install
+  coding         integration   approval        execute
+  config         E2E tests     listing         rate
+3.2 Publishing Pipeline
+type PublishPipeline struct {
+    storage    *S3Storage
+    validator  *SkillValidator
+    reviewer   *SkillReviewer
+    registry   *SkillRegistry
+}
+func (pp *PublishPipeline) Publish(ctx context.Context, skill *SkillPackage) 
+error {
+    // Step 1: Validate manifest
+    if err := pp.validator.ValidateManifest(skill.Manifest); err != nil {
+        return fmt.Errorf("manifest validation failed: %w", err)
+    }
+    
+    // Step 2: Run automated tests
+    if err := pp.runTests(ctx, skill); err != nil {
+        return fmt.Errorf("tests failed: %w", err)
+    }
+    
+    // Step 3: Security scan
+    if err := pp.securityScan(ctx, skill); err != nil {
+        return fmt.Errorf("security scan failed: %w", err)
+    }
+    
+    // Step 4: Quality checks
+    if err := pp.qualityChecks(ctx, skill); err != nil {
+        return fmt.Errorf("quality checks failed: %w", err)
+    }
+    
+    // Step 5: Upload to storage
+    packageURL, err := pp.storage.Upload(ctx, skill)
+    if err != nil {
+        return fmt.Errorf("upload failed: %w", err)
+    }
+    
+    // Step 6: Register in marketplace
+    if err := pp.registry.Register(ctx, skill, packageURL); err != nil {
+        return fmt.Errorf("registration failed: %w", err)
+    }
+
+--- PAGE 5 ---
+
+    
+    return nil
+}
+func (pp *PublishPipeline) runTests(ctx context.Context, skill *SkillPackage) 
+error {
+    // Build skill in sandbox
+    sandbox, err := pp.createSandbox(ctx)
+    if err != nil {
+        return err
+    }
+    defer sandbox.Destroy(ctx)
+    
+    // Run skill tests
+    result, err := sandbox.RunTests(ctx, skill)
+    if err != nil {
+        return err
+    }
+    
+    if !result.AllPassed {
+        return fmt.Errorf("tests failed: %s", result.Failures)
+    }
+    
+    return nil
+}
+func (pp *PublishPipeline) securityScan(ctx context.Context, skill 
+*SkillPackage) error {
+    scanner := NewSecurityScanner()
+    
+    // Check for dangerous operations
+    issues := scanner.Scan(skill.Code)
+    
+    if len(issues) > 0 {
+        var msgs []string
+        for _, issue := range issues {
+            msgs = append(msgs, fmt.Sprintf("%s: %s", issue.Severity, 
+issue.Description))
+        }
+        return fmt.Errorf("security issues found: %s", strings.Join(msgs, "; "))
+    }
+    
+    return nil
+}
+func (pp *PublishPipeline) qualityChecks(ctx context.Context, skill 
+*SkillPackage) error {
+    checks := []QualityCheck{
+        &DocumentationCheck{},
+        &CodeStyleCheck{},
+        &TestCoverageCheck{MinCoverage: 0.8},
+        &LicenseCheck{},
+        &ManifestCheck{},
+    }
+    
+    for _, check := range checks {
+        if err := check.Run(ctx, skill); err != nil {
+            return fmt.Errorf("quality check failed: %w", err)
+        }
+    }
+    
+    return nil
+}
+
+--- PAGE 6 ---
+
+4. Skill Installation & Execution
+4.1 Installation Flow
+type SkillInstaller struct {
+    registry  *SkillRegistry
+    storage   *S3Storage
+    sandbox   *SandboxManager
+    config    *ConfigManager
+}
+func (si *SkillInstaller) Install(ctx context.Context, userID string, skillID 
+string, config map[string]interface{}) error {
+    // Step 1: Fetch skill from registry
+    skill, err := si.registry.Get(ctx, skillID)
+    if err != nil {
+        return fmt.Errorf("skill not found: %w", err)
+    }
+    
+    // Step 2: Download package
+    packageData, err := si.storage.Download(ctx, skill.PackageURL)
+    if err != nil {
+        return fmt.Errorf("download failed: %w", err)
+    }
+    
+    // Step 3: Verify checksum
+    if err := verifyChecksum(packageData, skill.Checksum); err != nil {
+        return fmt.Errorf("checksum mismatch: %w", err)
+    }
+    
+    // Step 4: Extract to local storage
+    skillDir, err := si.extractPackage(ctx, userID, skill, packageData)
+    if err != nil {
+        return fmt.Errorf("extraction failed: %w", err)
+    }
+    
+    // Step 5: Build skill
+    if err := si.buildSkill(ctx, skillDir); err != nil {
+        return fmt.Errorf("build failed: %w", err)
+    }
+    
+    // Step 6: Store configuration
+    if err := si.config.SetSkillConfig(userID, skillID, config); err != nil {
+        return fmt.Errorf("config failed: %w", err)
+    }
+    
+    // Step 7: Update install count
+    si.registry.IncrementInstallCount(ctx, skillID)
+    
+    return nil
+}
+4.2 Execution Flow
+type SkillExecutor struct {
+    sandbox    *Sandbox
+    tools      *ToolRegistry
+    memory     *MemoryManager
+    costTracker *CostTracker
+
+--- PAGE 7 ---
+
+}
+func (se *SkillExecutor) Execute(ctx context.Context, skill *InstalledSkill, 
+params *SkillParams) (*SkillResult, error) {
+    // Step 1: Check permissions
+    if err := se.checkPermissions(skill, params); err != nil {
+        return nil, fmt.Errorf("permission denied: %w", err)
+    }
+    
+    // Step 2: Check budget
+    if !se.costTracker.HasBudget(ctx, skill.EstimatedCost) {
+        return nil, fmt.Errorf("budget exceeded")
+    }
+    
+    // Step 3: Prepare sandbox
+    sandbox, err := se.sandbox.Prepare(ctx, skill)
+    if err != nil {
+        return nil, fmt.Errorf("sandbox preparation failed: %w", err)
+    }
+    defer sandbox.Cleanup(ctx)
+    
+    // Step 4: Execute skill
+    start := time.Now()
+    result, err := sandbox.Execute(ctx, skill, params)
+    duration := time.Since(start)
+    
+    // Step 5: Track cost
+    se.costTracker.TrackExecution(ctx, skill, duration, result.Metrics)
+    
+    // Step 6: Store in memory
+    se.memory.StoreEpisode(ctx, &Episode{
+        Type:    "skill_execution",
+        SkillID: skill.ID,
+        Result:  result,
+        Duration: duration,
+    })
+    
+    return result, nil
+}
+5. Quality Control
+5.1 Automated Quality Gates
+type QualityGate struct {
+    gates []Gate
+}
+type Gate interface {
+    Name() string
+    Run(ctx context.Context, skill *SkillPackage) (*GateResult, error)
+}
+type GateResult struct {
+    Passed  bool
+    Score   float64
+    Details string
+}
+// Gate implementations
+
+--- PAGE 8 ---
+
+type SecurityGate struct{}
+type TestCoverageGate struct{}
+type DocumentationGate struct{}
+type PerformanceGate struct{}
+type CompatibilityGate struct{}
+func NewQualityGate() *QualityGate {
+    return &QualityGate{
+        gates: []Gate{
+            &SecurityGate{},
+            &TestCoverageGate{MinCoverage: 0.8},
+            &DocumentationGate{},
+            &PerformanceGate{MaxLatency: 30 * time.Second},
+            &CompatibilityGate{},
+        },
+    }
+}
+func (qg *QualityGate) Evaluate(ctx context.Context, skill *SkillPackage) 
+(*QualityReport, error) {
+    report := &QualityReport{
+        SkillID: skill.ID,
+        Gates:   make(map[string]*GateResult),
+    }
+    
+    overallScore := 0.0
+    for _, gate := range qg.gates {
+        result, err := gate.Run(ctx, skill)
+        if err != nil {
+            return nil, fmt.Errorf("gate %s failed: %w", gate.Name(), err)
+        }
+        
+        report.Gates[gate.Name()] = result
+        overallScore += result.Score
+        
+        if !result.Passed {
+            report.Passed = false
+            return report, nil
+        }
+    }
+    
+    report.Score = overallScore / float64(len(qg.gates))
+    report.Passed = true
+    
+    return report, nil
+}
+5.2 Community Quality Signals
+type CommunityQuality struct {
+    ratings    *RatingSystem
+    reviews    *ReviewSystem
+    downloads  *DownloadTracker
+    usageStats *UsageTracker
+}
+type QualityScore struct {
+    Rating      float64  // Average star rating
+    ReviewCount int      // Number of reviews
+    Downloads   int      // Total downloads
+    ActiveUsers int      // Users who used in last 30 days
+    SuccessRate float64  // Task success rate when using this skill
+    Composite   float64  // Weighted composite score
+
+--- PAGE 9 ---
+
+}
+func (cq *CommunityQuality) CalculateScore(skillID string) *QualityScore {
+    rating := cq.ratings.GetAverage(skillID)
+    reviews := cq.reviews.GetCount(skillID)
+    downloads := cq.downloads.GetTotal(skillID)
+    active := cq.usageStats.GetActiveUsers(skillID, 30*24*time.Hour)
+    success := cq.usageStats.GetSuccessRate(skillID)
+    
+    // Weighted composite score
+    composite := (rating * 0.3) +
+        (math.Log(float64(reviews+1)) * 0.2) +
+        (math.Log(float64(downloads+1)) * 0.2) +
+        (math.Log(float64(active+1)) * 0.15) +
+        (success * 0.15)
+    
+    return &QualityScore{
+        Rating:      rating,
+        ReviewCount: reviews,
+        Downloads:   downloads,
+        ActiveUsers: active,
+        SuccessRate: success,
+        Composite:   composite,
+    }
+}
+6. Revenue Model
+6.1 Pricing Tiers
+Tier Commission Features Support
+Free 0% Open-source skills, 
+community 
+contribution
+Community
+Premium 15% Paid skills with 
+guaranteed support
+Email
+Enterprise 10% Private skills, SLA, 
+dedicated support
+Dedicated
+6.2 Revenue Sharing Implementation
+type RevenueShare struct {
+    db *sql.DB
+}
+type Earning struct {
+    SkillID     string
+    AuthorID    string
+    Amount      float64
+    Commission  float64
+    NetAmount   float64
+    Period      string
+    CreatedAt   time.Time
+}
+
+--- PAGE 10 ---
+
+func (rs *RevenueShare) CalculatePayout(ctx context.Context, authorID string, 
+period string) (*Payout, error) {
+    query := `
+        SELECT 
+            skill_id,
+            SUM(amount) as total_amount,
+            SUM(commission) as total_commission,
+            SUM(amount - commission) as net_amount
+        FROM earnings
+        WHERE author_id = $1 
+        AND period = $2
+        AND paid = FALSE
+        GROUP BY skill_id
+    `
+    
+    rows, err := rs.db.QueryContext(ctx, query, authorID, period)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+    
+    payout := &Payout{
+        AuthorID: authorID,
+        Period:   period,
+        Items:    []PayoutItem{},
+    }
+    
+    for rows.Next() {
+        var item PayoutItem
+        if err := rows.Scan(&item.SkillID, &item.Amount, &item.Commission, 
+&item.NetAmount); err != nil {
+            continue
+        }
+        payout.Items = append(payout.Items, item)
+        payout.Total += item.NetAmount
+    }
+    
+    return payout, nil
+}
+func (rs *RevenueShare) RecordSale(ctx context.Context, sale *Sale) error {
+    // Calculate commission based on tier
+    commission := rs.calculateCommission(sale)
+    
+    query := `
+        INSERT INTO earnings (skill_id, author_id, amount, commission, period, 
+created_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+    `
+    
+    _, err := rs.db.ExecContext(ctx, query, 
+        sale.SkillID, sale.AuthorID, sale.Amount, commission, sale.Period)
+    return err
+}
+func (rs *RevenueShare) calculateCommission(sale *Sale) float64 {
+    // Get author's tier
+    tier := rs.getAuthorTier(sale.AuthorID)
+    
+    switch tier {
+    case "free":
+        return 0 // No commission for free skills
+    case "premium":
+        return sale.Amount * 0.15 // 15% commission
+
+--- PAGE 11 ---
+
+    case "enterprise":
+        return sale.Amount * 0.10 // 10% commission
+    default:
+        return sale.Amount * 0.15
+    }
+}
+7. Discovery & Search
+7.1 Search Algorithm
+type SkillSearch struct {
+    db        *sql.DB
+    redis     *redis.Client
+    embedding EmbeddingProvider
+}
+type SearchQuery struct {
+    Query      string
+    Category   string
+    Tags       []string
+    SortBy     string  // "relevance", "rating", "installs", "recent"
+    MinRating  float64
+    Page       int
+    PageSize   int
+}
+type SearchResult struct {
+    Skills     []*SkillSummary
+    TotalCount int
+    Page       int
+    HasMore    bool
+}
+func (ss *SkillSearch) Search(ctx context.Context, query *SearchQuery) 
+(*SearchResult, error) {
+    // Step 1: Text search
+    textResults := ss.textSearch(ctx, query)
+    
+    // Step 2: Semantic search (if query has meaningful text)
+    var semanticResults []*SkillSummary
+    if len(query.Query) > 10 {
+        semanticResults = ss.semanticSearch(ctx, query.Query)
+    }
+    
+    // Step 3: Merge and rank results
+    merged := ss.mergeResults(textResults, semanticResults)
+    
+    // Step 4: Apply filters
+    filtered := ss.applyFilters(merged, query)
+    
+    // Step 5: Sort
+    sorted := ss.sortResults(filtered, query.SortBy)
+    
+    // Step 6: Paginate
+    start := (query.Page - 1) * query.PageSize
+    end := start + query.PageSize
+    
+    if start > len(sorted) {
+        start = len(sorted)
+
+--- PAGE 12 ---
+
+    }
+    if end > len(sorted) {
+        end = len(sorted)
+    }
+    
+    return &SearchResult{
+        Skills:     sorted[start:end],
+        TotalCount: len(sorted),
+        Page:       query.Page,
+        HasMore:    end < len(sorted),
+    }, nil
+}
+func (ss *SkillSearch) textSearch(ctx context.Context, query *SearchQuery) 
+[]*SkillSummary {
+    sqlQuery := `
+        SELECT id, name, display_name, description, category, 
+               rating_avg, rating_count, install_count
+        FROM skills
+        WHERE is_published = TRUE
+        AND (
+            to_tsvector('english', display_name || ' ' || description) @@ 
+            plainto_tsquery('english', $1)
+            OR name ILIKE '%' || $1 || '%'
+            OR $1 = ANY(tags)
+        )
+    `
+    
+    args := []interface{}{query.Query}
+    
+    if query.Category != "" {
+        sqlQuery += " AND category = $2"
+        args = append(args, query.Category)
+    }
+    
+    sqlQuery += " ORDER BY rating_avg DESC, install_count DESC LIMIT 50"
+    
+    // Execute and return results
+    // ...
+}
+func (ss *SkillSearch) semanticSearch(ctx context.Context, query string) 
+[]*SkillSummary {
+    // Generate embedding for query
+    embedding, err := ss.embedding.Embed(ctx, query)
+    if err != nil {
+        return nil
+    }
+    
+    // Search for similar skills
+    // Use pgvector for semantic search
+    sqlQuery := `
+        SELECT id, name, display_name, description, category,
+               rating_avg, rating_count, install_count,
+               1 - (embedding <=> $1::vector) as similarity
+        FROM skills
+        WHERE is_published = TRUE
+        AND 1 - (embedding <=> $1::vector) > 0.7
+        ORDER BY similarity DESC
+        LIMIT 20
+    `
+    
+    // Execute and return results
+    // ...
+
+--- PAGE 13 ---
+
+}
+7.2 Recommendation Engine
+type RecommendationEngine struct {
+    db         *sql.DB
+    embedding  EmbeddingProvider
+}
+type Recommendation struct {
+    Skill  *SkillSummary
+    Reason string
+    Score  float64
+}
+func (re *RecommendationEngine) GetRecommendations(ctx context.Context, userID 
+string, limit int) ([]*Recommendation, error) {
+    // Get user's installed skills
+    installed := re.getInstalledSkills(ctx, userID)
+    
+    // Get user's recent tasks
+    recentTasks := re.getRecentTasks(ctx, userID, 10)
+    
+    // Find similar skills
+    var recommendations []*Recommendation
+    
+    for _, skill := range installed {
+        // Find skills similar to installed ones
+        similar := re.findSimilarSkills(ctx, skill.ID, 5)
+        
+        for _, s := range similar {
+            // Skip already installed
+            if re.isInstalled(s.ID, installed) {
+                continue
+            }
+            
+            recommendations = append(recommendations, &Recommendation{
+                Skill:  s,
+                Reason: fmt.Sprintf("Similar to %s", skill.DisplayName),
+                Score:  s.CompositeScore,
+            })
+        }
+    }
+    
+    // Find skills relevant to recent tasks
+    for _, task := range recentTasks {
+        taskSkills := re.findSkillsForTask(ctx, task)
+        for _, s := range taskSkills {
+            if !re.isInstalled(s.ID, installed) {
+                recommendations = append(recommendations, &Recommendation{
+                    Skill:  s,
+                    Reason: "Relevant to your recent work",
+                    Score:  s.CompositeScore * 0.8,
+                })
+            }
+        }
+    }
+    
+    // Sort by score and return top N
+    sort.Slice(recommendations, func(i, j int) bool {
+        return recommendations[i].Score > recommendations[j].Score
+    })
+    
+
+--- PAGE 14 ---
+
+    if len(recommendations) > limit {
+        recommendations = recommendations[:limit]
+    }
+    
+    return recommendations, nil
+}
+8. Growth Strategy
+8.1 Supply-Side Growth
+Phase 1: Seed Content (Month 1-3)
+├── Create 10 "hero" skills internally
+├── Focus on most common developer tasks
+└── Ensure high quality and documentation
+Phase 2: Invite Beta Authors (Month 3-6)
+├── Invite 20 developer advocates
+├── Provide author tools and support
+└── Offer revenue sharing guarantees
+Phase 3: Open Marketplace (Month 6+)
+├── Open to all developers
+├── Automated publishing pipeline
+└── Community moderation
+8.2 Demand-Side Growth
+Phase 1: CLI Users (Month 1-3)
+├── Skills pre-installed with CLI
+├── Show skill recommendations in chat
+└── Track skill usage metrics
+Phase 2: Team Adoption (Month 3-6)
+├── Shared skill libraries
+├── Team-specific skill configurations
+└── Skill usage analytics
+Phase 3: Enterprise (Month 6+)
+├── Private skill repositories
+├── Custom skill development
+└── Enterprise support
+8.3 Growth Flywheel
+More Users
+    │
+    ▼
+More Skill Usage
+    │
+    ▼
+More Revenue for Authors
+    │
+    ▼
+More Authors Publishing
+    │
+    ▼
+More Skills Available
+
+--- PAGE 15 ---
+
+    │
+    ▼
+Better Agent Capabilities
+    │
+    ▼
+More Users (cycle repeats)
+9. Analytics & Metrics
+9.1 Marketplace Metrics
+type MarketplaceMetrics struct {
+    db *sql.DB
+}
+type MetricsSummary struct {
+    TotalSkills      int
+    PublishedSkills  int
+    TotalInstalls    int
+    ActiveSkills     int
+    TopCategories    []CategoryStats
+    TopSkills        []*SkillSummary
+    Revenue          float64
+    AuthorPayouts    float64
+}
+func (mm *MarketplaceMetrics) GetSummary(ctx context.Context, period 
+time.Duration) (*MetricsSummary, error) {
+    query := `
+        SELECT 
+            COUNT(*) as total_skills,
+            COUNT(CASE WHEN is_published THEN 1 END) as published,
+            SUM(install_count) as total_installs
+        FROM skills
+        WHERE created_at > NOW() - $1::interval
+    `
+    
+    // Execute query and build summary
+    // ...
+}
+func (mm *MarketplaceMetrics) GetTopSkills(ctx context.Context, limit int) 
+[]*SkillSummary {
+    query := `
+        SELECT id, name, display_name, category, 
+               rating_avg, install_count
+        FROM skills
+        WHERE is_published = TRUE
+        ORDER BY install_count DESC
+        LIMIT $1
+    `
+    
+    // Execute and return results
+    // ...
+}
+This skills marketplace strategy positions VigilAgent as a platform with strong network effects and 
+
+--- PAGE 16 ---
+
+community-driven growth.

@@ -1,0 +1,829 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — Database Strategy
+Version: 3.0 | Date: June 2026 | Status: Final
+1. Database Strategy Overview
+VigilAgent's database strategy is built on PostgreSQL as the primary data store with pgvector for
+vector operations, Redis for caching and real-time data, and NATS for message queuing. The
+strategy prioritizes simplicity, reliability, and cost efficiency while maintaining the ability to scale to
+millions of users.
+1.1 Design Principles
+1. Single Source of Truth — PostgreSQL owns all persistent data
+2. Cache-Aside Pattern — Redis caches frequently accessed data
+3. Event-Driven Updates — Use NATS for cross-service communication
+4. Read Replicas for Scaling — Separate read and write paths
+5. Partitioning for Volume — Time-based partitioning for high-volume tables
+2. Technology Stack
+2.1 PostgreSQL (Primary Database)
+Version: PostgreSQL 16 with pgvector extension
+Why PostgreSQL:
+ACID compliance for critical data
+pgvector for vector search (embeddings)
+Rich extension ecosystem
+Mature replication and backup
+Cost-effective (vs. multiple specialized databases)
+Configuration:
+-- postgresql.conf optimizations 
+shared_buffers = '4GB'            # 25% of available RAM 
+effective_cache_size = '12GB'     # 75% of available RAM 
+work_mem = '256MB'                # Per-operation memory 
+maintenance_work_mem = '1GB'      # For VACUUM, CREATE INDEX 
+max_connections = 200             # Connection pool handles this 
+
+--- PAGE 2 ---
+
+wal_level = replica               # Enable replication 
+max_wal_senders = 10              # For read replicas 
+2.2 Redis (Cache & Real-Time)
+Version: Redis 7 with RedisJSON and RediSearch
+Use Cases:
+Session storage
+Semantic caching
+Rate limiting
+Real-time metrics
+Pub/Sub for live updates
+Configuration:
+# redis.conf 
+maxmemory 4gb 
+maxmemory-policy allkeys-lru 
+appendonly yes 
+appendfsync everysec 
+save 900 1
+save 300 10 
+save 60 10000 
+2.3 NATS JetStream (Message Queue)
+Version: NATS 2.x with JetStream
+Use Cases:
+Task queue for agent execution
+Event streaming for real-time updates
+Cross-service communication
+Dead letter queues for failed messages
+3. PostgreSQL Deep Dive
+3.1 Connection Pooling
+// internal/database/postgres.go 
+package database 
+import ( 
+
+--- PAGE 3 ---
+
+    "context" 
+    "fmt" 
+    "time"
+     
+    "github.com/jackc/pgx/v5/pgxpool" 
+) 
+type PostgresConfig struct { 
+    URL             string 
+    MaxConns        int32 
+    MinConns        int32 
+    MaxConnLifetime time.Duration 
+    MaxConnIdleTime time.Duration 
+    HealthCheckPeriod time.Duration 
+} 
+func NewPostgresPool(ctx context.Context, cfg PostgresConfig) (*pgxpool.Pool, error) { 
+    config, err := pgxpool.ParseConfig(cfg.URL) 
+    if err != nil { 
+        return nil, fmt.Errorf("parsing database URL: %w", err) 
+    }
+     
+    // Apply pool settings 
+    config.MaxConns = cfg.MaxConns 
+    config.MinConns = cfg.MinConns 
+    config.MaxConnLifetime = cfg.MaxConnLifetime 
+    config.MaxConnIdleTime = cfg.MaxConnIdleTime 
+    config.HealthCheckPeriod = cfg.HealthCheckPeriod 
+     
+    // Create pool 
+    pool, err := pgxpool.NewWithConfig(ctx, config) 
+    if err != nil { 
+        return nil, fmt.Errorf("creating connection pool: %w", err) 
+    }
+     
+    // Verify connection 
+    if err := pool.Ping(ctx); err != nil { 
+        pool.Close() 
+        return nil, fmt.Errorf("pinging database: %w", err) 
+    }
+     
+    return pool, nil 
+} 
+3.2 Read Replica Strategy
+// internal/database/replica.go 
+type ReplicaPool struct { 
+    primary *pgxpool.Pool 
+    replicas []*pgxpool.Pool 
+    counter  uint64 
+
+--- PAGE 4 ---
+
+} 
+func NewReplicaPool(primary *pgxpool.Pool, replicas []*pgxpool.Pool) *ReplicaPool { 
+    return &ReplicaPool{ 
+        primary:  primary, 
+        replicas: replicas, 
+    }
+} 
+// Read returns a read replica (round-robin) 
+func (rp *ReplicaPool) Read() *pgxpool.Pool { 
+    if len(rp.replicas) == 0 { 
+        return rp.primary 
+    }
+     
+    idx := atomic.AddUint64(&rp.counter, 1) % uint64(len(rp.replicas)) 
+    return rp.replicas[idx] 
+} 
+// Write returns the primary 
+func (rp *ReplicaPool) Write() *pgxpool.Pool { 
+    return rp.primary 
+} 
+// Usage example 
+func (rp *ReplicaPool) GetUser(ctx context.Context, userID string) (*User, error) { 
+    // Read from replica 
+    row := rp.Read().QueryRow(ctx, "SELECT * FROM users WHERE id = $1", userID) 
+     
+    var user User 
+    if err := row.Scan(&user.ID, &user.Email, &user.Name); err != nil { 
+        return nil, err 
+    }
+     
+    return &user, nil 
+} 
+func (rp *ReplicaPool) CreateUser(ctx context.Context, user *User) error { 
+    // Write to primary 
+    _, err := rp.Write().Exec(ctx, 
+        "INSERT INTO users (id, email, name) VALUES ($1, $2, $3)", 
+        user.ID, user.Email, user.Name, 
+    )
+    return err 
+} 
+3.3 Query Optimization
+// internal/database/queries.go 
+// Optimized query with proper indexing 
+const getUserByEmail = ` 
+
+--- PAGE 5 ---
+
+    SELECT id, email, name, created_at 
+    FROM users 
+    WHERE email = $1 
+    AND deleted_at IS NULL 
+` 
+// Optimized query with cursor-based pagination 
+const listTasks = ` 
+    SELECT id, title, status, created_at 
+    FROM tasks 
+    WHERE user_id = $1 
+    AND created_at < $2 
+    ORDER BY created_at DESC 
+    LIMIT $3 
+` 
+// Optimized query with aggregation 
+const getUserStats = ` 
+    SELECT  
+        COUNT(*) as total_tasks, 
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed, 
+        COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed, 
+        SUM(cost) as total_cost 
+    FROM tasks 
+    WHERE user_id = $1 
+    AND created_at > NOW() - INTERVAL '30 days' 
+` 
+// Partial index for active tasks 
+const createActiveTasksIndex = ` 
+    CREATE INDEX idx_tasks_active  
+    ON tasks(user_id, created_at DESC)  
+    WHERE status NOT IN ('completed', 'failed', 'cancelled') 
+` 
+// Covering index for task list 
+const createTaskListIndex = ` 
+    CREATE INDEX idx_tasks_list  
+    ON tasks(user_id, status, created_at DESC)  
+    INCLUDE (title, model_used, cost) 
+` 
+3.4 Partitioning Strategy
+// internal/database/partitioning.go 
+type PartitionManager struct { 
+    db *pgxpool.Pool 
+} 
+func (pm *PartitionManager) CreateMonthlyPartitions(ctx context.Context, tableName string) er
+    now := time.Now() 
+
+--- PAGE 6 ---
+
+     
+    // Create partitions for current and next 3 months 
+    for i := 0; i < 4; i++ { 
+        month := now.AddDate(0, i, 0) 
+        nextMonth := month.AddDate(0, 1, 0) 
+         
+        partitionName := fmt.Sprintf("%s_%s", tableName, month.Format("2006_01")) 
+         
+        query := fmt.Sprintf(` 
+            CREATE TABLE IF NOT EXISTS %s PARTITION OF %s 
+            FOR VALUES FROM ('%s') TO ('%s') 
+        `, partitionName, tableName,  
+           month.Format("2006-01-01"),  
+           nextMonth.Format("2006-01-01")) 
+         
+        _, err := pm.db.Exec(ctx, query) 
+        if err != nil { 
+            return fmt.Errorf("creating partition %s: %w", partitionName, err) 
+        } 
+    }
+     
+    return nil 
+} 
+func (pm *PartitionManager) DropOldPartitions(ctx context.Context, tableName string, keepMont
+    cutoff := time.Now().AddDate(0, -keepMonths, 0) 
+     
+    query := fmt.Sprintf(` 
+        SELECT partition_name  
+        FROM information_schema.partitions  
+        WHERE table_name = '%s' 
+        AND partition_name < '%s' 
+    `, tableName, cutoff.Format("2006_01")) 
+     
+    rows, err := pm.db.Query(ctx, query) 
+    if err != nil { 
+        return err 
+    }
+    defer rows.Close() 
+     
+    for rows.Next() { 
+        var partitionName string 
+        if err := rows.Scan(&partitionName); err != nil { 
+            continue 
+        } 
+         
+        dropQuery := fmt.Sprintf("DROP TABLE IF EXISTS %s", partitionName) 
+        if _, err := pm.db.Exec(ctx, dropQuery); err != nil { 
+            return fmt.Errorf("dropping partition %s: %w", partitionName, err) 
+        } 
+    }
+     
+
+--- PAGE 7 ---
+
+    return nil 
+} 
+4. Redis Strategy
+4.1 Semantic Caching
+// internal/cache/semantic.go 
+type SemanticCache struct { 
+    redis      *redis.Client 
+    embedding  EmbeddingProvider 
+    similarity float64 
+} 
+type CachedEntry struct { 
+    Key       string 
+    Value     string 
+    Embedding []float32 
+    TTL       time.Duration 
+    Hits      int64 
+} 
+func (sc *SemanticCache) Get(ctx context.Context, query string) (string, bool) { 
+    // Generate embedding for query 
+    embedding, err := sc.embedding.Embed(ctx, query) 
+    if err != nil { 
+        return "", false 
+    }
+     
+    // Search for similar entries 
+    entries, err := sc.searchSimilar(ctx, embedding) 
+    if err != nil || len(entries) == 0 { 
+        return "", false 
+    }
+     
+    // Return most similar entry 
+    for _, entry := range entries { 
+        if entry.Similarity >= sc.similarity { 
+            // Update hit count 
+            sc.redis.HIncrBy(ctx, fmt.Sprintf("cache:hits:%s", entry.Key), "count", 1) 
+            return entry.Value, true 
+        } 
+    }
+     
+    return "", false 
+} 
+func (sc *SemanticCache) Set(ctx context.Context, query string, value string, ttl time.Durati
+    // Generate embedding 
+
+--- PAGE 8 ---
+
+    embedding, err := sc.embedding.Embed(ctx, query) 
+    if err != nil { 
+        return err 
+    }
+     
+    // Store entry 
+    entry := CachedEntry{ 
+        Key:       generateKey(query), 
+        Value:     value, 
+        Embedding: embedding, 
+        TTL:       ttl, 
+    }
+     
+    // Store in Redis with vector index 
+    data, _ := json.Marshal(entry) 
+    pipe := sc.redis.Pipeline() 
+     
+    pipe.Set(ctx, fmt.Sprintf("cache:entry:%s", entry.Key), data, ttl) 
+    pipe.SAdd(ctx, "cache:keys", entry.Key) 
+     
+    _, err = pipe.Exec(ctx) 
+    return err 
+} 
+func (sc *SemanticCache) searchSimilar(ctx context.Context, embedding []float32) ([]CachedEnt
+    // Use Redis vector search 
+    results, err := sc.redis.Do(ctx,  
+        "FT.SEARCH", "cache:index", 
+        fmt.Sprintf("*=>[KNN 5 @embedding $vector AS similarity]", len(embedding)), 
+        "PARAMS", "vector", vectorToBytes(embedding), 
+        "SORTBY", "similarity", "DESC", 
+        "LIMIT", "0", "5", 
+    ).Result() 
+     
+    if err != nil { 
+        return nil, err 
+    }
+     
+    // Parse results 
+    var entries []CachedEntry 
+    // ... parse Redis results 
+     
+    return entries, nil 
+} 
+4.2 Session Storage
+// internal/cache/session.go 
+type SessionStore struct { 
+    redis *redis.Client 
+    ttl   time.Duration 
+
+--- PAGE 9 ---
+
+} 
+type Session struct { 
+    ID        string 
+    UserID    string 
+    Data      map[string]interface{} 
+    ExpiresAt time.Time 
+} 
+func (ss *SessionStore) Get(ctx context.Context, sessionID string) (*Session, error) { 
+    data, err := ss.redis.Get(ctx, fmt.Sprintf("session:%s", sessionID)).Bytes() 
+    if err != nil { 
+        if errors.Is(err, redis.Nil) { 
+            return nil, ErrSessionNotFound 
+        } 
+        return nil, err 
+    }
+     
+    var session Session 
+    if err := json.Unmarshal(data, &session); err != nil { 
+        return nil, err 
+    }
+     
+    return &session, nil 
+} 
+func (ss *SessionStore) Set(ctx context.Context, session *Session) error { 
+    session.ExpiresAt = time.Now().Add(ss.ttl) 
+     
+    data, err := json.Marshal(session) 
+    if err != nil { 
+        return err 
+    }
+     
+    return ss.redis.Set(ctx, fmt.Sprintf("session:%s", session.ID), data, ss.ttl).Err() 
+} 
+func (ss *SessionStore) Delete(ctx context.Context, sessionID string) error { 
+    return ss.redis.Del(ctx, fmt.Sprintf("session:%s", sessionID)).Err() 
+} 
+4.3 Rate Limiting
+// internal/cache/ratelimit.go 
+type RateLimiter struct { 
+    redis *redis.Client 
+} 
+type RateLimitResult struct { 
+    Allowed   bool 
+    Limit     int 
+
+--- PAGE 10 ---
+
+    Remaining int 
+    ResetAt   time.Time 
+} 
+func (rl *RateLimiter) Allow(ctx context.Context, key string, limit int, window time.Duration
+    now := time.Now() 
+    windowStart := now.Truncate(window) 
+    windowKey := fmt.Sprintf("ratelimit:%s:%d", key, windowStart.Unix()) 
+     
+    pipe := rl.redis.Pipeline() 
+     
+    // Increment counter 
+    incr := pipe.Incr(ctx, windowKey) 
+    pipe.Expire(ctx, windowKey, window) 
+     
+    _, err := pipe.Exec(ctx) 
+    if err != nil { 
+        return nil, err 
+    }
+     
+    count := incr.Val() 
+    remaining := limit - int(count) 
+    if remaining < 0 { 
+        remaining = 0 
+    }
+     
+    return &RateLimitResult{ 
+        Allowed:   count <= int64(limit), 
+        Limit:     limit, 
+        Remaining: remaining, 
+        ResetAt:   windowStart.Add(window), 
+    }, nil
+} 
+5. Scaling Strategy
+5.1 Horizontal Scaling
+// internal/database/scaling.go 
+type ScalingManager struct { 
+    primary    *pgxpool.Pool 
+    replicas   []*pgxpool.Pool 
+    loadBalancer *LoadBalancer 
+} 
+func (sm *ScalingManager) ScaleReads(ctx context.Context, load float64) error { 
+    // If load is high, add more replicas 
+    if load > 0.8 && len(sm.replicas) < 5 { 
+        return sm.addReplica(ctx) 
+
+--- PAGE 11 ---
+
+    }
+     
+    // If load is low, remove replicas 
+    if load < 0.3 && len(sm.replicas) > 1 { 
+        return sm.removeReplica(ctx) 
+    }
+     
+    return nil 
+} 
+func (sm *ScalingManager) addReplica(ctx context.Context) error { 
+    // Create new read replica 
+    replica, err := sm.createReplica(ctx) 
+    if err != nil { 
+        return err 
+    }
+     
+    sm.replicas = append(sm.replicas, replica) 
+    sm.loadBalancer.AddBackend(replica) 
+     
+    return nil 
+} 
+func (sm *ScalingManager) removeReplica(ctx context.Context) error { 
+    // Remove least-used replica 
+    if len(sm.replicas) == 0 { 
+        return nil 
+    }
+     
+    replica := sm.replicas[len(sm.replicas)-1] 
+    sm.replicas = sm.replicas[:len(sm.replicas)-1] 
+    sm.loadBalancer.RemoveBackend(replica) 
+     
+    // Terminate replica 
+    return replica.Close(context.Background()) 
+} 
+5.2 Vertical Scaling
+// internal/database/optimization.go 
+type OptimizationManager struct { 
+    db *pgxpool.Pool 
+} 
+func (om *OptimizationManager) AnalyzePerformance(ctx context.Context) (*PerformanceReport, e
+    report := &PerformanceReport{} 
+     
+    // Check table sizes 
+    report.TableSizes = om.getTableSizes(ctx) 
+     
+    // Check index usage 
+
+--- PAGE 12 ---
+
+    report.IndexUsage = om.getIndexUsage(ctx) 
+     
+    // Check slow queries 
+    report.SlowQueries = om.getSlowQueries(ctx) 
+     
+    // Check connection pool stats 
+    report.PoolStats = om.getPoolStats(ctx) 
+     
+    return report, nil 
+} 
+func (om *OptimizationManager) getTableSizes(ctx context.Context) []TableSize { 
+    query := ` 
+        SELECT  
+            schemaname || '.' || tablename as table_name, 
+            pg_size_pretty(pg_total_relation_size(schemaname || '.' || tablename)) as total_s
+            pg_size_pretty(pg_relation_size(schemaname || '.' || tablename)) as table_size, 
+            pg_size_pretty(pg_indexes_size(schemaname || '.' || tablename)) as index_size 
+        FROM pg_tables 
+        WHERE schemaname = 'public' 
+        ORDER BY pg_total_relation_size(schemaname || '.' || tablename) DESC 
+    `
+     
+    rows, err := om.db.Query(ctx, query) 
+    if err != nil { 
+        return nil 
+    }
+    defer rows.Close() 
+     
+    var sizes []TableSize 
+    for rows.Next() { 
+        var size TableSize 
+        if err := rows.Scan(&size.Name, &size.Total, &size.Table, &size.Index); err != nil { 
+            continue 
+        } 
+        sizes = append(sizes, size) 
+    }
+     
+    return sizes 
+} 
+5.3 Backup Strategy
+// internal/database/backup.go 
+type BackupManager struct { 
+    db        *pgxpool.Pool 
+    s3        *S3Client 
+    schedule  *cron.Cron 
+} 
+type BackupConfig struct { 
+
+--- PAGE 13 ---
+
+    FullBackupInterval   time.Duration 
+    IncrementalInterval  time.Duration 
+    RetentionDays        int 
+    S3Bucket             string 
+    S3Prefix             string 
+} 
+func (bm *BackupManager) ScheduleBackups(cfg BackupConfig) { 
+    bm.schedule = cron.New() 
+     
+    // Daily incremental backup 
+    bm.schedule.AddFunc("0 2 * * *", func() { 
+        bm.incrementalBackup(context.Background()) 
+    }) 
+     
+    // Weekly full backup 
+    bm.schedule.AddFunc("0 1 * * 0", func() { 
+        bm.fullBackup(context.Background()) 
+    }) 
+     
+    // Monthly cleanup 
+    bm.schedule.AddFunc("0 3 1 * *", func() { 
+        bm.cleanupOldBackups(context.Background(), cfg.RetentionDays) 
+    }) 
+     
+    bm.schedule.Start() 
+} 
+func (bm *BackupManager) fullBackup(ctx context.Context) error { 
+    // Create backup using pg_dump 
+    cmd := exec.CommandContext(ctx, 
+        "pg_dump", 
+        "--host", bm.db.Config().ConnConfig.Host, 
+        "--port", fmt.Sprintf("%d", bm.db.Config().ConnConfig.Port), 
+        "--username", bm.db.Config().ConnConfig.User, 
+        "--dbname", bm.db.Config().ConnConfig.Database, 
+        "--format", "custom", 
+        "--compress", "9", 
+        "--file", "-", 
+    )
+     
+    output, err := cmd.Output() 
+    if err != nil { 
+        return fmt.Errorf("pg_dump failed: %w", err) 
+    }
+     
+    // Upload to S3 
+    key := fmt.Sprintf("backups/full/%s/vigilagent.dump", time.Now().Format("2006-01-02")) 
+    return bm.s3.Upload(ctx, bm.config.S3Bucket, key, output) 
+} 
+func (bm *BackupManager) incrementalBackup(ctx context.Context) error { 
+    // Use WAL archiving for incremental backups 
+
+--- PAGE 14 ---
+
+    // This captures changes since last backup 
+     
+    query := ` 
+        SELECT pg_switch_wal() 
+    `
+     
+    _, err := bm.db.Exec(ctx, query) 
+    if err != nil { 
+        return fmt.Errorf("switching WAL: %w", err) 
+    }
+     
+    // Archive WAL files 
+    return bm.archiveWALFiles(ctx) 
+} 
+6. Monitoring & Alerting
+6.1 Database Metrics
+// internal/database/metrics.go 
+type MetricsCollector struct { 
+    db     *pgxpool.Pool 
+    redis  *redis.Client 
+    prometheus *PrometheusMetrics 
+} 
+func (mc *MetricsCollector) Collect(ctx context.Context) error { 
+    // PostgreSQL metrics 
+    if err := mc.collectPostgresMetrics(ctx); err != nil { 
+        return err 
+    }
+     
+    // Redis metrics 
+    if err := mc.collectRedisMetrics(ctx); err != nil { 
+        return err 
+    }
+     
+    return nil 
+} 
+func (mc *MetricsCollector) collectPostgresMetrics(ctx context.Context) error { 
+    // Connection pool stats 
+    stats := mc.db.Stat() 
+     
+    mc.prometheus.DbConnections.Set(float64(stats.TotalConns())) 
+    mc.prometheus.DbIdleConns.Set(float64(stats.IdleConns())) 
+    mc.prometheus.DbAcquiredConns.Set(float64(stats.AcquiredConns())) 
+     
+    // Query performance 
+
+--- PAGE 15 ---
+
+    query := ` 
+        SELECT  
+            calls, 
+            total_time, 
+            mean_time, 
+            rows 
+        FROM pg_stat_statements 
+        ORDER BY total_time DESC 
+        LIMIT 10 
+    `
+     
+    rows, err := mc.db.Query(ctx, query) 
+    if err != nil { 
+        return err 
+    }
+    defer rows.Close() 
+     
+    for rows.Next() { 
+        var calls, totalTime, meanTime, rowsReturned float64 
+        if err := rows.Scan(&calls, &totalTime, &meanTime, &rowsReturned); err != nil { 
+            continue 
+        } 
+         
+        mc.prometheus.DbQueryDuration.Observe(meanTime / 1000) // Convert to seconds 
+    }
+     
+    return nil 
+} 
+func (mc *MetricsCollector) collectRedisMetrics(ctx context.Context) error { 
+    info, err := mc.redis.Info(ctx, "stats", "memory", "clients").Result() 
+    if err != nil { 
+        return err 
+    }
+     
+    // Parse Redis INFO output 
+    // ... extract metrics 
+     
+    return nil 
+} 
+6.2 Alert Rules
+# Alert rules for database monitoring 
+groups: 
+  - name: database 
+    rules:
+      - alert: HighConnectionCount 
+        expr: pg_stat_activity_count > 180 
+        for: 5m 
+        labels: 
+
+--- PAGE 16 ---
+
+          severity: warning 
+        annotations: 
+          summary: "High PostgreSQL connection count" 
+          
+      - alert: SlowQueries 
+        expr: pg_stat_statements_mean_time > 1000 
+        for: 5m 
+        labels: 
+          severity: warning 
+        annotations: 
+          summary: "Slow PostgreSQL queries detected" 
+          
+      - alert: DatabaseDown 
+        expr: pg_up == 0 
+        for: 1m 
+        labels: 
+          severity: critical 
+        annotations: 
+          summary: "PostgreSQL is down" 
+          
+      - alert: RedisMemoryHigh 
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.8 
+        for: 5m 
+        labels: 
+          severity: warning 
+        annotations: 
+          summary: "Redis memory usage high" 
+          
+      - alert: RedisDown 
+        expr: redis_up == 0 
+        for: 1m 
+        labels: 
+          severity: critical 
+        annotations: 
+          summary: "Redis is down" 
+7. Disaster Recovery
+7.1 Recovery Procedures
+// internal/database/recovery.go 
+type RecoveryManager struct { 
+    db        *pgxpool.Pool 
+    backup    *BackupManager 
+    redis     *redis.Client 
+} 
+func (rm *RecoveryManager) RecoverFromFailure(ctx context.Context, failureType FailureType) e
+    switch failureType { 
+
+--- PAGE 17 ---
+
+    case FailureDatabaseDown: 
+        return rm.recoverDatabase(ctx) 
+    case FailureRedisDown: 
+        return rm.recoverRedis(ctx) 
+    case FailureCorruption: 
+        return rm.recoverCorruption(ctx) 
+    default: 
+        return fmt.Errorf("unknown failure type: %v", failureType) 
+    }
+} 
+func (rm *RecoveryManager) recoverDatabase(ctx context.Context) error { 
+    // 1. Stop traffic to primary 
+    // 2. Promote replica to primary 
+    // 3. Update connection strings 
+    // 4. Verify data integrity 
+     
+    log.Println("Starting database recovery...") 
+     
+    // Promote replica 
+    replica := rm.getHealthyReplica() 
+    if replica == nil { 
+        return fmt.Errorf("no healthy replicas available") 
+    }
+     
+    // Update application config 
+    if err := rm.updateDatabaseConfig(ctx, replica); err != nil { 
+        return fmt.Errorf("updating config: %w", err) 
+    }
+     
+    // Verify data 
+    if err := rm.verifyDataIntegrity(ctx); err != nil { 
+        return fmt.Errorf("data integrity check failed: %w", err) 
+    }
+     
+    log.Println("Database recovery completed") 
+    return nil 
+} 
+func (rm *RecoveryManager) recoverRedis(ctx context.Context) error { 
+    // 1. Check if Redis is actually down 
+    // 2. Try to restart Redis 
+    // 3. If still down, use fallback (database only mode) 
+    // 4. Rebuild cache from database 
+     
+    log.Println("Starting Redis recovery...") 
+     
+    // Check Redis health 
+    if err := rm.redis.Ping(ctx).Err(); err == nil { 
+        log.Println("Redis is healthy, no recovery needed") 
+        return nil 
+    }
+     
+
+--- PAGE 18 ---
+
+    // Redis is down, enable fallback mode 
+    log.Println("Redis is down, enabling database-only mode") 
+     
+    // Rebuild cache from database 
+    if err := rm.rebuildCache(ctx); err != nil { 
+        return fmt.Errorf("rebuilding cache: %w", err) 
+    }
+     
+    return nil 
+} 
+7.2 RTO/RPO Targets
+ComponentRTO (Recovery Time)RPO (Recovery Point)
+PostgreSQL< 5 minutes < 1 minute (WAL archiving)
+Redis < 2 minutes < 15 minutes (RDB snapshots)
+NATS < 1 minute 0 (JetStream persistence)
+Full System< 30 minutes < 5 minutes
+This database strategy ensures VigilAgent's data layer is reliable, scalable, and cost-effective while
+maintaining high availability and disaster recovery capabilities.

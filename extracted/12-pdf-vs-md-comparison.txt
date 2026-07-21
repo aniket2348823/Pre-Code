@@ -1,0 +1,443 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — PDF vs. Optimized MD
+Comparison Analysis
+Version: 1.0 | Date: June 2026 | Status: Final
+1. Overview
+The VigilAgent project contains 12 original documents (PDFs) at the root and 12 optimized versions
+(MD files) in the optimized/ folder. Both sets cover the same 12 topic areas for the VigilAgent project
+— an autonomous AI agent platform with a Go backend, multi-model LLM orchestration, and a
+community-driven skills marketplace.
+2. Document Inventory
+# Topic Original (PDF) Optimized (MD)
+00Master Project Prompt00-master-project-
+prompt.md.pdf
+optimized/00-master-project-
+prompt.md
+01PRD 01-PRD.md.pdf optimized/01-PRD.md
+02Architecture 02-architecture.md.pdf optimized/02-architecture.md
+03Database Schema03-schema.md.pdf optimized/03-schema.md
+04API Contract 04-api-contract.md.pdf optimized/04-api-contract.md
+05Test Plan 05-test-plan.md.pdf optimized/05-test-plan.md
+06LLM Strategy 06-llm-strategy.md.pdf optimized/06-llm-strategy.md
+07Token Cost
+Optimization
+07-token-cost-
+optimization.md.pdf
+optimized/07-token-cost-
+optimization.md
+08Skills Marketplace08-skills-marketplace.md.pdfoptimized/08-skills-marketplace.md
+09Go Build Guide 09-golang-build-guide.md.pdfoptimized/09-golang-build-guide.md
+10Database Strategy10-database-strategy.md.pdfoptimized/10-database-strategy.md
+11AI Continuation
+Prompt
+11-ai-continuation-
+prompt.md.pdf
+optimized/11-ai-continuation-
+prompt.md
+3. Key Differences: Original vs. Optimized
+3.1 Format & Structure
+Aspect Original PDFs Optimized MDs
+Format PDF (binary, harder to version-
+control) Markdown (text-based, git-friendly)
+Version Unmarked All marked as Version 3.0
+Date Unmarked All dated June 2026
+Status Unmarked All marked Final
+
+--- PAGE 2 ---
+
+Aspect Original PDFs Optimized MDs
+Headers Simple Structured with version/date/status metadata blocks
+Cross-
+references Inconsistent Consistent "single source of truth" references to
+master doc
+3.2 Content Depth & Completeness
+The optimized MDs are significantly more detailed and production-ready than the originals. Key
+improvements:
+4. Document-by-Document Analysis
+4.1 — 00 — Master Project Prompt
+Optimized highlights:
+10 major sections + 2 appendices
+ASCII architecture diagrams
+Competitive moat analysis
+Detailed GTM strategy (3 phases with timelines)
+Pricing tiers (Free / Pro / Team / Enterprise)
+Risk register with probability/impact matrix
+Hiring plan (3 phases)
+Glossary of terms
+Agent execution flow diagram
+Multi-provider failover diagram
+Key additions over original:
+Explicit "Open Questions & Decisions Needed" table
+Anti-metrics section (what we watch but don't optimize)
+Detailed personas with demographics
+Pricing philosophy: "charge per outcome, not per token"
+4.2 — 01 — PRD
+Optimized highlights:
+~500+ lines with 3 detailed personas
+Job-to-be-done tables per persona
+3 feature tiers (MVP v1.0 / Team v1.1 / Enterprise v2.0)
+Full CLI UX mockups with interactive session examples
+Dashboard wireframe (ASCII)
+Competitive analysis matrix (VigilAgent vs Cursor vs Copilot vs CodeRabbit vs Devin)
+
+--- PAGE 3 ---
+
+User journey maps (first-time user + enterprise evaluation)
+Metrics dashboard mockup
+Key additions over original:
+Enterprise persona with compliance focus (SOC2, HIPAA)
+Specific acceptance criteria per feature (FE-001 through FE-035)
+Model routing logic pseudocode
+Memory layer architecture (4 layers: Working, Episodic, Semantic, Procedural)
+Grafana dashboard mockup with real metric names
+Security requirements table (TLS 1.3, AES-256, gVisor)
+Scalability requirements (10x, 100x, 1000x scenarios)
+4.3 — 02 — Architecture
+Optimized highlights:
+Full 4-layer architecture: Client → API Gateway → Agent Orchestrator → LLM Router → Data
+Layer
+Go code samples throughout
+State machine implementation (8 states)
+Tool registry interface
+Security architecture (auth flow, sandbox config)
+Kubernetes deployment configs
+Observability stack (OpenTelemetry + Grafana)
+Disaster recovery with RTO/RPO
+Key additions over original:
+chi router middleware pipeline code
+Agent state machine with full Go implementation
+Go interface definitions for Tool, ToolRegistry, ToolResult
+classifyComplexity() with canonical 5-factor scoring formula (aligned with LLM Strategy doc)
+MemoryManager struct with 4 layers: Working, Episodic, Semantic, Procedural
+gVisor sandbox YAML configuration
+Prometheus metrics definitions
+Distributed tracing with OpenTelemetry
+Multi-model failover flow diagrams
+Docker Compose dev environment
+Kubernetes Deployment + Service YAML
+Infrastructure requirements table (Dev → Staging → Prod → Enterprise)
+Alerting rules table (6 alerts with conditions/severity)
+Caching strategy (L1/L2/L3 layers)
+Backup strategy with RTO/RPO targets
+
+--- PAGE 4 ---
+
+4.4 — 03 — Database Schema
+Optimized highlights:
+Complete PostgreSQL schema with 15+ tables
+pgvector extensions for vector search
+Partitioning strategy for high-volume tables
+JSONB fields for flexibility
+Connection pooling code
+Read replica pattern
+BRIN indexes for time-series data
+Migration tooling with golang-migrate
+Key additions over original:
+tasks table with monthly partitions (July–October 2026), max_iterations INT DEFAULT 20, and
+defined plan JSONB structure
+memory_episodes with importance decay and access tracking
+memory_patterns for codebase pattern recognition
+memory_workflows for learned procedural workflows
+sessions table with timeout_seconds and expires_at for session lifecycle
+code_provenance tracking (which model generated what code)
+model_performance analytics table
+Budget tracking with alert thresholds and hard/soft limits
+Daily aggregate stats table
+skills table with full-text search index
+skill_versions with dependency tracking
+skill_reviews with moderation
+audit_log with monthly partitions and risk levels
+Performance optimization: partial indexes, covering indexes, BRIN indexes
+Read replica Go implementation with round-robin
+Connection pool configuration (pgxpool)
+4.5 — 04 — API Contract
+Optimized highlights:
+Full REST API with 7 resource groups
+SSE streaming specification
+Cursor-based pagination
+Rate limiting headers
+Go and Python SDK examples
+CLI usage examples
+OpenAPI reference
+
+--- PAGE 5 ---
+
+Webhook verification with HMAC
+Key additions over original:
+Idempotency key support (Idempency-Key header)
+9 specific error codes with HTTP statuses
+Task streaming with 8 event types (task_started, step_started, step_completed,
+token_stream, hitl_required, task_completed, task_failed, heartbeat)
+Memory search/create endpoints
+Organization/team endpoints (create, invite)
+Webhook payload format with HMAC-SHA256 verification
+Rate limit tiers (Free/Pro/Team/Enterprise)
+Retry-After header behavior
+SDK examples in Go and Python
+Changelog table (v1.0 → v3.0)
+4.6 — 05 — Test Plan
+Optimized highlights:
+11-section test plan
+Testing pyramid (70% unit / 20% integration / 10% E2E)
+Go table-driven test examples
+Testcontainers integration tests
+Contract testing
+E2E CLI tests
+Load testing with k6
+Security test checklist
+Chaos engineering scenarios
+CI pipeline YAML
+Pre-commit hooks
+Key additions over original:
+Chaos failure scenarios table (6 scenarios with impact/expected behavior)
+Sandbox escape test cases (filesystem + network)
+Mutation testing target (>70%)
+Flaky test tracking (target: 0)
+golangci-lint and gosec integration
+Test data management with fixtures
+Test database reset strategy
+Coverage report generation commands
+Pre-commit hook script (tests + lint + security scan)
+GitHub Actions CI/CD pipeline (3 jobs: unit, integration, e2e)
+
+--- PAGE 6 ---
+
+4.7 — 06 — LLM Strategy
+Optimized highlights:
+10-section strategy document
+2026 provider landscape (10 models compared)
+Routing algorithm code
+Complexity classification
+Health monitoring
+Circuit breaker pattern
+Prompt engineering templates
+Context window management
+Provider-specific adapters (Anthropic, OpenAI, Ollama)
+Monitoring with Grafana SQL queries
+Key additions over original:
+Specific pricing per 1M tokens for each model:
+Claude Opus 4: $15/$75
+Claude Sonnet 4: $3/$15
+Claude Haiku 3.5: $0.80/$4
+GPT-4.5: $15/$60
+GPT-4o: $2.50/$10
+GPT-4o-mini: $0.15/$0.60
+Gemini 2.5 Pro: $1.25/$10
+Gemini 2.0 Flash: $0.075/$0.30
+DeepSeek R1: $0.55/$2.19
+classifyComplexity() implementation with 5-factor scoring (task type, file count, reasoning,
+novelty, risk)
+CircuitBreaker Go struct with Closed/Open/HalfOpen states
+Ollama embedding compatibility note (384 vs 1536 dimensions)
+ContextCompressor for long sessions
+Batch processing for 50% discount
+Provider selection matrix (task type → best model)
+Failover chain diagram (4 levels + cache + retry queue)
+4.8 — 07 — Token Cost Optimization
+Optimized highlights:
+9-section document
+5 core cost levers with estimated savings
+Prompt caching strategy
+Model routing for cost
+
+--- PAGE 7 ---
+
+Batch processing optimization
+Token compression
+Semantic caching
+Budget management
+Cost alerting
+Implementation roadmap (4 phases)
+Key additions over original:
+Estimated savings table:
+Prompt Caching: 40-80% on input tokens
+Model Routing: 40-70% on overall bill
+Batch Processing: 30-50% on async tasks
+Token Compression: 6-15% per request
+Semantic Caching: 20-60% on repeated queries
+Combined Target: 50-70% total cost reduction
+Provider-specific caching:
+Anthropic: cache_control breakpoints
+OpenAI: automatic for prompts > 1024 tokens
+Google: context caching
+CacheInvalidator with TTL and access-count eviction
+OptimizationReport generator with recommendations
+4-phase implementation roadmap:
+Phase 1 (Week 1-2): Quick wins
+Phase 2 (Week 3-4): Model routing
+Phase 3 (Week 5-8): Advanced optimization
+Phase 4 (Ongoing): Monitoring & tuning
+4.9 — 08 — Skills Marketplace
+Optimized highlights:
+9-section marketplace specification
+Skill manifest YAML format
+Go interface definitions
+Publishing pipeline (6 steps)
+Installation flow (7 steps)
+Execution flow (6 steps)
+Quality gates (5 gate types)
+Community scoring algorithm
+Revenue sharing implementation
+Search algorithm (text + semantic)
+Recommendation engine
+Growth flywheel
+
+--- PAGE 8 ---
+
+Key additions over original:
+Skill package directory structure (skill.yaml, main.go, go.mod, tests, etc.)
+Skill interface with Name(), Execute(), Validate(), Help() methods
+PublishPipeline with 6-step process: validate → test → security scan → quality checks →
+upload → register
+QualityGate interface with 5 gates: Security, TestCoverage, Documentation, Performance,
+Compatibility
+Composite quality score formula:
+score = (rating × 0.3) + (log(reviews+1) × 0.2) + (log(downloads+1) × 0.2) + (log(active
+Revenue share implementation (0/15/10% tiers)
+Semantic search + text search merge for skill discovery
+Recommendation engine based on installed skills + recent tasks
+Growth flywheel diagram
+Supply-side and demand-side growth strategies
+4.10 — 09 — Go Build Guide
+Optimized highlights:
+7-section guide
+Full project layout (20+ directories)
+go.mod dependencies
+Makefile with 15 targets
+Docker multi-stage builds
+CLI distribution Dockerfile
+Interface-driven design patterns
+Dependency injection patterns
+Error handling patterns
+Configuration management
+Test patterns (table-driven, integration, mocks)
+CI/CD pipeline (GitHub Actions)
+Linter configuration
+Key additions over original:
+Complete Makefile with targets: build, dev, test, test-integration, test-all, lint, fmt, tidy, generate,
+migrate, docker, clean, security, check
+.golangci.yml with 12 enabled linters: errcheck, gosimple, govet, ineffassign, staticcheck,
+unused, gofmt, goimports, misspell, unconvert, gocritic, revive, gosec
+GitHub Actions CI/CD YAML (5 jobs: test, lint, build, security, release)
+AppError type with 6 predefined errors (NotFound, Unauthorized, Forbidden, Validation,
+RateLimit, BudgetExceeded)
+
+--- PAGE 9 ---
+
+Cache-aside pattern implementation with GetOrCreate
+Rate limiter middleware with Redis pipeline
+Connection pool configuration (pgxpool)
+Dockerfile with non-root user, ca-certificates, multi-stage build
+4.11 — 10 — Database Strategy
+Optimized highlights:
+7-section strategy document
+PostgreSQL config tuning (postgresql.conf)
+Redis config (redis.conf)
+NATS JetStream overview
+Connection pooling code
+Read replica strategy
+Query optimization patterns
+Partitioning strategy
+Semantic caching
+Session storage
+Rate limiting
+Horizontal/vertical scaling
+Backup scheduling
+Monitoring with Prometheus
+Alert rules (5 rules)
+Disaster recovery with RTO/RPO targets
+Key additions over original:
+postgresql.conf optimizations:
+shared_buffers = '4GB' (25% of RAM)
+effective_cache_size = '12GB' (75% of RAM)
+work_mem = '256MB'
+maintenance_work_mem = '1GB'
+ReplicaPool with atomic round-robin counter
+PartitionManager for auto-creating monthly partitions
+BackupManager with cron scheduling (daily incremental, weekly full)
+Redis recovery procedures (database-only mode fallback)
+Prometheus metrics for PostgreSQL and Redis
+Alert rules YAML (5 alerts: HighConnectionCount, SlowQueries, DatabaseDown,
+RedisMemoryHigh, RedisDown)
+RTO/RPO targets:
+PostgreSQL: RTO < 5 min, RPO < 1 min
+Redis: RTO < 2 min, RPO < 15 min
+NATS: RTO < 1 min, RPO = 0
+
+--- PAGE 10 ---
+
+Full System: RTO < 30 min, RPO < 5 min
+4.12 — 11 — AI Continuation Prompt
+Optimized highlights:
+10-section document
+Continuation architecture diagram
+State machine (7 states)
+SessionState serialization format
+Checkpoint creation (Redis → PostgreSQL → S3)
+Recovery flow
+Context reconstruction
+Automatic resume
+Timeout handling
+Cost-aware pruning
+Notifications
+CLI commands
+Monitoring metrics
+Key additions over original:
+3-tier storage architecture:
+Hot: Redis (24h TTL)
+Warm: PostgreSQL (permanent)
+Cold: S3 archive (long-term)
+SessionState struct with 18 fields (SessionID, UserID, ProjectID, TaskID, TaskTitle, TaskStatus,
+CurrentStep, TotalSteps, Plan, Messages, TokenCount, ToolsUsed, FilesChanged, TotalCost,
+TotalTokens, Model, Provider, timestamps)
+Recovery flow: Redis → PostgreSQL → S3 (cascading fallback)
+4 memory layers in architecture diagram: Working, Episodic, Semantic, Procedural
+Context reconstruction: project context + memory + message history + installed skills
+ContextPruner with 3 strategies:
+1. Remove old tool calls
+2. Summarize old messages (LLM-based)
+3. Keep only essential context
+Auto-resume scheduler (checks every 5 minutes)
+Continuation cost tracking
+CLI commands: vigil session list, vigil session resume <id>
+SQL queries for dashboard (continuation success rate, cost savings, avg resumption time)
+Notification system (Slack + webhooks)
+5. Structural Patterns in Optimized Docs
+
+--- PAGE 11 ---
+
+All 12 optimized documents share these consistent patterns:
+1. Standardized header: # Title → > Version: 3.0 | Date: June 2026 | Status: Final
+2. Numbered sections with consistent depth (typically 8-12 sections)
+3. Go code samples throughout (consistent with Go 1.22+ and the project's tech stack)
+4. ASCII diagrams for architecture and flow visualization
+5. Tables for structured data (configs, metrics, comparisons)
+6. Cross-references to other documents in the set
+7. Production-ready detail: Real SQL schemas, real Go interfaces, real Docker/K8s configs
+6. Summary Assessment
+Dimension Original PDFs Optimized MDs
+CompletenessPartial/overview-level Production-ready, comprehensive
+Code samplesMinimal or absent Extensive Go, SQL, YAML, Docker
+Consistency Variable formatting Uniform structure across all 12
+Version controlNot git-friendly Fully git-friendly (Markdown)
+Actionability Conceptual Implementable with minimal interpretation
+Cross-referencingInconsistent Systematic, all pointing to master doc
+Total content ~Estimated 50% of optimized100% — the optimized set is the authoritative source
+7. Conclusion
+The optimized MD files in optimized/ are the definitive, production-ready versions of the VigilAgent
+project documentation. They are:
+Significantly more detailed — each document expanded to include implementation code,
+configuration, and deployment specs
+Consistently formatted — uniform structure, versioning, and cross-referencing
+Git-friendly — Markdown format enables version control and collaboration
+Actionable — contain actual Go code, SQL schemas, Docker configs, and CI/CD pipelines that
+can be directly used for development
+Authoritative — all documents reference back to the master prompt as the single source of truth
+The original PDFs appear to be earlier drafts or condensed versions that served as the basis for the
+optimized content. For all development purposes, the optimized MD set should be treated as the
+canonical reference.
+This comparison analysis was generated on June 23, 2026. For questions about specific documents,
+refer to the individual optimized MD files in the optimized/ folder.

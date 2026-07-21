@@ -1,0 +1,474 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — Document Reconciliation Report
+Version: 1.0 | Date: June 2026 | Status: Final Scope: Cross-document analysis of all 12
+optimized project documents
+1. Executive Summary
+This report identifies inconsistencies, gaps, and contradictions across the 12 optimized VigilAgent
+documents. After thorough cross-referencing, I found:
+Category Count Severity
+Contradictions (documents say different things) 8 (all resolved) High →  Resolved
+Inconsistencies (numbers/details don't align) 12 Medium
+Gaps (missing information or coverage) 10 Medium
+Ambiguities (unclear or open-ended) 6 Low
+Overall Assessment: The documents are well-aligned on architecture and vision, but have
+significant numerical inconsistencies in pricing, rate limits, and token budgets, plus structural
+gaps in billing flow, deployment strategy, and data retention.
+2. Contradictions (High Priority)
+These are direct conflicts where two documents say different things about the same topic. Each requires a
+decision to resolve.
+C1: Pricing Tiers — Master vs. API Contract vs. Schema
+Document Free Pro Team
+Master (doc 00) $0/mo, 100 tasks/mo $29/mo, 2,000
+tasks/mo
+$99/seat/mo, 5,000
+tasks/seat
+API Contract (doc
+04)
+— — —
+Schema (doc 03) monthly_task_limit: 10
+0
+— —
+PRD (doc 01) — — —
+
+--- PAGE 2 ---
+
+The Master doc is the only source for pricing tiers. The API Contract and Schema don't reference
+specific tier pricing. The Schema's default monthly_task_limit: 100  aligns with the Master's Free tier.
+Resolution needed: Confirm pricing tiers are authoritative from Master doc. Update API Contract rate
+limits table (doc 04, §5.1) to align.
+C2: Rate Limits — API Contract vs. Master
+Document Free Pro Team
+API Contract
+(doc 04, §5.1)
+60 req/min, 100
+tasks/day, 500K
+tokens/day
+300 req/min, 2,000
+tasks/day, 5M
+tokens/day
+600 req/min, 5,000
+tasks/seat/day, 10M
+tokens/seat/day
+Master (doc 00) 100 tasks/mo 2,000 tasks/mo 5,000 tasks/seat/mo
+Contradiction: API Contract uses daily limits (100 tasks/day for Free = ~3,000/month), while Master
+uses monthly limits (100 tasks/month). These are wildly different.
+Resolution needed: Decide on daily vs. monthly limits. If monthly (per Master), the API Contract
+numbers are ~30x too high.
+C3: Complexity Thresholds — Architecture vs. LLM Strategy
+Document Simple Moderate Complex Critical
+Architecture (doc 02) score < 0.3 score < 0.6 score < 0.85 score ≥ 0.85
+LLM Strategy (doc 06) score < 0.3 score < 0.6 score < 0.85 score ≥ 0.85
+These actually align. ✅  No contradiction — both use the same thresholds. However, the scoring
+formulas differ:
+Architecture: Uses weightedSum(factors, config.ComplexityWeights)  — a generic weighted
+sum
+LLM Strategy: Uses explicit per-factor scoring: task type (0.1-0.7) + file count (0.1-0.3) + reasoning
+(0.2) + novelty (0.15) + risk (0.3)
+Resolution needed: Adopt the LLM Strategy's explicit formula as the canonical implementation.
+Update Architecture doc to reference it.
+C4: Embedding Dimensions — Schema vs. LLM Strategy
+Document Dimensions Context
+Schema (doc 03) vector(1536) All embedding columns
+LLM Strategy (doc 06) 384 dimensions Ollama adapter
+Contradiction: Schema uses 1536 dimensions (OpenAI ada-002 / text-embedding-3-small), while LLM
+Strategy mentions 384 dimensions for Ollama. These are incompatible — you can't search 1536-dim
+vectors with 384-dim queries.
+
+--- PAGE 3 ---
+
+Resolution needed: Decide on a single embedding dimension. Options:
+1536 (OpenAI) — good quality, API cost
+384 (all-MiniLM-L6-v2) — local, free, lower quality
+768 (balanced) — middle ground
+C5: Max Output Tokens — API Contract vs. LLM Strategy
+Document Value Context
+API Contract (doc 04) max_tokens: 4096 Task creation request default
+LLM Strategy (doc 06) 8192 (Claude), 16384 (GPT) getMaxTokens()  function
+Contradiction: API Contract defaults to 4096, but LLM Strategy's getMaxTokens()  returns 8192 for
+Claude and 16384 for GPT. The default should match the most common model.
+Resolution needed: Set API Contract default to 8192 (matching Claude Sonnet, the default model).
+C6: Agent Max Iterations — Master vs. Schema
+Document Value Context
+Master (doc 00) 20 "Max iterations: configurable (default: 20)"
+Schema (doc 03) Not defined Tasks table has no max_iterations  column
+Gap/Contradiction: Master defines a default of 20 iterations, but the Schema doesn't store this per-
+task. It's unclear if this is a global config or per-task setting.
+Resolution needed: Add max_iterations  column to tasks table, or document it as a global config.
+C7: Memory Layers — Architecture vs. Schema vs. Continuation
+Document Memory Layers
+Architecture (doc
+02)
+Working, Episodic, Semantic
+Schema (doc 03) Episodic (memory_episodes ), Semantic (memory_patterns ), Procedural (memory_w
+orkflows )
+Continuation (doc
+11)
+Working (Redis), Episodic (Postgres), Semantic (pgvector)
+Inconsistency: Architecture and Continuation list 3 layers. Schema adds a 4th: Procedural Memory
+(memory_workflows ). This table exists in the schema but isn't referenced in the Architecture or
+Continuation docs.
+Resolution needed: Either add Procedural Memory to Architecture/Continuation docs, or remove the
+memory_workflows  table from Schema.
+
+--- PAGE 4 ---
+
+C8: Task Plan Representation — API Contract vs. Schema
+Document Format
+API Contract (doc 04) { "steps": [...], "total_steps": 3 }  — structured object
+Schema (doc 03) plan JSONB  — raw JSONB, no defined structure
+Inconsistency: API Contract shows a structured plan object, but Schema stores it as generic JSONB
+with no schema definition. The steps  field is also stored separately as steps JSONB DEFAULT '[]' .
+Resolution needed: Define the plan JSONB structure in the Schema doc, or move plan to a dedicated
+task_plans  table.
+3. Inconsistencies (Medium Priority)
+These are numerical or detail mismatches that don't directly contradict but create confusion.
+I1: Token Budget Fields — Multiple Documents
+Document Field Type Scope
+Schema (doc 03) monthly_tokens_used BIGINT Per user, monthly
+API Contract (doc 04) tokens/day  rate limit — Per tier, daily
+PRD (doc 01) Memory per session < 512MB — Per session
+Master (doc 00) Configurable budgets, hard-stop — Per user/task
+Issue: Token tracking is scattered across user-level (Schema), tier-level (API Contract), and session-level
+(PRD) with no unified token budget document.
+I2: Skill Execution Timeout — Architecture vs. API Contract
+Document Timeout
+Architecture (doc 02) 5 minutes max (sandbox config)
+API Contract (doc 04) timeout_seconds  per task (no max stated)
+Agent (doc 00) 20 max iterations default
+Issue: Architecture caps skill execution at 5 minutes, but API Contract allows arbitrary timeout_second
+s  with no stated maximum. These should be aligned.
+
+--- PAGE 5 ---
+
+I3: Data Layer Diagrams — Master vs. Architecture
+Document Components
+Master (doc 00) PostgreSQL + pgvector, Redis, S3/MinIO
+Architecture (doc 02) PostgreSQL + pgvector, Redis, NATS JetStream, S3/MinIO
+Issue: Master's architecture diagram omits NATS JetStream, which Architecture includes. Master
+should be updated to show all 4 data layer components.
+I4: Task Response Cost Fields — API Contract vs. Schema
+Document Cost Fields
+API Contract (doc 04) input_tokens , output_tokens , total_tokens , cost
+Schema (doc 03) input_tokens , output_tokens , total_tokens , cost
+These align. ✅  No issue.
+I5: Code Provenance — Schema vs. Architecture
+Document Coverage
+Schema (doc 03) Full code_provenance  table with before/after content, diff, model attribution
+Architecture (doc
+02)
+Agent orchestrator tracks tools and state, but no provenance tracking in tool
+execution flow
+Issue: Schema defines detailed provenance tracking, but Architecture's tool execution flow doesn't
+mention capturing provenance. The Architecture doc should reference provenance as part of the result
+aggregation step.
+I6: Batch Processing Integration — Token Cost vs. Task Queue
+Document Coverage
+Token Cost (doc 07) Full batch processor implementation with BatchProcessor , eligibility rules, savings
+calculation
+Architecture (doc
+02)
+Task queue uses NATS JetStream, but no batch processing integration
+LLM Strategy (doc
+06)
+Mentions batch processing as a cost optimization
+Issue: Token Cost describes batch processing in detail, but neither Architecture nor the Task Queue
+implementation shows how batch-eligible tasks are identified and routed to the batch processor.
+
+--- PAGE 6 ---
+
+I7: Budget Alert Channels — Token Cost vs. API Contract
+Document Channels
+Token Cost (doc 07) Slack, email, dashboard
+API Contract (doc 04) Webhooks (budget.exceeded  event)
+Schema (doc 03) alert_sent_at  timestamp on budgets table
+Issue: Three different alert mechanisms mentioned across documents. Should be unified into a single
+notification strategy.
+I8: Skill Commission Tiers — Master vs. Skills Marketplace
+Document Tiers
+Master (doc 00) Free (0%), Premium (15%), Enterprise (10%)
+Skills Marketplace (doc 08) Free (0%), Premium (15%), Enterprise (10%)
+These align. ✅  No issue. However, the Skills Marketplace doc doesn't explain how an author qualifies
+for each tier. Resolution: Add author qualification criteria.
+I9: CLI Installation — PRD vs. API Contract
+Document Methods
+PRD (doc 01) curl , iwr  (Windows), brew install
+API Contract (doc 04) curl , CLI commands
+Go Build Guide (doc 09) Docker image for CLI
+Issue: PRD mentions Homebrew and Windows installation, but Go Build Guide only shows Docker. No
+Homebrew formula or standalone binary distribution is documented.
+I10: Observability — Scattered Across Documents
+Document Mentions
+Architecture (doc 02) OpenTelemetry + Grafana, Prometheus metrics, distributed tracing
+LLM Strategy (doc 06) LLM-specific metrics, Grafana dashboard queries
+Token Cost (doc 07) Cost savings metrics, cache hit rate
+Go Build Guide (doc 09) pkg/telemetry/  package
+Database Strategy (doc 10) Database metrics, alert rules
+Issue: Observability is described in 5 different documents with no single authoritative observability
+strategy document.
+
+--- PAGE 7 ---
+
+I11: CORS Configuration — API Contract vs. Architecture
+Document Coverage
+API Contract (doc 04) Mentions CORS in error codes
+Architecture (doc 02) CORS middleware in router setup
+Go Build Guide (doc 09) NewCORSMiddleware(cfg.CORS)
+Issue: CORS is mentioned in 3 places but no document specifies allowed origins, methods, or headers.
+Resolution: Add CORS configuration to Architecture or Config doc.
+I12: Session Timeout Policies — Continuation vs. Schema
+Document Coverage
+Continuation (doc 11) ExpiresAt  field on SessionState, timeout handling
+Schema (doc 03) sessions  table has ended_at  but no expires_at  or timeout  field
+Issue: Continuation references session expiration, but the Schema's sessions table doesn't have an
+expiration mechanism.
+4. Gaps (Medium Priority)
+These are topics mentioned but not adequately covered, or missing entirely.
+G1: Billing Flow (Stripe Integration)
+Mentioned in: Master (doc 00), Schema (doc 03), Roadmap (doc 13) Gap: No dedicated billing
+document covering:
+Subscription lifecycle (create, upgrade, downgrade, cancel)
+Invoice generation and payment failure handling
+Dunning process (failed payment retry)
+Proration for mid-cycle changes
+Tax handling
+Refund policy
+Impact: High — billing is critical for revenue.
+G2: Web Dashboard Architecture
+Mentioned in: PRD (doc 01), Go Build Guide (doc 09), Roadmap (doc 13) Gap: No dedicated
+document covering:
+Frontend framework choice (React? Next.js? Vue?)
+
+--- PAGE 8 ---
+
+State management approach
+API integration patterns (REST vs. WebSocket)
+Authentication flow for web sessions
+Component library / design system
+Deployment strategy for frontend
+Impact: Medium — dashboard is a key team feature.
+G3: Data Retention & Deletion Policies
+Mentioned in: Schema (doc 03) — deleted_at  fields, partition dropping Gap: No document
+specifies:
+How long to retain task data (90 days? 1 year?)
+Memory episode expiration policy
+Audit log retention (7 years mentioned in Schema but not explained)
+Usage record archival strategy
+GDPR/CCPA right-to-deletion implementation
+Soft delete vs. hard delete policies
+Impact: High — compliance and cost.
+G4: Deployment & Release Strategy
+Mentioned in: Architecture (doc 02), Go Build Guide (doc 09), Roadmap (doc 13) Gap: No unified
+deployment document covering:
+Environment promotion (dev →  staging →  prod)
+Canary deployment strategy
+Rollback procedures
+Feature flags
+Database migration in production (zero-downtime)
+Blue-green vs. rolling updates
+Infrastructure as Code (Terraform details)
+Impact: Medium — operational reliability.
+G5: Skill Testing & Validation
+Mentioned in: Skills Marketplace (doc 08) — quality gates, automated testing Gap: No detailed
+document covering:
+How to write tests for skills
+What the skill testing sandbox looks like
+How to test skill configuration validation
+
+--- PAGE 9 ---
+
+Integration test patterns for skills
+Performance testing for skills
+Security scanning specifics
+Impact: Medium — marketplace quality.
+G6: API Versioning Strategy
+Mentioned in: API Contract (doc 04) — URL-based versioning (/v1/ , /v2/ ) Gap: No document
+explains:
+When to create a new API version
+Deprecation policy for old versions
+Breaking change guidelines
+Version negotiation
+Client migration support
+Impact: Low — early stage, but important for scale.
+G7: Error Handling Strategy
+Mentioned in: Go Build Guide (doc 09) — AppError  type Gap: No document explains:
+How errors propagate through the agent loop
+Retry policies for transient errors
+Error reporting to users vs. internal logging
+Error aggregation for dashboards
+Panic recovery strategy
+Impact: Medium — reliability.
+G8: Concurrency & Race Condition Handling
+Mentioned in: Architecture (doc 02) — goroutines, distributed by design Gap: No document explains:
+How concurrent agent sessions are isolated
+Race condition prevention for shared resources (budgets, skills)
+Distributed locking strategy
+Idempotency guarantees for task execution
+Impact: Medium — correctness at scale.
+G9: Skill Packaging Format
+Mentioned in: Skills Marketplace (doc 08) — package directory structure Gap: No document specifies:
+Binary format for skill packages (tar.gz? zip?)
+
+--- PAGE 10 ---
+
+Package signing/verification
+Package size limits
+Dependency resolution algorithm
+Conflict detection between skills
+Impact: Low — can be deferred to implementation.
+G10: LLM Response Quality Evaluation
+Mentioned in: LLM Strategy (doc 06) — performance tracking Gap: No document explains:
+How to measure response quality (beyond success/failure)
+A/B testing framework for model comparisons
+User satisfaction scoring
+Automated quality checks on generated code
+Regression detection when switching models
+Impact: Medium — core value proposition.
+5. Ambiguities (Low Priority)
+These are areas where the documents are vague or open-ended.
+A1: HITL Checkpoint Granularity
+Documents: Architecture (doc 02), PRD (doc 01), Agent (doc 00) Ambiguity: HITL is mentioned
+extensively, but no document specifies:
+Which specific actions require HITL (all file writes? only destructive?)
+How HITL notifications are delivered (CLI prompt? webhook? both?)
+Timeout behavior if user doesn't respond
+Batch approval for multiple pending actions
+A2: Memory Episode Creation Criteria
+Documents: Schema (doc 03), Continuation (doc 11), Architecture (doc 02) Ambiguity: Memory
+system is well-designed, but no document explains:
+What triggers an episode to be created (every task? only significant ones?)
+How "importance" score is calculated
+How patterns are extracted from episodes
+When to compact/summarize old episodes
+
+--- PAGE 11 ---
+
+A3: Skill Configuration Validation
+Documents: Skills Marketplace (doc 08), API Contract (doc 04) Ambiguity: Skill manifests include c
+onfig_schema  (JSON Schema), but:
+Who validates config at install time? Client or server?
+What happens if a skill's config schema changes between versions?
+How are breaking config changes handled?
+A4: Cost Attribution for Shared Resources
+Documents: Schema (doc 03), Token Cost (doc 07), API Contract (doc 04) Ambiguity: Cost tracking
+is per-user, but:
+How are shared team resources (skills, memory) cost-attributed?
+Who pays for org-level skill installations?
+How is cost split across team members?
+A5: Multi-Region Support
+Documents: Architecture (doc 02) — mentions global distribution Ambiguity: Architecture mentions
+"< 200ms latency" globally, but:
+No document specifies which regions
+No data residency strategy for EU/GDPR
+No failover between regions documented
+A6: Offline/Local Model Support
+Documents: LLM Strategy (doc 06) — Ollama adapter, Master (doc 00) — local model fallback
+Ambiguity: Local models are mentioned but:
+No minimum hardware requirements documented
+No performance benchmarks for local models
+No model selection guide for local deployment
+Unclear which local models are supported beyond Llama 3.1 405B
+
+--- PAGE 12 ---
+
+6. Cross-Document Consistency Matrix
+Topic 00 01 02 03 04 05 06 07 08 09 10 11
+Pricing ✅— — — ⚠— — — — — — —
+Rate Limits — — — — ⚠— — — — — — —
+Complexity Routing ✅✅⚠— — — ✅— — — — —
+Memory Layers ✅✅⚠⚠— — — — — — — ✅
+Embedding Dims — — — ⚠— — ⚠— — — — —
+Max Tokens — — — — ⚠— ⚠— — — — —
+Task Schema — ✅✅✅✅— — — — — — —
+Data Layer ✅— ⚠— — — — — — — ✅—
+HITL ✅✅✅— — — — — — — — ✅
+Skills ✅✅✅✅✅— — — ✅— — —
+Cost Tracking ✅✅— ✅✅— ✅✅— — — ✅
+Billing ✅— — ⚠— — — ✅— — — —
+Deployment — — ✅— — — — — — ✅— —
+Observability — ✅✅— — — ✅✅— ✅✅—
+Legend: ✅  Consistent | ⚠  Inconsistent/Gap | — Not mentioned
+
+--- PAGE 13 ---
+
+7. Recommended Resolutions
+Priority 1: Resolve Contradictions (Week 1)
+ID Issue Recommended Resolution
+C1 Pricing tiers ✅  RESOLVED — Authoritative from Master doc. API Contract aligned.
+C2 Rate limits (daily vs.
+monthly)
+✅  RESOLVED — Adopted monthly limits. API Contract §5.1 updated.
+C3 Complexity scoring ✅  RESOLVED — Adopted LLM Strategy's explicit formula. Architecture
+§2.5 updated.
+C4 Embedding dimensions ✅  RESOLVED — Adopted 1536 (OpenAI) as primary. Ollama note added to
+LLM Strategy §8.3.
+C5 Max output tokens ✅  RESOLVED — Default set to 8192 (Claude Sonnet). API Contract
+updated.
+C6 Agent max iterations ✅  RESOLVED — Added max_iterations  column to tasks table (default:
+20). Schema §2.4 updated.
+C7 Memory layers ✅  RESOLVED — Procedural Memory added to Architecture §2.4 and
+Continuation §2.1.
+C8 Task plan representation ✅  RESOLVED — Plan JSONB structure defined in Schema §2.4 with
+comments.
+Priority 2: Fill Gaps (Weeks 2-3)
+ID Gap Recommended Action
+G1 Billing flow Create billing-strategy.md  or expand Schema doc §6.
+G2 Web dashboard Create dashboard-architecture.md  or add to Architecture doc.
+G3 Data retention Add retention policies to Schema doc or create dedicated doc.
+G4 Deployment strategy Expand Go Build Guide or create deployment-strategy.md .
+G5 Skill testing Add to Skills Marketplace doc §5 or create separate doc.
+Priority 3: Clarify Ambiguities (Weeks 3-4)
+ID Ambiguity Recommended Action
+A1 HITL granularity Add HITL decision matrix to Architecture doc §2.2.
+A2 Memory creation Add memory episode creation rules to Continuation doc.
+A3 Skill config validation Clarify in Skills Marketplace doc §4.1.
+A4 Cost attribution Add cost attribution rules to Token Cost doc §7.
+
+--- PAGE 14 ---
+
+8. Document Update Priority
+Document Updates Needed Priority
+04-api-contract.md Fix rate limits (daily → monthly), update max_tokens default, add
+CORS config
+P1
+02-architecture.md Add NATS to data layer diagram, add Procedural Memory,
+reference LLM routing formula
+P1
+03-schema.md Add max_iterations  to tasks, add expires_at  to sessions,
+define plan JSONB structure
+P1
+06-llm-strategy.md Align embedding dimensions with Schema (1536), update Ollama
+adapter
+P1
+07-token-cost-
+optimization.md
+Add batch processing integration with task queue P2
+08-skills-marketplace.md Add author tier qualification criteria, skill testing details P2
+11-ai-continuation-
+prompt.md
+Add Procedural Memory, session expiration to Schema alignment P2
+00-master-project-
+prompt.md
+Add NATS to architecture diagram, update complexity scoring
+reference
+P2
+09-golang-build-guide.md Add Homebrew formula, standalone binary distribution P3
+05-test-plan.md Add skill testing patterns, batch processing tests P3
+9. Summary
+The 12 optimized documents are well-structured and comprehensive, with strong architectural
+consistency. The main issues are:
+1. Numerical inconsistencies in pricing, rate limits, and token budgets — mostly between the
+Master doc and API Contract
+2. Structural gaps in billing, deployment, and data retention — topics mentioned but not detailed
+3. Embedding dimension mismatch between Schema (1536) and LLM Strategy (384 for Ollama)
+4. Missing memory layer — Procedural Memory exists in Schema but not in
+Architecture/Continuation
+Recommended next step: Resolve the 8 contradictions (Priority 1) before beginning implementation,
+as they affect the core data model and API contract.
+
+--- PAGE 15 ---
+
+This reconciliation report was generated on June 23, 2026. Re-run after document updates to verify
+consistency.

@@ -1,4 +1,6 @@
 # VigilAgent Configuration
+# Defaults for local development with docker-compose
+# Supabase overrides: set VIGILAGENT_DATABASE_* in .env file
 
 server:
   host: 0.0.0.0
@@ -12,7 +14,7 @@ database:
   host: localhost
   port: 5432
   user: vigilagent
-  password: vigilagent
+  password: vigilagent_dev
   name: vigilagent
   sslmode: disable
   max_open_conns: 25
@@ -29,6 +31,26 @@ auth:
   jwt_secret: change-me-in-production
   jwt_expiration: 24h
   api_key_prefix: va_
+
+cors:
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8080"
+  allowed_methods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+  allowed_headers:
+    - Accept
+    - Authorization
+    - Content-Type
+    - X-API-Key
+    - X-Request-ID
+  allow_credentials: false
+  max_age: 86400
 
 stripe:
   secret_key: ""

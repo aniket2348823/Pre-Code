@@ -18,10 +18,12 @@ var (
 
 // Claims represents the JWT claims structure.
 type Claims struct {
-	UserID    string `json:"user_id"`
-	Email     string `json:"email"`
-	Role      string `json:"role"`
-	OrgID     string `json:"org_id"`
+	UserID    string   `json:"user_id"`
+	Email     string   `json:"email"`
+	Role      string   `json:"role"`
+	OrgID     string   `json:"org_id"`
+	Scopes    []string `json:"scopes,omitempty"`
+	IsAPIKey  bool     `json:"is_api_key,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -41,6 +43,9 @@ func NewJWT(cfg *config.AuthConfig) *JWT {
 
 // GenerateToken creates a new signed JWT token for the given user.
 func (j *JWT) GenerateToken(userID, email, role, orgID string) (string, error) {
+	if len(j.secret) == 0 {
+		return "", fmt.Errorf("jwt secret must not be empty")
+	}
 	now := time.Now()
 	claims := &Claims{
 		UserID: userID,
@@ -97,6 +102,9 @@ func ContextWithClaims(ctx context.Context, claims *Claims) context.Context {
 
 // ClaimsFromContext retrieves claims from context.
 func ClaimsFromContext(ctx context.Context) (*Claims, bool) {
+	if ctx == nil {
+		return nil, false
+	}
 	claims, ok := ctx.Value(claimsKey).(*Claims)
 	return claims, ok
 }

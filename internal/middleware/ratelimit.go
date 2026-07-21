@@ -3,36 +3,30 @@ package middleware
 import (
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
-// Lua script for atomic rate limiting (sliding window counter)
-// KEYS[1] = rate limit key
-// ARGV[1] = window size in seconds
-// ARGV[2] = max requests
-// ARGV[3] = current timestamp
+// rateLimitScript is a Lua script for atomic sliding window rate limiting.
 var rateLimitScript = redis.NewScript(`
 local key = KEYS[1]
 local window = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
 
--- Clean up expired entries
 redis.call('ZREMRANGEBYSCORE', key, 0, now - window)
 
--- Get current count
 local count = redis.call('ZCARD', key)
 
 if count < limit then
-    -- Add current request
     redis.call('ZADD', key, now, now .. '-' .. math.random())
     redis.call('EXPIRE', key, window)
     return {count + 1, 0}
 else
-    -- Get oldest entry to calculate retry-after
     local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
     local retryAfter = 0
     if #oldest > 0 then
@@ -66,14 +60,12 @@ func (rl *RateLimiter) Middleware(keyFunc func(r *http.Request) string) func(htt
 			key := "ratelimit:" + keyFunc(r)
 			now := time.Now().Unix()
 
-			// Execute atomic Lua script
 			result, err := rateLimitScript.Run(ctx, rl.client, []string{key},
 				int64(rl.window.Seconds()),
 				rl.limit,
 				now,
 			).Int64Slice()
 			if err != nil {
-				// On Redis error, allow the request through
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -81,7 +73,6 @@ func (rl *RateLimiter) Middleware(keyFunc func(r *http.Request) string) func(htt
 			count := result[0]
 			retryAfter := result[1]
 
-			// Set rate limit headers
 			w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(rl.limit, 10))
 			w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(max(0, rl.limit-count), 10))
 			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(now+int64(rl.window.Seconds()), 10))
@@ -91,6 +82,7 @@ func (rl *RateLimiter) Middleware(keyFunc func(r *http.Request) string) func(htt
 					w.Header().Set("Retry-After", strconv.FormatInt(retryAfter, 10))
 				}
 				response.JSON(w, http.StatusTooManyRequests, map[string]string{
+					"code":  "INFRA_001",
 					"error": "rate limit exceeded",
 				})
 				return
@@ -134,4 +126,114 @@ func RateLimitByUser(client *redis.Client, limit int, window time.Duration) func
 		}
 		return "user:" + userID
 	})
+}
+
+// RateLimitByIPKey extracts the client IP address for use as a rate-limit key.
+func RateLimitByIPKey(r *http.Request) string {
+	ip := r.Header.Get("X-Forwarded-For")
+	if ip != "" {
+		if idx := strings.Index(ip, ","); idx != -1 {
+			ip = strings.TrimSpace(ip[:idx])
+		}
+	}
+	if ip == "" {
+		ip = r.Header.Get("X-Real-IP")
+	}
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	if strings.HasPrefix(ip, "[") {
+		if idx := strings.LastIndex(ip, "]:"); idx != -1 {
+			ip = ip[1:idx]
+		}
+	} else {
+		if idx := strings.LastIndex(ip, ":"); idx != -1 {
+			ip = ip[:idx]
+		}
+	}
+	return "ip:" + ip
+}
+
+// --- Rate Limit Headers Middleware (adds X-RateLimit-* to ALL responses) ---
+
+// RateLimitHeadersMiddleware adds X-RateLimit-* headers to every response.
+type RateLimitHeadersMiddleware struct {
+	limit    int
+	window   time.Duration
+	counters map[string]*slidingWindow
+	mu       sync.RWMutex
+}
+
+type slidingWindow struct {
+	count       int
+	windowStart time.Time
+	mu          sync.Mutex
+}
+
+// NewRateLimitHeadersMiddleware creates middleware that sets rate limit headers on every response.
+func NewRateLimitHeadersMiddleware(limit int, window time.Duration) *RateLimitHeadersMiddleware {
+	rl := &RateLimitHeadersMiddleware{
+		limit:    limit,
+		window:   window,
+		counters: make(map[string]*slidingWindow),
+	}
+	go rl.cleanup()
+	return rl
+}
+
+func (rl *RateLimitHeadersMiddleware) cleanup() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		rl.mu.Lock()
+		for key, sw := range rl.counters {
+			if now.Sub(sw.windowStart) > rl.window {
+				delete(rl.counters, key)
+			}
+		}
+		rl.mu.Unlock()
+	}
+}
+
+// Middleware returns an HTTP middleware that sets rate limit headers on every response.
+func (rl *RateLimitHeadersMiddleware) Middleware(keyFunc func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key := keyFunc(r)
+			if key == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			rl.mu.RLock()
+			sw, exists := rl.counters[key]
+			rl.mu.RUnlock()
+
+			now := time.Now()
+			if !exists || now.Sub(sw.windowStart) > rl.window {
+				rl.mu.Lock()
+				sw = &slidingWindow{windowStart: now}
+				rl.counters[key] = sw
+				rl.mu.Unlock()
+			}
+
+			sw.mu.Lock()
+			sw.count++
+			count := sw.count
+			sw.mu.Unlock()
+
+			remaining := rl.limit - count
+			if remaining < 0 {
+				remaining = 0
+			}
+			resetAt := sw.windowStart.Add(rl.window)
+
+			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(rl.limit))
+			w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }

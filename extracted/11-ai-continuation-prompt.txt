@@ -1,0 +1,646 @@
+
+
+--- PAGE 1 ---
+
+VigilAgent — AI Continuation Prompt
+Version: 3.0 | Date: June 2026 | Status: Final
+1. Purpose
+The AI Continuation Prompt is the mechanism that enables VigilAgent agents to maintain context across
+sessions, resume interrupted tasks, and continue work autonomously. It ensures that agents can pick up
+exactly where they left off, even after system restarts, network failures, or user disconnections.
+1.1 Core Principles
+1. Zero Context Loss — Every session's state is persistently stored
+2. Seamless Resumption — Agents resume without user intervention
+3. Cost Efficiency — Only essential context is preserved
+4. Privacy by Design — User can control what is remembered
+5. Graceful Degradation — System works even with partial context
+2. Continuation Architecture
+2.1 State Persistence
+┌─────────────────────────────────────────────────────────────┐ 
+│                  CONTINUATION ARCHITECTURE                    │ 
+│                                                              │ 
+│  ┌─────────────────────────────────────────────────────────┐│ 
+│  │                    Session State                         ││ 
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐             ││ 
+│  │  │ Working  │  │ Episodic │  │ Semantic │  │Procedural│            ││ 
+│  │  │ Memory   │  │ Memory   │  │ Memory   │  │ Memory   │            ││ 
+│  │  │ (Redis)  │  │ (Postgres)│ │ (pgvector)│ │(Postgres)│            ││ 
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘            ││ 
+│  └─────────────────────────────────────────────────────────┘│ 
+│                                                              │ 
+│  ┌─────────────────────────────────────────────────────────┐│ 
+│  │                  Task Checkpoints                        ││ 
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐             ││ 
+│  │  │  Task    │  │  Step    │  │  HITL    │             ││ 
+│  │  │  State   │  │  Progress│  │  Pending │             ││ 
+│  │  │          │  │          │  │          │             ││ 
+│  │  └──────────┘  └──────────┘  └──────────┘             ││ 
+│  └─────────────────────────────────────────────────────────┘│ 
+│                                                              │ 
+
+--- PAGE 2 ---
+
+│  ┌─────────────────────────────────────────────────────────┐│ 
+│  │                  Recovery Manager                        ││ 
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐             ││ 
+│  │  │  Detect  │  │  Restore │  │  Resume  │             ││ 
+│  │  │  State   │  │  Context │  │  Execution│            ││ 
+│  │  └──────────┘  └──────────┘  └──────────┘             ││ 
+│  └─────────────────────────────────────────────────────────┘│ 
+└─────────────────────────────────────────────────────────────┘ 
+2.2 State Machine
+┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐ 
+│  New    │─── ▶ │ Running │─── ▶ │ Paused  │─── ▶ │ Resumed │ 
+│ Session │    │         │    │         │    │         │ 
+└─────────┘    └────┬────┘    └────┬────┘    └────┬────┘ 
+                    │              │              │ 
+                    ▼              ▼              ▼ 
+               ┌─────────┐    ┌─────────┐    ┌─────────┐ 
+               │ Failed  │    │Timed Out│    │Completed│ 
+               │         │    │         │    │         │ 
+               └────┬────┘    └────┬────┘    └─────────┘ 
+                    │              │ 
+                    ▼              ▼ 
+               ┌─────────┐    ┌─────────┐ 
+               │  Retry  │    │  Queue  │ 
+               │         │    │  Again  │ 
+               └─────────┘    └─────────┘ 
+3. State Serialization
+3.1 Session State Format
+// internal/continuation/state.go 
+type SessionState struct { 
+    // Identity 
+    SessionID   string    `json:"session_id"` 
+    UserID      string    `json:"user_id"` 
+    ProjectID   string    `json:"project_id"` 
+     
+    // Current Task 
+    TaskID      string    `json:"task_id"` 
+    TaskTitle   string    `json:"task_title"` 
+    TaskStatus  string    `json:"task_status"` 
+     
+    // Execution Progress 
+    CurrentStep int       `json:"current_step"` 
+    TotalSteps  int       `json:"total_steps"` 
+
+--- PAGE 3 ---
+
+    Plan        []Step    `json:"plan"` 
+     
+    // Context Window 
+    Messages    []Message `json:"messages"` 
+    TokenCount  int       `json:"token_count"` 
+     
+    // Tool State 
+    ToolsUsed   []string  `json:"tools_used"` 
+    FilesChanged []string `json:"files_changed"` 
+     
+    // Cost Tracking 
+    TotalCost   float64   `json:"total_cost"` 
+    TotalTokens int       `json:"total_tokens"` 
+     
+    // Metadata 
+    Model       string    `json:"model"` 
+    Provider    string    `json:"provider"` 
+     
+    // Timestamps 
+    StartedAt   time.Time `json:"started_at"` 
+    LastActive  time.Time `json:"last_active"` 
+    ExpiresAt   time.Time `json:"expires_at"` 
+} 
+type Step struct { 
+    Index       int       `json:"index"` 
+    Tool        string    `json:"tool"` 
+    Description string    `json:"description"` 
+    Status      string    `json:"status"` 
+    Result      string    `json:"result,omitempty"` 
+    Error       string    `json:"error,omitempty"` 
+    StartedAt   time.Time `json:"started_at"` 
+    CompletedAt *time.Time `json:"completed_at,omitempty"` 
+} 
+type Message struct { 
+    Role       string    `json:"role"` 
+    Content    string    `json:"content"` 
+    ToolCallID string    `json:"tool_call_id,omitempty"` 
+    Tokens     int       `json:"tokens"` 
+    Timestamp  time.Time `json:"timestamp"` 
+} 
+3.2 Checkpoint Creation
+// internal/continuation/checkpoint.go 
+type CheckpointManager struct { 
+    redis    *redis.Client 
+    db       *pgxpool.Pool 
+    s3       *S3Client 
+} 
+
+--- PAGE 4 ---
+
+func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, state *SessionState) error
+    // Step 1: Serialize state 
+    data, err := json.Marshal(state) 
+    if err != nil { 
+        return fmt.Errorf("marshaling state: %w", err) 
+    }
+     
+    // Step 2: Store in Redis (hot storage) 
+    key := fmt.Sprintf("session:%s:state", state.SessionID) 
+    if err := cm.redis.Set(ctx, key, data, 24*time.Hour).Err(); err != nil { 
+        return fmt.Errorf("storing in redis: %w", err) 
+    }
+     
+    // Step 3: Store in PostgreSQL (warm storage) 
+    if err := cm.storeInDB(ctx, state); err != nil { 
+        return fmt.Errorf("storing in database: %w", err) 
+    }
+     
+    // Step 4: Archive to S3 (cold storage) for long-term 
+    if err := cm.archiveToS3(ctx, state); err != nil { 
+        // Log but don't fail - Redis and DB are sufficient 
+        log.Printf("warning: failed to archive to S3: %v", err) 
+    }
+     
+    return nil 
+} 
+func (cm *CheckpointManager) storeInDB(ctx context.Context, state *SessionState) error { 
+    query := ` 
+        INSERT INTO session_checkpoints ( 
+            session_id, user_id, project_id, task_id, 
+            state_data, token_count, total_cost, 
+            created_at, expires_at 
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
+        ON CONFLICT (session_id)  
+        DO UPDATE SET 
+            state_data = EXCLUDED.state_data, 
+            token_count = EXCLUDED.token_count, 
+            total_cost = EXCLUDED.total_cost, 
+            updated_at = NOW() 
+    `
+     
+    data, _ := json.Marshal(state) 
+     
+    _, err := cm.db.Exec(ctx, query, 
+        state.SessionID, state.UserID, state.ProjectID, state.TaskID, 
+        data, state.TokenCount, state.TotalCost, 
+        time.Now(), state.ExpiresAt, 
+    )
+     
+    return err 
+} 
+
+--- PAGE 5 ---
+
+func (cm *CheckpointManager) archiveToS3(ctx context.Context, state *SessionState) error { 
+    data, err := json.Marshal(state) 
+    if err != nil { 
+        return err 
+    }
+     
+    key := fmt.Sprintf("checkpoints/%s/%s/%s.json", 
+        state.UserID[:8], state.ProjectID[:8], state.SessionID) 
+     
+    return cm.s3.Upload(ctx, "vigilagent-checkpoints", key, data) 
+} 
+4. State Recovery
+4.1 Recovery Flow
+// internal/continuation/recovery.go 
+type RecoveryManager struct { 
+    checkpoint *CheckpointManager 
+    agent      *Agent 
+    llm        *LLMRouter 
+} 
+func (rm *RecoveryManager) RecoverSession(ctx context.Context, sessionID string) (*SessionSta
+    // Step 1: Try Redis (fastest) 
+    state, err := rm.checkpoint.GetFromRedis(ctx, sessionID) 
+    if err == nil && state != nil { 
+        log.Printf("recovered session %s from Redis", sessionID) 
+        return state, nil 
+    }
+     
+    // Step 2: Try PostgreSQL 
+    state, err = rm.checkpoint.GetFromDB(ctx, sessionID) 
+    if err == nil && state != nil { 
+        log.Printf("recovered session %s from database", sessionID) 
+        // Refresh Redis cache 
+        rm.checkpoint.RefreshRedis(ctx, state) 
+        return state, nil 
+    }
+     
+    // Step 3: Try S3 archive 
+    state, err = rm.checkpoint.GetFromS3(ctx, sessionID) 
+    if err == nil && state != nil { 
+        log.Printf("recovered session %s from S3 archive", sessionID) 
+        // Restore to DB and Redis 
+        rm.checkpoint.StoreAll(ctx, state) 
+        return state, nil 
+    }
+
+--- PAGE 6 ---
+
+     
+    return nil, fmt.Errorf("session %s not found", sessionID) 
+} 
+func (rm *RecoveryManager) ResumeExecution(ctx context.Context, state *SessionState) error { 
+    // Step 1: Validate state 
+    if err := rm.validateState(state); err != nil { 
+        return fmt.Errorf("invalid state: %w", err) 
+    }
+     
+    // Step 2: Check if task is still valid 
+    task, err := rm.agent.GetTask(ctx, state.TaskID) 
+    if err != nil { 
+        return fmt.Errorf("task not found: %w", err) 
+    }
+     
+    if task.Status == TaskCompleted || task.Status == TaskFailed { 
+        return fmt.Errorf("task already %s", task.Status) 
+    }
+     
+    // Step 3: Reconstruct context 
+    context, err := rm.reconstructContext(ctx, state) 
+    if err != nil { 
+        return fmt.Errorf("reconstructing context: %w", err) 
+    }
+     
+    // Step 4: Resume from checkpoint 
+    return rm.agent.ResumeFromCheckpoint(ctx, state, context) 
+} 
+4.2 Context Reconstruction
+func (rm *RecoveryManager) reconstructContext(ctx context.Context, state *SessionState) (*Age
+    context := &AgentContext{ 
+        SessionID: state.SessionID, 
+        UserID:    state.UserID, 
+        ProjectID: state.ProjectID, 
+        TaskID:    state.TaskID, 
+    }
+     
+    // Load project context 
+    project, err := rm.agent.GetProject(ctx, state.ProjectID) 
+    if err != nil { 
+        return nil, fmt.Errorf("loading project: %w", err) 
+    }
+    context.Project = project 
+     
+    // Load memory 
+    memory, err := rm.agent.Memory.Recall(ctx, state.TaskTitle, 10) 
+    if err != nil { 
+        // Continue without memory 
+        log.Printf("warning: failed to load memory: %v", err) 
+
+--- PAGE 7 ---
+
+    }
+    context.Memory = memory 
+     
+    // Reconstruct message history 
+    context.Messages = rm.reconstructMessages(state) 
+     
+    // Load installed skills 
+    skills, err := rm.agent.Skills.ListInstalled(ctx, state.UserID) 
+    if err != nil { 
+        log.Printf("warning: failed to load skills: %v", err) 
+    }
+    context.Skills = skills 
+     
+    return context, nil 
+} 
+func (rm *RecoveryManager) reconstructMessages(state *SessionState) []Message { 
+    // Take last N messages to fit in context window 
+    maxMessages := 20 
+    if len(state.Messages) <= maxMessages { 
+        return state.Messages 
+    }
+     
+    // Keep system message + last N messages 
+    systemMsg := state.Messages[0] 
+    recentMsgs := state.Messages[len(state.Messages)-maxMessages:] 
+     
+    return append([]Message{systemMsg}, recentMsgs...) 
+} 
+5. Automatic Continuation
+5.1 Session Timeout Handling
+// internal/continuation/timeout.go 
+type TimeoutManager struct { 
+    checkpoint *CheckpointManager 
+    queue      *TaskQueue 
+    notifier   *NotificationService 
+} 
+func (tm *TimeoutManager) HandleTimeout(ctx context.Context, sessionID string) error { 
+    // Get session state 
+    state, err := tm.checkpoint.GetFromRedis(ctx, sessionID) 
+    if err != nil { 
+        return fmt.Errorf("getting session state: %w", err) 
+    }
+     
+    // Check if task is still in progress 
+
+--- PAGE 8 ---
+
+    if state.TaskStatus == "executing" { 
+        // Create checkpoint 
+        if err := tm.checkpoint.CreateCheckpoint(ctx, state); err != nil { 
+            return fmt.Errorf("creating checkpoint: %w", err) 
+        } 
+         
+        // Queue for resumption 
+        if err := tm.queue.Enqueue(ctx, &Task{ 
+            ID:       state.TaskID, 
+            Action:   "resume", 
+            SessionID: sessionID, 
+            Priority: PriorityNormal, 
+        }); err != nil { 
+            return fmt.Errorf("queuing resumption: %w", err) 
+        } 
+         
+        // Notify user 
+        tm.notifier.Notify(ctx, state.UserID, &Notification{ 
+            Type:    "session_timeout", 
+            Title:   "Session Paused", 
+            Message: fmt.Sprintf("Your task '%s' has been paused and will resume automaticall
+            Actions: []string{"Resume Now", "Cancel"}, 
+        })
+    }
+     
+    return nil 
+} 
+5.2 Automatic Resume
+// internal/continuation/autorun.go 
+type AutoResumeManager struct { 
+    checkpoint *CheckpointManager 
+    recovery   *RecoveryManager 
+    scheduler  *Scheduler 
+} 
+func (arm *AutoResumeManager) SetupAutoResume(ctx context.Context) error { 
+    // Register periodic check for pending resumptions 
+    arm.scheduler.Every(5*time.Minute).Do(func() { 
+        arm.checkPendingResumptions(context.Background()) 
+    }) 
+     
+    return nil 
+} 
+func (arm *AutoResumeManager) checkPendingResumptions(ctx context.Context) { 
+    // Find sessions that need resumption 
+    sessions, err := arm.checkpoint.GetPendingResumptions(ctx) 
+    if err != nil { 
+        log.Printf("error checking pending resumptions: %v", err) 
+
+--- PAGE 9 ---
+
+        return 
+    }
+     
+    for _, session := range sessions { 
+        // Check if user is active 
+        if arm.isUserActive(ctx, session.UserID) { 
+            // Resume session 
+            if err := arm.recovery.ResumeExecution(ctx, session); err != nil { 
+                log.Printf("error resuming session %s: %v", session.SessionID, err) 
+                continue 
+            } 
+             
+            log.Printf("auto-resumed session %s", session.SessionID) 
+        } 
+    }
+} 
+6. Cost-Aware Continuation
+6.1 Context Pruning
+// internal/continuation/pruning.go 
+type ContextPruner struct { 
+    maxTokens int 
+    llm       LLMProvider 
+} 
+func (cp *ContextPruner) PruneContext(ctx context.Context, state *SessionState) *SessionState
+    currentTokens := cp.countTokens(state.Messages) 
+     
+    if currentTokens <= cp.maxTokens { 
+        return state 
+    }
+     
+    // Strategy 1: Remove old tool calls and results 
+    pruned := cp.removeOldToolCalls(state) 
+    if cp.countTokens(pruned.Messages) <= cp.maxTokens { 
+        return pruned 
+    }
+     
+    // Strategy 2: Summarize old messages 
+    pruned = cp.summarizeOldMessages(ctx, pruned) 
+    if cp.countTokens(pruned.Messages) <= cp.maxTokens { 
+        return pruned 
+    }
+     
+    // Strategy 3: Keep only essential context 
+    pruned = cp.keepEssentialContext(pruned) 
+     
+
+--- PAGE 10 ---
+
+    return pruned 
+} 
+func (cp *ContextPruner) removeOldToolCalls(state *SessionState) *SessionState { 
+    // Remove tool call details from older messages 
+    var pruned []Message 
+     
+    for i, msg := range state.Messages { 
+        if i < len(state.Messages)-10 && msg.Role == "tool" { 
+            // Compress tool results 
+            msg.Content = fmt.Sprintf("[Tool result: %s]", truncate(msg.Content, 100)) 
+        } 
+        pruned = append(pruned, msg) 
+    }
+     
+    state.Messages = pruned 
+    return state 
+} 
+func (cp *ContextPruner) summarizeOldMessages(ctx context.Context, state *SessionState) *Sess
+    if len(state.Messages) <= 5 { 
+        return state 
+    }
+     
+    // Keep last 5 messages, summarize the rest 
+    toSummarize := state.Messages[:len(state.Messages)-5] 
+    toKeep := state.Messages[len(state.Messages)-5:] 
+     
+    // Use LLM to summarize 
+    summary, err := cp.llm.Chat(ctx, &ChatRequest{ 
+        Messages: []Message{ 
+            {Role: "system", Content: "Summarize this conversation concisely, preserving key 
+            {Role: "user", Content: formatMessages(toSummarize)}, 
+        },
+        MaxTokens: 500, 
+    }) 
+     
+    if err != nil { 
+        // Fallback: just keep recent messages 
+        state.Messages = toKeep 
+        return state 
+    }
+     
+    // Prepend summary 
+    state.Messages = append([]Message{ 
+        {Role: "system", Content: fmt.Sprintf("Previous context:\n%s", summary.Content)}, 
+    }, toKeep...) 
+     
+    return state 
+} 
+6.2 Cost Tracking
+
+--- PAGE 11 ---
+
+// internal/continuation/cost.go 
+type ContinuationCost struct { 
+    CheckpointCost  float64  // Cost to save state 
+    RecoveryCost    float64  // Cost to restore state 
+    SummarizationCost float64 // Cost to summarize context 
+    TotalCost       float64 
+} 
+func (cc *ContinuationCost) ShouldContinue(state *SessionState, estimatedCost float64) bool {
+    // Don't continue if cost exceeds task budget 
+    if state.TotalCost+estimatedCost > state.Budget { 
+        return false 
+    }
+     
+    // Don't continue if task has been running too long 
+    if time.Since(state.StartedAt) > 30*time.Minute { 
+        return false 
+    }
+     
+    return true 
+} 
+7. User Experience
+7.1 Continuation Notifications
+// internal/continuation/notifications.go 
+type ContinuationNotifier struct { 
+    slack     *SlackClient 
+    email     *EmailClient 
+    webhook   *WebhookClient 
+} 
+func (cn *ContinuationNotifier) NotifyResumption(ctx context.Context, state *SessionState) er
+    notification := &Notification{ 
+        Type:    "session_resumed", 
+        Title:   "Session Resumed", 
+        Message: fmt.Sprintf("Your task '%s' has been resumed automatically.", state.TaskTitl
+        Details: map[string]interface{}{ 
+            "task_id":    state.TaskID, 
+            "session_id": state.SessionID, 
+            "progress":   fmt.Sprintf("%d/%d steps", state.CurrentStep, state.TotalSteps), 
+        },
+        Actions: []string{"View Progress", "Pause", "Cancel"}, 
+    }
+     
+    // Send via configured channels 
+
+--- PAGE 12 ---
+
+    if err := cn.slack.Send(ctx, state.UserID, notification); err != nil { 
+        log.Printf("failed to send Slack notification: %v", err) 
+    }
+     
+    if err := cn.webhook.Send(ctx, state.UserID, notification); err != nil { 
+        log.Printf("failed to send webhook: %v", err) 
+    }
+     
+    return nil 
+} 
+7.2 CLI Continuation
+# Check for pending sessions 
+$ vigil session list 
+┌─────────────────────────────────────────────────────────────┐ 
+│  Pending Sessions                                            │ 
+│                                                              │ 
+│  ID          Task                          Status    Last Run │ 
+│  ─────────────────────────────────────────────────────────── │ 
+│  sess_abc123 Add error handling to UserService  paused  2h ago │ 
+│  sess_def456 Write unit tests for Auth module   paused  1d ago │ 
+│                                                              │ 
+│  Use `vigil session resume <id>` to continue                 │ 
+└─────────────────────────────────────────────────────────────┘ 
+# Resume a session 
+$ vigil session resume sess_abc123 
+Resuming session sess_abc123... 
+Task: Add error handling to UserService 
+Progress: Step 3/5 (60%) 
+Last active: 2 hours ago 
+[Continuing from checkpoint...] 
+Step 3: Adding error handling to createUser method... 
+Step 4: Adding error handling to deleteUser method... 
+Step 5: Running tests... 
+  Task completed successfully! 
+Cost: $0.34 (saved $0.12 from checkpoint resumption) 
+8. Monitoring & Metrics
+8.1 Continuation Metrics
+
+--- PAGE 13 ---
+
+var (
+    continuationsTotal = prometheus.NewCounterVec( 
+        prometheus.CounterOpts{ 
+            Name: "vigilagent_continuations_total", 
+            Help: "Total continuation attempts", 
+        },
+        []string{"status", "source"}, 
+    )
+     
+    continuationDuration = prometheus.NewHistogramVec( 
+        prometheus.HistogramOpts{ 
+            Name:    "vigilagent_continuation_duration_seconds", 
+            Help:    "Continuation duration", 
+            Buckets: []float64{0.1, 0.5, 1, 2, 5, 10}, 
+        },
+        []string{"source"}, 
+    )
+     
+    continuationCostSavings = prometheus.NewGauge( 
+        prometheus.GaugeOpts{ 
+            Name: "vigilagent_continuation_cost_savings", 
+            Help: "Cost savings from continuations", 
+        },
+    )
+) 
+8.2 Dashboard Queries
+-- Continuation success rate 
+SELECT  
+    status, 
+    COUNT(*) as count, 
+    COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() as percentage 
+FROM continuations 
+WHERE created_at > NOW() - INTERVAL '24 hours' 
+GROUP BY status; 
+-- Cost savings from continuations 
+SELECT  
+    SUM(original_cost - resumed_cost) as total_savings, 
+    AVG(original_cost - resumed_cost) as avg_savings_per_continuation 
+FROM continuations 
+WHERE status = 'completed' 
+AND created_at > NOW() - INTERVAL '7 days'; 
+-- Average resumption time 
+SELECT  
+    AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) as avg_resumption_seconds 
+FROM continuations 
+WHERE status = 'completed' 
+AND created_at > NOW() - INTERVAL '7 days'; 
+
+--- PAGE 14 ---
+
+9. Best Practices
+9.1 For Developers
+1. Save Early, Save Often — Checkpoints should be created at natural breakpoints
+2. Keep State Small — Only persist essential data; derive the rest
+3. Idempotent Operations — Ensure resuming from a checkpoint doesn't cause duplicate work
+4. Test Recovery — Regularly test recovery from various failure scenarios
+5. Monitor Costs — Track continuation costs to ensure they're worth the savings
+9.2 For Users
+1. Let It Resume — Trust the system to continue your work
+2. Review Checkpoints — Periodically review what's being saved
+3. Set Budgets — Configure cost limits to prevent runaway continuations
+4. Provide Feedback — Help improve continuation quality by rating resumed sessions
+10. Future Enhancements
+10.1 Planned Features
+1. Cross-Session Learning — Continuations learn from past failures
+2. Predictive Resumption — Predict when users will return and pre-warm sessions
+3. Multi-Agent Continuation — Continue multiple related sessions together
+4. Distributed Continuation — Continue across multiple machines
+10.2 Research Areas
+1. Optimal Checkpoint Frequency — Balance cost vs. recovery time
+2. Context Compression — More aggressive summarization without losing quality
+3. Federated Continuation — Continue sessions across edge devices
+This AI Continuation Prompt system ensures VigilAgent agents can maintain context and resume work
+seamlessly, providing a reliable and cost-effective experience for users.

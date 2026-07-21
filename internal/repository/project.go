@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vigilagent/vigilagent/internal/database"
 )
 
 // Project represents a project record in the database.
@@ -22,11 +22,11 @@ type Project struct {
 
 // ProjectRepository handles database operations for projects.
 type ProjectRepository struct {
-	pool *pgxpool.Pool
+	pool *database.Conn
 }
 
 // NewProjectRepository creates a new project repository.
-func NewProjectRepository(pool *pgxpool.Pool) *ProjectRepository {
+func NewProjectRepository(pool *database.Conn) *ProjectRepository {
 	return &ProjectRepository{pool: pool}
 }
 
@@ -78,6 +78,11 @@ func (r *ProjectRepository) Update(ctx context.Context, id, name, description, s
 func (r *ProjectRepository) Delete(ctx context.Context, id string) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, id)
 	return err
+}
+
+// Count returns the total number of projects.
+func (r *ProjectRepository) Count(ctx context.Context, count *int) error {
+	return r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM projects`).Scan(count)
 }
 
 // ListByOrg returns all projects for an organization.
