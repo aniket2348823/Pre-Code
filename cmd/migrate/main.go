@@ -50,11 +50,13 @@ func main() {
 
 	switch command {
 	case "up":
+		version, _ := database.CurrentVersion(ctx, pg.Pool)
 		if err := database.Migrate(ctx, pg.Pool, migrationsDir); err != nil {
 			slog.Error("migration failed", "error", err)
 			os.Exit(1)
 		}
-		slog.Info("migrations applied successfully")
+		newVersion, _ := database.CurrentVersion(ctx, pg.Pool)
+		slog.Info("migrations applied successfully", "from_version", version, "to_version", newVersion)
 	case "version":
 		version, err := database.CurrentVersion(ctx, pg.Pool)
 		if err != nil {
@@ -62,8 +64,25 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("current migration version: %d\n", version)
+	case "status":
+		version, err := database.CurrentVersion(ctx, pg.Pool)
+		if err != nil {
+			slog.Error("failed to read migration version", "error", err)
+			os.Exit(1)
+		}
+		fmt.Printf("current migration version: %d\n", version)
+		fmt.Println("\nChecking schema...")
+		var tableExists bool
+		err = pg.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'audit_logs')`).Scan(&tableExists)
+		if err != nil {
+			fmt.Printf("error checking tables: %v\n", err)
+		} else if tableExists {
+			fmt.Println("  ✅ audit_logs table exists")
+		} else {
+			fmt.Println("  ❌ audit_logs table NOT found — run 'up' to apply migrations")
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q (expected: up, version)\n", command)
+		fmt.Fprintf(os.Stderr, "unknown command %q (expected: up, version, status)\n", command)
 		os.Exit(2)
 	}
 }

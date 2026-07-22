@@ -104,6 +104,9 @@ func TestHealthEndpoint(t *testing.T) {
 }
 
 func TestRegisterHandler_MissingFields(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: requires Redis-backed rate limiter")
+	}
 	r := newTestRouter()
 	body := `{"email": ""}`
 	req := httptest.NewRequest("POST", "/api/v1/auth/register", bytes.NewBufferString(body))
@@ -117,6 +120,9 @@ func TestRegisterHandler_MissingFields(t *testing.T) {
 }
 
 func TestRegisterHandler_ShortPassword(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping: requires Redis-backed rate limiter")
+	}
 	r := newTestRouter()
 	body := `{"email": "test@example.com", "password": "short"}`
 	req := httptest.NewRequest("POST", "/api/v1/auth/register", bytes.NewBufferString(body))

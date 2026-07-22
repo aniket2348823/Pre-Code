@@ -18,10 +18,12 @@ var (
 
 // Claims represents the JWT claims structure.
 type Claims struct {
-	UserID    string `json:"user_id"`
-	Email     string `json:"email"`
-	Role      string `json:"role"`
-	OrgID     string `json:"org_id"`
+	UserID    string   `json:"user_id"`
+	Email     string   `json:"email"`
+	Role      string   `json:"role"`
+	OrgID     string   `json:"org_id"`
+	Scopes    []string `json:"scopes,omitempty"`
+	IsAPIKey  bool     `json:"is_api_key,omitempty"`
 	jwt.RegisteredClaims
 }
 

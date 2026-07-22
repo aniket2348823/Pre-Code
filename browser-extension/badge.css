@@ -1,0 +1,77 @@
+.vigilagent-wrapper {
+  position: relative;
+  display: block;
+  margin-bottom: 1em;
+}
+
+.vigilagent-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 100;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  color: #f8fafc;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  transition: all 0.3s ease;
+  animation: va-fade-in 0.3s ease-out;
+}
+
+@keyframes va-fade-in {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.vigilagent-badge .va-icon {
+  margin-right: 6px;
+}
+
+.vigilagent-badge-loading {
+  animation: va-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes va-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .5; }
+}
+
+.va-color-green { border-color: #22c55e; background: rgba(20, 83, 45, 0.85); }
+.va-color-yellow { border-color: #eab308; background: rgba(113, 63, 18, 0.85); }
+.va-color-red { border-color: #ef4444; background: rgba(127, 29, 29, 0.85); }
+.vigilagent-badge-error { border-color: #64748b; background: rgba(15, 23, 42, 0.85); color: #cbd5e1; }
+
+.vigilagent-badge-expanded {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  width: 250px;
+  max-height: 200px;
+  overflow-y: auto;
+  text-align: left;
+}
+
+.vigilagent-badge-expanded::-webkit-scrollbar {
+  width: 4px;
+}
+.vigilagent-badge-expanded::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.va-finding {
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.va-finding strong {
+  color: #fbbf24;
+}

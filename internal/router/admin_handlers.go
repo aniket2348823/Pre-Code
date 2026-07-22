@@ -10,6 +10,8 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/webhook"
+	"github.com/vigilagent/vigilagent/pkg/pagination"
+	"github.com/vigilagent/vigilagent/pkg/query"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -71,17 +73,8 @@ func (r *Router) adminListUsersHandler(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	page, _ := strconv.Atoi(req.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(req.URL.Query().Get("page_size"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-	offset := (page - 1) * pageSize
-
-	users, err := r.users.List(req.Context(), offset, pageSize)
+	// Fetch all users
+	users, err := r.users.List(req.Context(), 0, 100000)
 	if err != nil {
 		response.InternalError(w, "failed to list users")
 		return
@@ -90,13 +83,45 @@ func (r *Router) adminListUsersHandler(w http.ResponseWriter, req *http.Request)
 		users = []repository.User{}
 	}
 
-	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"users": users,
-		"page": map[string]interface{}{
-			"page":      page,
-			"page_size": pageSize,
-		},
-	})
+	filter, sortVal := query.Parse(req)
+
+	// Support page-based query as fallback, cursor-based as primary
+	cursor := req.URL.Query().Get("cursor")
+	if cursor == "" && req.URL.Query().Get("page") != "" {
+		page, _ := strconv.Atoi(req.URL.Query().Get("page"))
+		pageSize, _ := strconv.Atoi(req.URL.Query().Get("page_size"))
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 100 {
+			pageSize = 20
+		}
+
+		allProcessed, _ := query.ProcessList(users, filter, sortVal, pagination.Params{Limit: 100000})
+
+		total := len(allProcessed)
+		offset := (page - 1) * pageSize
+		end := offset + pageSize
+		if offset > total {
+			offset = total
+		}
+		if end > total {
+			end = total
+		}
+		paginated := allProcessed[offset:end]
+
+		response.SuccessWithMeta(w, req, http.StatusOK, paginated, &response.Meta{
+			Total:   total,
+			Limit:   pageSize,
+			Offset:  offset,
+			HasMore: end < total,
+		})
+		return
+	}
+
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(users, filter, sortVal, pag)
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 // adminUpdateUserRoleHandler updates a user's role.

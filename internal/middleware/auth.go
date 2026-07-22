@@ -46,15 +46,16 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 		userID   string
 		isActive bool
 		expires  *time.Time
+		scopes   []string
 	)
 
 	query := `
-		SELECT id, user_id, is_active, expires_at
+		SELECT id, user_id, is_active, expires_at, scopes
 		FROM api_keys
 		WHERE key_hash = $1
 	`
 	err := a.pool.QueryRow(r.Context(), query, keyHash).Scan(
-		&id, &userID, &isActive, &expires,
+		&id, &userID, &isActive, &expires, &scopes,
 	)
 	if err != nil {
 		return nil, ErrInvalidAPIKey
@@ -81,9 +82,11 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 	}
 
 	return &auth.Claims{
-		UserID: userID,
-		Email:  "",
-		Role:   role,
+		UserID:   userID,
+		Email:    "",
+		Role:     role,
+		Scopes:   scopes,
+		IsAPIKey: true,
 	}, nil
 }
 

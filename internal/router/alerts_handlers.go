@@ -9,6 +9,8 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/webhook"
+	"github.com/vigilagent/vigilagent/pkg/pagination"
+	"github.com/vigilagent/vigilagent/pkg/query"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -27,7 +29,12 @@ func (r *Router) listAlertsHandler(w http.ResponseWriter, req *http.Request) {
 	if alerts == nil {
 		alerts = []repository.Alert{}
 	}
-	response.JSON(w, http.StatusOK, alerts)
+
+	filter, sortVal := query.Parse(req)
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(alerts, filter, sortVal, pag)
+
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 // createAlertHandler creates a new alert.

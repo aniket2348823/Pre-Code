@@ -9,6 +9,8 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/webhook"
+	"github.com/vigilagent/vigilagent/pkg/pagination"
+	"github.com/vigilagent/vigilagent/pkg/query"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -90,13 +92,66 @@ func (r *Router) listAPIKeysHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	keys, err :=	r.apiKeys.ListByUser(req.Context(), claims.UserID)
+	keys, err := r.apiKeys.ListByUser(req.Context(), claims.UserID)
 	if err != nil {
 		response.InternalError(w, "failed to list API keys")
 		return
 	}
 
-	response.JSON(w, http.StatusOK, keys)
+	filter, sortVal := query.Parse(req)
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(keys, filter, sortVal, pag)
+
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
+}
+
+// rotateAPIKeyHandler deactivates the old key and creates a new one.
+// POST /api/v1/api-keys/{keyID}/rotate
+func (r *Router) rotateAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
+	claims, ok := auth.ClaimsFromContext(req.Context())
+	if !ok {
+		response.Unauthorized(w, "missing authentication")
+		return
+	}
+
+	keyID := chi.URLParam(req, "keyID")
+
+	// Deactivate old key
+	if err := r.apiKeys.Delete(req.Context(), keyID, claims.UserID); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			response.NotFound(w, "API key not found")
+			return
+		}
+		response.InternalError(w, "failed to rotate API key")
+		return
+	}
+
+	// Create new key with same name
+	apiKeyService := auth.NewAPIKeyService(r.cfg.Auth.APIKeyPrefix)
+	plaintext, hash, prefix, err := apiKeyService.GenerateKey()
+	if err != nil {
+		response.InternalError(w, "failed to generate API key")
+		return
+	}
+
+	key := &repository.APIKey{
+		UserID:   claims.UserID,
+		Name:     "rotated-key",
+		KeyHash:  hash,
+		Prefix:   prefix,
+		IsActive: true,
+	}
+	if err := r.apiKeys.Create(req.Context(), key); err != nil {
+		response.InternalError(w, "failed to save rotated key")
+		return
+	}
+
+	response.Created(w, map[string]interface{}{
+		"id":     key.ID,
+		"name":   key.Name,
+		"key":    plaintext,
+		"prefix": prefix,
+	})
 }
 
 // deleteAPIKeyHandler revokes an API key.

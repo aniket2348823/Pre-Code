@@ -164,6 +164,12 @@ type Router struct {
 	lockout             mw.Lockout
 	lockoutCancel       context.CancelFunc
 
+	// Security middleware
+	blacklist   *mw.JWTBlacklist
+	auditLogger *mw.AuditLogger
+	csrf        *mw.CSRFMiddleware
+	idempotency *mw.IdempotencyMiddleware
+
 	// Email + Feature Flags + RAG
 	email        *email.VerificationService
 	featureFlags *featureflags.Manager
@@ -243,6 +249,20 @@ func New(opts Options) *Router {
 	if r.db != nil && r.db.Pool != nil {
 		r.authSessionMiddleware = mw.NewAuthSessionMiddleware(r.db.Conn())
 	}
+
+	// Initialize security middleware
+	if r.rds != nil && r.rds.Client != nil {
+		r.blacklist = mw.NewJWTBlacklist(r.rds.Client)
+	}
+	if r.db != nil && r.db.Pool != nil {
+		r.auditLogger = mw.NewAuditLogger(r.db.Conn())
+	}
+	if opts.Config != nil {
+		// Use JWT secret as CSRF secret for HMAC signing
+		r.csrf = mw.NewCSRFMiddleware([]byte(opts.Config.Auth.JWTSecret))
+	}
+	r.idempotency = mw.NewIdempotencyMiddleware(10 * time.Minute)
+
 	r.initHandlers()
 	r.setupMiddleware()
 	r.setupRoutes()

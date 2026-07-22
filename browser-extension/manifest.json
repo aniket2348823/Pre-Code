@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "VigilAgent — AI Code Verifier",
+  "version": "0.0.1",
+  "description": "Automatically verify AI-generated code with VigilAgent's Shift-Zero pipeline",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": ["http://localhost:8080/*"],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://aistudio.google.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["badge.css"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

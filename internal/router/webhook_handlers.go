@@ -10,6 +10,8 @@ import (
 	"github.com/vigilagent/vigilagent/internal/api/contract"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/webhook"
+	"github.com/vigilagent/vigilagent/pkg/pagination"
+	"github.com/vigilagent/vigilagent/pkg/query"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -93,9 +95,12 @@ func (r *Router) listWebhooksHandler(w http.ResponseWriter, req *http.Request) {
 	if endpoints == nil {
 		endpoints = []webhook.Endpoint{}
 	}
-	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"webhooks": endpoints,
-	})
+
+	filter, sortVal := query.Parse(req)
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(endpoints, filter, sortVal, pag)
+
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 // getWebhookHandler returns a webhook endpoint by ID for the authenticated user.

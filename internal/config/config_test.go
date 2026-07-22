@@ -157,7 +157,7 @@ func TestConfigValidate(t *testing.T) {
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
 				Auth:     AuthConfig{JWTSecret: "super-secret-long-key-for-prod-1234", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o", OpenAIKey: "sk-test"},
-				CORS:     CORSConfig{AllowedOrigins: []string{"https://example.com"}},
+				CORS:     CORSConfig{AllowedOrigins: []string{"https://app.example.com"}},
 			},
 			wantErr: false,
 		},

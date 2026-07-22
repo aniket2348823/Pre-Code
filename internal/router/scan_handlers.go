@@ -2,6 +2,7 @@ package router
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -13,15 +14,18 @@ import (
 
 // scanHandler runs the deterministic static-analysis engine over submitted code
 // and returns a merged, confidence-scored report (Layer 4: static analysis).
-// Body size is enforced by the global limitBodySize middleware (2 MiB).
+// Body size is enforced by the global limitBodySize middleware (2 MiB)
+// and by this handler directly as defense-in-depth.
 func (r *Router) scanHandler(w http.ResponseWriter, req *http.Request) {
 	if _, ok := auth.ClaimsFromContext(req.Context()); !ok {
 		response.Unauthorized(w, "missing authentication")
 		return
 	}
 
-	// Enforce body size limit directly in the handler for defense-in-depth.
-	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodySize)
+	// Defense-in-depth: enforce body size directly in the handler
+	if req.Body != nil {
+		req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodySize)
+	}
 
 	var input struct {
 		Language string `json:"language"`
@@ -29,8 +33,9 @@ func (r *Router) scanHandler(w http.ResponseWriter, req *http.Request) {
 		Filename string `json:"filename"`
 	}
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		if strings.Contains(err.Error(), "request body too large") {
-			response.JSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "payload too large"})
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) || (err != nil && strings.Contains(err.Error(), "too large")) {
+			response.JSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
 			return
 		}
 		response.BadRequest(w, "invalid request body")

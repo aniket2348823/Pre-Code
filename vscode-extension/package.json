@@ -1,0 +1,100 @@
+{
+  "name": "vigilagent",
+  "displayName": "VigilAgent — AI Code Verification",
+  "description": "Verify AI-generated code with VigilAgent's Shift-Zero pipeline. Security, architecture, compliance, and cost analysis in your chat.",
+  "version": "0.0.1",
+  "publisher": "vigilagent",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "code-review",
+    "security",
+    "verification",
+    "llm",
+    "mcp"
+  ],
+  "activationEvents": [
+    "onChatParticipant:vigilagent"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "vigilagent",
+        "fullName": "VigilAgent",
+        "name": "vigilagent",
+        "description": "Verify code with VigilAgent's deterministic engine and parallel LLM reviewers",
+        "modelId": "*"
+      }
+    ],
+    "commands": [
+      {
+        "command": "vigilagent.configure",
+        "title": "VigilAgent: Configure API Keys"
+      },
+      {
+        "command": "vigilagent.scanFile",
+        "title": "VigilAgent: Scan Current File"
+      },
+      {
+        "command": "vigilagent.verifySelection",
+        "title": "VigilAgent: Verify Selected Code"
+      }
+    ],
+    "configuration": {
+      "title": "VigilAgent",
+      "properties": {
+        "vigilagent.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "description": "VigilAgent backend URL"
+        },
+        "vigilagent.defaultLanguage": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "go",
+            "python",
+            "javascript",
+            "typescript",
+            "rust",
+            "java"
+          ],
+          "description": "Default programming language for scans"
+        },
+        "vigilagent.autoVerify": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run VigilAgent verification on LLM responses"
+        },
+        "vigilagent.showConfidenceBadge": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show confidence score in the status bar"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.5.0"
+  },
+  "dependencies": {}
+}

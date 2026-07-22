@@ -16,14 +16,16 @@ import (
 	apperrors "github.com/vigilagent/vigilagent/internal/errors"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/webhook"
+	"github.com/vigilagent/vigilagent/pkg/pagination"
+	"github.com/vigilagent/vigilagent/pkg/query"
 	"github.com/vigilagent/vigilagent/pkg/response"
+	"github.com/vigilagent/vigilagent/pkg/validation"
 )
 
-// createTaskHandler creates a new task and starts execution.
 func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 
@@ -34,23 +36,23 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 		MaxIterations   int    `json:"max_iterations,omitempty"`
 		ModelPreference string `json:"model_preference,omitempty"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		response.JSON(w, http.StatusBadRequest, apperrors.New(apperrors.ErrInvalidBody, "invalid request body"))
+	v, ok := validation.DecodeAndValidate(w, req, &input)
+	if !ok {
 		return
 	}
+
 	input.Prompt = strings.TrimSpace(input.Prompt)
-	if input.Prompt == "" {
-		response.JSON(w, http.StatusBadRequest, apperrors.New(apperrors.ErrMissingField, "prompt is required"))
-		return
-	}
-	if input.ProjectID == "" {
-		response.JSON(w, http.StatusBadRequest, apperrors.New(apperrors.ErrMissingField, "project_id is required"))
+
+	v.Required("prompt", input.Prompt)
+	v.Required("project_id", input.ProjectID)
+
+	if v.WriteResponse(w, req) {
 		return
 	}
 
 	// Verify project membership
 	if _, err := r.requireProjectMember(req.Context(), input.ProjectID, claims.UserID); err != nil {
-		response.JSON(w, http.StatusForbidden, apperrors.New(apperrors.ErrInsufficientPerms, "access denied"))
+		response.Forbidden(w, "access denied")
 		return
 	}
 
@@ -273,47 +275,70 @@ func (r *Router) getTaskHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) listTasksHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	projectID := req.URL.Query().Get("project_id")
 	if projectID == "" {
-		response.JSON(w, http.StatusBadRequest, apperrors.New(apperrors.ErrMissingField, "project_id query parameter is required"))
+		response.BadRequest(w, "project_id query parameter is required")
 		return
 	}
 	if _, err := r.requireProjectMember(req.Context(), projectID, claims.UserID); err != nil {
-		response.JSON(w, http.StatusForbidden, apperrors.New(apperrors.ErrInsufficientPerms, "access denied"))
+		response.Forbidden(w, "access denied")
 		return
 	}
 
-	page, _ := strconv.Atoi(req.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(req.URL.Query().Get("page_size"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-	offset := (page - 1) * pageSize
-
-	tasks, total, err := r.tasks.ListByProject(req.Context(), projectID, offset, pageSize)
+	// Fetch all tasks for filtering/sorting/pagination
+	tasks, _, err := r.tasks.ListByProject(req.Context(), projectID, 0, 100000)
 	if err != nil {
-		response.JSON(w, http.StatusInternalServerError, apperrors.New(apperrors.ErrDBError, "failed to list tasks"))
+		response.InternalError(w, "failed to list tasks")
 		return
 	}
 	if tasks == nil {
 		tasks = []repository.Task{}
 	}
 
-	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"tasks": tasks,
-		"page": map[string]interface{}{
-			"page":        page,
-			"page_size":   pageSize,
-			"total":       total,
-			"total_pages": (total + pageSize - 1) / pageSize,
-		},
-	})
+	filter, sortVal := query.Parse(req)
+	
+	// Support page-based query as fallback, cursor-based as primary
+	cursor := req.URL.Query().Get("cursor")
+	if cursor == "" && req.URL.Query().Get("page") != "" {
+		// Offset-based pagination
+		page, _ := strconv.Atoi(req.URL.Query().Get("page"))
+		pageSize, _ := strconv.Atoi(req.URL.Query().Get("page_size"))
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 100 {
+			pageSize = 20
+		}
+		
+		// First filter and sort all tasks
+		allProcessed, _ := query.ProcessList(tasks, filter, sortVal, pagination.Params{Limit: 100000})
+		
+		total := len(allProcessed)
+		offset := (page - 1) * pageSize
+		end := offset + pageSize
+		if offset > total {
+			offset = total
+		}
+		if end > total {
+			end = total
+		}
+		paginated := allProcessed[offset:end]
+		
+		response.SuccessWithMeta(w, req, http.StatusOK, paginated, &response.Meta{
+			Total:   total,
+			Limit:   pageSize,
+			Offset:  offset,
+			HasMore: end < total,
+		})
+		return
+	}
+
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(tasks, filter, sortVal, pag)
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 // cancelTaskHandler cancels a running task.

@@ -23,21 +23,36 @@ import (
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
+	"github.com/vigilagent/vigilagent/pkg/pagination"
+	"github.com/vigilagent/vigilagent/pkg/query"
+	"github.com/vigilagent/vigilagent/pkg/validation"
 )
 
 // rlHeaders is the in-memory rate limit headers middleware, set once in setupMiddleware.
 var rlHeaders *mw.RateLimitHeadersMiddleware
 
 func (r *Router) setupMiddleware() {
+	r.Use(requestid.Middleware)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.Heartbeat("/health"))
-	r.Use(requestid.Middleware)
 	r.Use(slogger.Middleware)
+	r.Use(middleware.Recoverer)
 	r.Use(compression.Middleware)
-	r.useCORSFromConfig()
 	r.Use(r.securityHeadersMiddleware)
+	r.useCORSFromConfig()
+	r.Use(middleware.Heartbeat("/health"))
+
+	// JWT blacklist — reject revoked tokens on all requests
+	if r.blacklist != nil {
+		r.Use(r.blacklist.Middleware)
+		r.Use(r.blacklist.MiddlewareWithUserRevocation)
+	}
+
+	// Audit logging — log all state-changing requests
+	if r.auditLogger != nil {
+		r.Use(mw.AuditMiddleware(r.auditLogger))
+	}
+
 	timeout := 30 * time.Second
 	r.Use(func(next http.Handler) http.Handler {
 		return http.TimeoutHandler(next, timeout, `{"error":"request timeout"}`)
@@ -115,10 +130,12 @@ func (r *Router) setupRoutes() {
 		v1.Get("/health", r.healthHandler)
 		v1.Get("/ready", r.readinessHandler)
 		v1.Get("/metrics", r.metricsHandler)
+		v1.Get("/docs", r.swaggerUIHandler)
+		v1.Get("/docs/openapi.yaml", r.openapiSpecHandler)
 
 		public := v1.Group(nil)
-		public.Use(limitBodySize)
 		public.Use(r.authRateLimitMiddleware)
+		public.Use(limitBodySize)
 		public.Use(mw.SanitizeMiddleware)
 		{
 			public.Post("/auth/register", r.registerHandler)
@@ -129,9 +146,19 @@ func (r *Router) setupRoutes() {
 		}
 
 		protected := v1.Group(nil)
-		protected.Use(limitBodySize)
 		protected.Use(r.authMiddleware)
 		protected.Use(r.apiKeyRateLimitMiddleware)
+		protected.Use(limitBodySize)
+
+		// CSRF protection on all state-changing endpoints
+		if r.csrf != nil {
+			protected.Use(r.csrf.Middleware)
+		}
+
+		// Logout is protected — requires valid token to revoke
+		protected.Post("/auth/logout", r.logoutHandler)
+		protected.Put("/users/me/password", r.changePasswordHandler)
+
 		{
 			protected.Get("/users/me", r.currentUserHandler)
 			protected.With(mw.JWTRotationMiddleware(mw.DefaultJWTRotationConfig(), r.auth)).Post("/auth/refresh",
@@ -141,90 +168,95 @@ func (r *Router) setupRoutes() {
 				r.updateProfileHandler,
 			)
 
-			protected.Post("/organizations", r.createOrgHandler)
-			protected.Get("/organizations", r.listOrgsHandler)
-			protected.Get("/organizations/{orgID}", r.getOrgHandler)
-			protected.Put("/organizations/{orgID}", r.updateOrgHandler)
-			protected.Delete("/organizations/{orgID}", r.deleteOrgHandler)
+			protected.With(mw.RequireScope("orgs:write")).Post("/organizations", r.createOrgHandler)
+			protected.With(mw.RequireScope("orgs:read")).Get("/organizations", r.listOrgsHandler)
+			protected.With(mw.RequireScope("orgs:read")).Get("/organizations/{orgID}", r.getOrgHandler)
+			protected.With(mw.RequireScope("orgs:write")).Put("/organizations/{orgID}", r.updateOrgHandler)
+			protected.With(mw.RequireScope("orgs:write")).Delete("/organizations/{orgID}", r.deleteOrgHandler)
 
-			protected.Post("/projects", r.createProjectHandler)
-			protected.Get("/projects", r.listProjectsHandler)
-			protected.Get("/projects/{projectID}", r.getProjectHandler)
-			protected.Put("/projects/{projectID}", r.updateProjectHandler)
-			protected.Delete("/projects/{projectID}", r.deleteProjectHandler)
+			protected.With(mw.RequireScope("projects:write")).Post("/projects", r.createProjectHandler)
+			protected.With(mw.RequireScope("projects:read")).Get("/projects", r.listProjectsHandler)
+			protected.With(mw.RequireScope("projects:read")).Get("/projects/{projectID}", r.getProjectHandler)
+			protected.With(mw.RequireScope("projects:write")).Put("/projects/{projectID}", r.updateProjectHandler)
+			protected.With(mw.RequireScope("projects:write")).Delete("/projects/{projectID}", r.deleteProjectHandler)
 
-			protected.Post("/projects/{projectID}/agents", r.createAgentHandler)
-			protected.Get("/projects/{projectID}/agents", r.listAgentsHandler)
-			protected.Get("/agents/{agentID}", r.getAgentHandler)
-			protected.Put("/agents/{agentID}", r.updateAgentHandler)
-			protected.Delete("/agents/{agentID}", r.deleteAgentHandler)
+			protected.With(mw.RequireScope("agents:write")).Post("/projects/{projectID}/agents", r.createAgentHandler)
+			protected.With(mw.RequireScope("agents:read")).Get("/projects/{projectID}/agents", r.listAgentsHandler)
+			protected.With(mw.RequireScope("agents:read")).Get("/agents/{agentID}", r.getAgentHandler)
+			protected.With(mw.RequireScope("agents:write")).Put("/agents/{agentID}", r.updateAgentHandler)
+			protected.With(mw.RequireScope("agents:write")).Delete("/agents/{agentID}", r.deleteAgentHandler)
 
-			protected.Post("/agents/{agentID}/sessions", r.createSessionHandler)
-			protected.Get("/agents/{agentID}/sessions", r.listSessionsHandler)
-			protected.Get("/sessions/{sessionID}", r.getSessionHandler)
-			protected.Put("/sessions/{sessionID}", r.updateSessionHandler)
+			protected.With(mw.RequireScope("agents:write")).Post("/agents/{agentID}/sessions", r.createSessionHandler)
+			protected.With(mw.RequireScope("agents:read")).Get("/agents/{agentID}/sessions", r.listSessionsHandler)
+			protected.With(mw.RequireScope("agents:read")).Get("/sessions/{sessionID}", r.getSessionHandler)
+			protected.With(mw.RequireScope("agents:write")).Put("/sessions/{sessionID}", r.updateSessionHandler)
 
-			protected.Post("/tasks", r.createTaskHandler)
-			protected.Get("/tasks", r.listTasksHandler)
-			protected.Get("/tasks/{taskID}", r.getTaskHandler)
-			protected.Post("/tasks/{taskID}/cancel", r.cancelTaskHandler)
-			protected.Get("/tasks/{taskID}/stream", r.streamTaskHandler)
-			protected.Post("/tasks/{taskID}/hitl", r.approveHITLHandler)
+			if r.idempotency != nil {
+				protected.With(mw.RequireScope("tasks:write"), r.idempotency.AsMiddleware()).Post("/tasks", r.createTaskHandler)
+			} else {
+				protected.With(mw.RequireScope("tasks:write")).Post("/tasks", r.createTaskHandler)
+			}
+			protected.With(mw.RequireScope("tasks:read")).Get("/tasks", r.listTasksHandler)
+			protected.With(mw.RequireScope("tasks:read")).Get("/tasks/{taskID}", r.getTaskHandler)
+			protected.With(mw.RequireScope("tasks:write")).Post("/tasks/{taskID}/cancel", r.cancelTaskHandler)
+			protected.With(mw.RequireScope("tasks:read")).Get("/tasks/{taskID}/stream", r.streamTaskHandler)
+			protected.With(mw.RequireScope("tasks:write")).Post("/tasks/{taskID}/hitl", r.approveHITLHandler)
 
-			protected.Post("/memory/search", r.searchMemoryHandler)
-			protected.Post("/memory", r.createMemoryHandler)
+			protected.With(mw.RequireScope("memory:read")).Post("/memory/search", r.searchMemoryHandler)
+			protected.With(mw.RequireScope("memory:write")).Post("/memory", r.createMemoryHandler)
 
-			protected.Post("/scan", r.scanHandler)
-			protected.Post("/review", r.reviewHandler)
-			protected.Post("/requirements", r.requirementsHandler)
-			protected.Post("/validate", r.validateHandler)
-			protected.Post("/schema", r.schemaHandler)
-			protected.Post("/compliance", r.complianceHandler)
-			protected.Post("/validate-full", r.pipelineHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/scan", r.scanHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/review", r.reviewHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/requirements", r.requirementsHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/validate", r.validateHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/schema", r.schemaHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/compliance", r.complianceHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/validate-full", r.pipelineHandler)
 
-			protected.Post("/knowledge", r.knowledgeHandler)
-			protected.Post("/skills/extract", r.skillEngineHandler)
-			protected.Post("/confidence", r.confidenceHandler)
-			protected.Post("/attack-graph", r.attackGraphHandler)
-			protected.Post("/audit/trace", r.auditHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/knowledge", r.knowledgeHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/skills/extract", r.skillEngineHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/confidence", r.confidenceHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/attack-graph", r.attackGraphHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/audit/trace", r.auditHandler)
 
-			protected.Post("/middleware/process", r.middlewareProcessHandler)
-			protected.Get("/middleware/metrics", r.middlewareMetricsHandler)
-			protected.Get("/middleware/patterns", r.middlewarePatternsHandler)
+			protected.With(mw.RequireScope("scan:write")).Post("/middleware/process", r.middlewareProcessHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/middleware/metrics", r.middlewareMetricsHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/middleware/patterns", r.middlewarePatternsHandler)
 
 			events := protected.Group(nil)
 			events.Use(r.eventsRateLimitMiddleware)
+			events.Use(mw.RequireScope("agents:write"))
 			{
 				events.Post("/sessions/{sessionID}/events", r.createEventsHandler)
 				events.Post("/sessions/{sessionID}/events/batch", r.batchEventsHandler)
 			}
 
-			protected.Get("/analytics/cost", r.costAnalyticsHandler)
-			protected.Get("/analytics/tokens", r.tokenAnalyticsHandler)
-			protected.Get("/analytics/sessions", r.sessionAnalyticsHandler)
-			protected.Get("/analytics/cost-intel", r.costIntelDashboardHandler)
-			protected.Get("/analytics/cost-intel/forecast", r.costIntelForecastHandler)
-			protected.Get("/analytics/cost-intel/recommendations", r.costIntelRecommendationsHandler)
-			protected.Get("/analytics/cost-intel/anomalies", r.costIntelAnomaliesHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/analytics/cost", r.costAnalyticsHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/analytics/tokens", r.tokenAnalyticsHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/analytics/sessions", r.sessionAnalyticsHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/analytics/cost-intel", r.costIntelDashboardHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/analytics/cost-intel/forecast", r.costIntelForecastHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/analytics/cost-intel/recommendations", r.costIntelRecommendationsHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/analytics/cost-intel/anomalies", r.costIntelAnomaliesHandler)
 
-			protected.Post("/tasks/batch", r.batchTaskHandler)
-			protected.Get("/providers/health", r.healthStatsHandler)
-			protected.Post("/providers/cost-override", r.costOverrideHandler)
+			protected.With(mw.RequireScope("tasks:write")).Post("/tasks/batch", r.batchTaskHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/providers/health", r.healthStatsHandler)
+			protected.With(mw.RequireScope("admin")).Post("/providers/cost-override", r.costOverrideHandler)
 
-			protected.Get("/dashboard/overview", r.dashboardOverviewHandler)
-			protected.Get("/dashboard/activity", r.dashboardActivityHandler)
-			protected.Get("/dashboard/top-agents", r.dashboardTopAgentsHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/dashboard/overview", r.dashboardOverviewHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/dashboard/activity", r.dashboardActivityHandler)
+			protected.With(mw.RequireScope("analytics:read")).Get("/dashboard/top-agents", r.dashboardTopAgentsHandler)
 
 			skills := protected.Group(nil)
 			{
-				skills.Get("/skills", r.listSkillsHandler)
-				skills.Get("/skills/{skillID}", r.getSkillHandler)
-				skills.Post("/skills", r.createSkillHandler)
-				skills.Put("/skills/{skillID}", r.updateSkillHandler)
-				skills.Delete("/skills/{skillID}", r.deleteSkillHandler)
-				skills.Post("/skills/{skillID}/rate", r.rateSkillHandler)
-				skills.Get("/skills/{skillID}/ratings", r.listSkillRatingsHandler)
-				skills.Post("/skills/{skillID}/install", r.installSkillHandler)
+				skills.With(mw.RequireScope("skills:read")).Get("/skills", r.listSkillsHandler)
+				skills.With(mw.RequireScope("skills:read")).Get("/skills/{skillID}", r.getSkillHandler)
+				skills.With(mw.RequireScope("skills:write")).Post("/skills", r.createSkillHandler)
+				skills.With(mw.RequireScope("skills:write")).Put("/skills/{skillID}", r.updateSkillHandler)
+				skills.With(mw.RequireScope("skills:write")).Delete("/skills/{skillID}", r.deleteSkillHandler)
+				skills.With(mw.RequireScope("skills:write")).Post("/skills/{skillID}/rate", r.rateSkillHandler)
+				skills.With(mw.RequireScope("skills:read")).Get("/skills/{skillID}/ratings", r.listSkillRatingsHandler)
+				skills.With(mw.RequireScope("skills:write")).Post("/skills/{skillID}/install", r.installSkillHandler)
 			}
 
 		// Skill marketplace RAG endpoints — gated behind feature flag
@@ -235,28 +267,37 @@ func (r *Router) setupRoutes() {
 			}
 		}
 
-			protected.Get("/alerts", r.listAlertsHandler)
-			protected.Post("/alerts", r.createAlertHandler)
-			protected.Get("/alerts/{alertID}", r.getAlertHandler)
-			protected.Put("/alerts/{alertID}", r.updateAlertHandler)
-			protected.Delete("/alerts/{alertID}", r.deleteAlertHandler)
+			protected.With(mw.RequireScope("alerts:read")).Get("/alerts", r.listAlertsHandler)
+			protected.With(mw.RequireScope("alerts:write")).Post("/alerts", r.createAlertHandler)
+			protected.With(mw.RequireScope("alerts:read")).Get("/alerts/{alertID}", r.getAlertHandler)
+			protected.With(mw.RequireScope("alerts:write")).Put("/alerts/{alertID}", r.updateAlertHandler)
+			protected.With(mw.RequireScope("alerts:write")).Delete("/alerts/{alertID}", r.deleteAlertHandler)
 
-			protected.Get("/billing/invoices", r.listInvoicesHandler)
-			protected.Get("/billing/invoices/{invoiceID}", r.getInvoiceHandler)
-			protected.Post("/billing/checkout", r.createCheckoutHandler)
-			protected.Get("/billing/subscription", r.getSubscriptionHandler)
-			protected.Post("/billing/portal", r.createBillingPortalHandler)
+			protected.With(mw.RequireScope("billing:read")).Get("/billing/invoices", r.listInvoicesHandler)
+			protected.With(mw.RequireScope("billing:read")).Get("/billing/invoices/{invoiceID}", r.getInvoiceHandler)
+			if r.idempotency != nil {
+				protected.With(mw.RequireScope("billing:write"), r.idempotency.AsMiddleware()).Post("/billing/checkout", r.createCheckoutHandler)
+			} else {
+				protected.With(mw.RequireScope("billing:write")).Post("/billing/checkout", r.createCheckoutHandler)
+			}
+			protected.With(mw.RequireScope("billing:read")).Get("/billing/subscription", r.getSubscriptionHandler)
+			if r.idempotency != nil {
+				protected.With(mw.RequireScope("billing:write"), r.idempotency.AsMiddleware()).Post("/billing/portal", r.createBillingPortalHandler)
+			} else {
+				protected.With(mw.RequireScope("billing:write")).Post("/billing/portal", r.createBillingPortalHandler)
+			}
 
-			protected.Post("/api-keys", r.createAPIKeyHandler)
-			protected.Get("/api-keys", r.listAPIKeysHandler)
-			protected.Delete("/api-keys/{keyID}", r.deleteAPIKeyHandler)
+			protected.With(mw.RequireScope("api_keys:manage")).Post("/api-keys", r.createAPIKeyHandler)
+			protected.With(mw.RequireScope("api_keys:manage")).Get("/api-keys", r.listAPIKeysHandler)
+			protected.With(mw.RequireScope("api_keys:manage")).Post("/api-keys/{keyID}/rotate", r.rotateAPIKeyHandler)
+			protected.With(mw.RequireScope("api_keys:manage")).Delete("/api-keys/{keyID}", r.deleteAPIKeyHandler)
 
-			protected.Post("/webhooks", r.createWebhookHandler)
-			protected.Get("/webhooks", r.listWebhooksHandler)
-			protected.Get("/webhooks/stats", r.webhookStatsHandler)
-			protected.Get("/webhooks/{webhookID}", r.getWebhookHandler)
-			protected.Delete("/webhooks/{webhookID}", r.deleteWebhookHandler)
-			protected.Get("/webhooks/{webhookID}/deliveries", r.getWebhookDeliveriesHandler)
+			protected.With(mw.RequireScope("webhooks:write")).Post("/webhooks", r.createWebhookHandler)
+			protected.With(mw.RequireScope("webhooks:read")).Get("/webhooks", r.listWebhooksHandler)
+			protected.With(mw.RequireScope("webhooks:read")).Get("/webhooks/stats", r.webhookStatsHandler)
+			protected.With(mw.RequireScope("webhooks:read")).Get("/webhooks/{webhookID}", r.getWebhookHandler)
+			protected.With(mw.RequireScope("webhooks:write")).Delete("/webhooks/{webhookID}", r.deleteWebhookHandler)
+			protected.With(mw.RequireScope("webhooks:read")).Get("/webhooks/{webhookID}/deliveries", r.getWebhookDeliveriesHandler)
 
 			admin := protected.Group(nil)
 			admin.Use(r.adminMiddleware)
@@ -326,19 +367,16 @@ func (r *Router) resetPasswordHandler(w http.ResponseWriter, req *http.Request) 
 		Token       string `json:"token"`
 		NewPassword string `json:"new_password"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		apiErr := apperrors.New(apperrors.ErrInvalidBody, "invalid request body")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+	v, ok := validation.DecodeAndValidate(w, req, &input)
+	if !ok {
 		return
 	}
-	if input.Token == "" || input.NewPassword == "" {
-		apiErr := apperrors.New(apperrors.ErrMissingField, "token and new_password are required")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
-		return
-	}
-	if len(input.NewPassword) < 12 {
-		apiErr := apperrors.New(apperrors.ErrPasswordTooWeak, "password must be at least 12 characters")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+
+	v.Required("token", input.Token)
+	v.Required("new_password", input.NewPassword)
+	v.MinLength("new_password", input.NewPassword, 12)
+
+	if v.WriteResponse(w, req) {
 		return
 	}
 
@@ -481,32 +519,119 @@ func (r *Router) readinessHandler(w http.ResponseWriter, req *http.Request) {
 
 // --- Auth Handlers ---
 
+// logoutHandler revokes the current JWT token.
+func (r *Router) logoutHandler(w http.ResponseWriter, req *http.Request) {
+	claims, ok := auth.ClaimsFromContext(req.Context())
+	if !ok {
+		response.Unauthorized(w, "missing authentication")
+		return
+	}
+
+	// Revoke the current token via blacklist if available
+	if r.blacklist != nil {
+		tokenStr := mw.ExtractBearerToken(req)
+		if tokenStr != "" {
+			if err := r.blacklist.Revoke(req.Context(), tokenStr, 24*time.Hour); err != nil {
+				slog.Warn("failed to revoke token", "error", err, "user_id", claims.UserID)
+			}
+		}
+	}
+
+	// Log the logout event
+	if r.auditLogger != nil {
+		r.auditLogger.LogAuthEvent(req.Context(), claims.UserID, "logout", req.RemoteAddr, "user logged out")
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "logged out successfully"})
+}
+
+
+
+// changePasswordHandler changes the user's password and revokes all tokens.
+func (r *Router) changePasswordHandler(w http.ResponseWriter, req *http.Request) {
+	claims, ok := auth.ClaimsFromContext(req.Context())
+	if !ok {
+		response.Unauthorized(w, "missing authentication")
+		return
+	}
+
+	var input struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		response.BadRequest(w, "invalid request body")
+		return
+	}
+	if input.CurrentPassword == "" || input.NewPassword == "" {
+		response.BadRequest(w, "current_password and new_password are required")
+		return
+	}
+	if len(input.NewPassword) < 12 {
+		response.BadRequest(w, "new password must be at least 12 characters")
+		return
+	}
+
+	// Verify current password
+	user, err := r.users.FindByID(req.Context(), claims.UserID)
+	if err != nil {
+		response.NotFound(w, "user not found")
+		return
+	}
+	if !auth.CheckPassword(input.CurrentPassword, user.PasswordHash) {
+		response.Unauthorized(w, "current password is incorrect")
+		return
+	}
+
+	// Hash new password
+	hash, err := auth.HashPassword(input.NewPassword)
+	if err != nil {
+		response.InternalError(w, "failed to hash password")
+		return
+	}
+	if err := r.users.UpdatePassword(req.Context(), user.ID, hash); err != nil {
+		response.InternalError(w, "failed to update password")
+		return
+	}
+
+	// Revoke ALL tokens for this user (force re-login)
+	if r.blacklist != nil {
+		if err := r.blacklist.RevokeAllForUser(req.Context(), user.ID); err != nil {
+			slog.Warn("failed to revoke all user tokens", "error", err, "user_id", user.ID)
+		}
+	}
+
+	// Log the password change
+	if r.auditLogger != nil {
+		r.auditLogger.LogAuthEvent(req.Context(), user.ID, "password_changed", req.RemoteAddr, "user changed password")
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "password changed. All sessions have been invalidated."})
+}
+
+
+
 func (r *Router) registerHandler(w http.ResponseWriter, req *http.Request) {
 	var input struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 		Name     string `json:"name"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		apiErr := apperrors.New(apperrors.ErrInvalidBody, "invalid request body")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+	v, ok := validation.DecodeAndValidate(w, req, &input)
+	if !ok {
 		return
 	}
+
 	input.Email = strings.TrimSpace(input.Email)
 	input.Name = strings.TrimSpace(input.Name)
-	if input.Email == "" || input.Password == "" {
-		apiErr := apperrors.New(apperrors.ErrMissingField, "email and password are required")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
-		return
-	}
-	if !strings.Contains(input.Email, "@") || !strings.Contains(input.Email, ".") {
-		apiErr := apperrors.New(apperrors.ErrInvalidEmail, "invalid email address")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
-		return
-	}
-	if len(input.Password) < 12 {
-		apiErr := apperrors.New(apperrors.ErrPasswordTooWeak, "password must be at least 12 characters")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+
+	v.Required("email", input.Email)
+	v.Required("password", input.Password)
+	v.Required("name", input.Name)
+	v.Email("email", input.Email)
+	v.MinLength("password", input.Password, 12)
+
+	if v.WriteResponse(w, req) {
 		return
 	}
 
@@ -684,23 +809,23 @@ func (r *Router) updateProfileHandler(w http.ResponseWriter, req *http.Request) 
 func (r *Router) createOrgHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		apiErr := apperrors.New(apperrors.ErrMissingAuth, "missing authentication")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.UnauthorizedR(w, req, "missing authentication")
 		return
 	}
 	var input struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		apiErr := apperrors.New(apperrors.ErrInvalidBody, "invalid request body")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+	v, ok := validation.DecodeAndValidate(w, req, &input)
+	if !ok {
 		return
 	}
+
 	input.Name = strings.TrimSpace(input.Name)
-	if input.Name == "" {
-		apiErr := apperrors.New(apperrors.ErrMissingField, "name is required")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+
+	v.Required("name", input.Name)
+
+	if v.WriteResponse(w, req) {
 		return
 	}
 	slug := strings.ToLower(strings.ReplaceAll(input.Name, " ", "-"))
@@ -738,19 +863,23 @@ func (r *Router) createOrgHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) listOrgsHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.Unauthorized(w, "missing authentication")
+		response.UnauthorizedR(w, req, "missing authentication")
 		return
 	}
 	orgs, err := r.orgs.ListByUser(req.Context(), claims.UserID)
 	if err != nil {
-		apiErr := apperrors.New(apperrors.ErrDBError, "failed to list organizations")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.InternalErrorR(w, req, "failed to list organizations")
 		return
 	}
 	if orgs == nil {
 		orgs = []repository.Organization{}
 	}
-	response.JSON(w, http.StatusOK, orgs)
+
+	filter, sortVal := query.Parse(req)
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(orgs, filter, sortVal, pag)
+
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 func (r *Router) getOrgHandler(w http.ResponseWriter, req *http.Request) {
@@ -830,7 +959,7 @@ func (r *Router) deleteOrgHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) createProjectHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.Unauthorized(w, "missing authentication")
+		response.UnauthorizedR(w, req, "missing authentication")
 		return
 	}
 	var input struct {
@@ -838,15 +967,17 @@ func (r *Router) createProjectHandler(w http.ResponseWriter, req *http.Request) 
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		apiErr := apperrors.New(apperrors.ErrInvalidBody, "invalid request body")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+	v, ok := validation.DecodeAndValidate(w, req, &input)
+	if !ok {
 		return
 	}
+
 	input.Name = strings.TrimSpace(input.Name)
-	if input.OrgID == "" || input.Name == "" {
-		apiErr := apperrors.New(apperrors.ErrMissingField, "org_id and name are required")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+
+	v.Required("org_id", input.OrgID)
+	v.Required("name", input.Name)
+
+	if v.WriteResponse(w, req) {
 		return
 	}
 	member, err := r.orgs.IsMember(req.Context(), input.OrgID, claims.UserID)
@@ -878,31 +1009,33 @@ func (r *Router) createProjectHandler(w http.ResponseWriter, req *http.Request) 
 func (r *Router) listProjectsHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.Unauthorized(w, "missing authentication")
+		response.UnauthorizedR(w, req, "missing authentication")
 		return
 	}
 	orgID := req.URL.Query().Get("org_id")
 	if orgID == "" {
-		apiErr := apperrors.New(apperrors.ErrMissingField, "org_id query parameter is required")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.BadRequestR(w, req, "org_id query parameter is required")
 		return
 	}
 	member, err := r.orgs.IsMember(req.Context(), orgID, claims.UserID)
 	if err != nil || !member {
-		apiErr := apperrors.New(apperrors.ErrInsufficientPerms, "access denied to organization")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.ForbiddenR(w, req, "access denied to organization")
 		return
 	}
 	projects, err := r.projects.ListByOrg(req.Context(), orgID)
 	if err != nil {
-		apiErr := apperrors.New(apperrors.ErrDBError, "failed to list projects")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.InternalErrorR(w, req, "failed to list projects")
 		return
 	}
 	if projects == nil {
 		projects = []repository.Project{}
 	}
-	response.JSON(w, http.StatusOK, projects)
+
+	filter, sortVal := query.Parse(req)
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(projects, filter, sortVal, pag)
+
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 func (r *Router) getProjectHandler(w http.ResponseWriter, req *http.Request) {
@@ -982,12 +1115,12 @@ func (r *Router) deleteProjectHandler(w http.ResponseWriter, req *http.Request) 
 func (r *Router) createAgentHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.UnauthorizedR(w, req, "missing authentication")
 		return
 	}
 	projectID := chi.URLParam(req, "projectID")
 	if _, err := r.requireProjectMember(req.Context(), projectID, claims.UserID); err != nil {
-		response.JSON(w, http.StatusForbidden, apperrors.New(apperrors.ErrInsufficientPerms, "access denied"))
+		response.ForbiddenR(w, req, "access denied")
 		return
 	}
 	var input struct {
@@ -995,15 +1128,16 @@ func (r *Router) createAgentHandler(w http.ResponseWriter, req *http.Request) {
 		Description string                 `json:"description"`
 		Config      map[string]interface{} `json:"config"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		apiErr := apperrors.New(apperrors.ErrInvalidBody, "invalid request body")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+	v, ok := validation.DecodeAndValidate(w, req, &input)
+	if !ok {
 		return
 	}
+
 	input.Name = strings.TrimSpace(input.Name)
-	if input.Name == "" {
-		apiErr := apperrors.New(apperrors.ErrMissingField, "name is required")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+
+	v.Required("name", input.Name)
+
+	if v.WriteResponse(w, req) {
 		return
 	}
 	agent := &repository.Agent{
@@ -1030,24 +1164,28 @@ func (r *Router) createAgentHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Router) listAgentsHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.UnauthorizedR(w, req, "missing authentication")
 		return
 	}
 	projectID := chi.URLParam(req, "projectID")
 	if _, err := r.requireProjectMember(req.Context(), projectID, claims.UserID); err != nil {
-		response.JSON(w, http.StatusForbidden, apperrors.New(apperrors.ErrInsufficientPerms, "access denied"))
+		response.ForbiddenR(w, req, "access denied")
 		return
 	}
 	agents, err := r.agents.ListByProject(req.Context(), projectID)
 	if err != nil {
-		apiErr := apperrors.New(apperrors.ErrDBError, "failed to list agents")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.InternalErrorR(w, req, "failed to list agents")
 		return
 	}
 	if agents == nil {
 		agents = []repository.Agent{}
 	}
-	response.JSON(w, http.StatusOK, agents)
+
+	filter, sortVal := query.Parse(req)
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(agents, filter, sortVal, pag)
+
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 func (r *Router) getAgentHandler(w http.ResponseWriter, req *http.Request) {
@@ -1169,24 +1307,28 @@ func (r *Router) createSessionHandler(w http.ResponseWriter, req *http.Request) 
 func (r *Router) listSessionsHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
-		response.JSON(w, http.StatusUnauthorized, apperrors.New(apperrors.ErrMissingAuth, "missing authentication"))
+		response.UnauthorizedR(w, req, "missing authentication")
 		return
 	}
 	agentID := chi.URLParam(req, "agentID")
 	if _, _, err := r.requireAgentMember(req.Context(), agentID, claims.UserID); err != nil {
-		response.JSON(w, http.StatusForbidden, apperrors.New(apperrors.ErrInsufficientPerms, "access denied"))
+		response.ForbiddenR(w, req, "access denied")
 		return
 	}
 	sessions, err := r.sessions.ListByAgent(req.Context(), agentID)
 	if err != nil {
-		apiErr := apperrors.New(apperrors.ErrDBError, "failed to list sessions")
-		response.JSON(w, apiErr.HTTPStatus(), apiErr)
+		response.InternalErrorR(w, req, "failed to list sessions")
 		return
 	}
 	if sessions == nil {
 		sessions = []repository.Session{}
 	}
-	response.JSON(w, http.StatusOK, sessions)
+
+	filter, sortVal := query.Parse(req)
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(sessions, filter, sortVal, pag)
+
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 func (r *Router) getSessionHandler(w http.ResponseWriter, req *http.Request) {

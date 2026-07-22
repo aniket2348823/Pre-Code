@@ -11,6 +11,8 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/webhook"
+	"github.com/vigilagent/vigilagent/pkg/pagination"
+	"github.com/vigilagent/vigilagent/pkg/query"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -24,17 +26,9 @@ func (r *Router) listSkillsHandler(w http.ResponseWriter, req *http.Request) {
 
 	category := req.URL.Query().Get("category")
 	sortBy := req.URL.Query().Get("sort_by")
-	page, _ := strconv.Atoi(req.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(req.URL.Query().Get("page_size"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-	offset := (page - 1) * pageSize
 
-	skills, total, err := r.skills.List(req.Context(), category, sortBy, offset, pageSize)
+	// Fetch all matching skills
+	skills, _, err := r.skills.List(req.Context(), category, sortBy, 0, 100000)
 	if err != nil {
 		response.InternalError(w, "failed to list skills")
 		return
@@ -43,15 +37,45 @@ func (r *Router) listSkillsHandler(w http.ResponseWriter, req *http.Request) {
 		skills = []repository.Skill{}
 	}
 
-	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"skills": skills,
-		"page": map[string]interface{}{
-			"page":        page,
-			"page_size":   pageSize,
-			"total":       total,
-			"total_pages": (total + pageSize - 1) / pageSize,
-		},
-	})
+	filter, sortVal := query.Parse(req)
+
+	// Support page-based query as fallback, cursor-based as primary
+	cursor := req.URL.Query().Get("cursor")
+	if cursor == "" && req.URL.Query().Get("page") != "" {
+		page, _ := strconv.Atoi(req.URL.Query().Get("page"))
+		pageSize, _ := strconv.Atoi(req.URL.Query().Get("page_size"))
+		if page < 1 {
+			page = 1
+		}
+		if pageSize < 1 || pageSize > 100 {
+			pageSize = 20
+		}
+
+		allProcessed, _ := query.ProcessList(skills, filter, sortVal, pagination.Params{Limit: 100000})
+
+		total := len(allProcessed)
+		offset := (page - 1) * pageSize
+		end := offset + pageSize
+		if offset > total {
+			offset = total
+		}
+		if end > total {
+			end = total
+		}
+		paginated := allProcessed[offset:end]
+
+		response.SuccessWithMeta(w, req, http.StatusOK, paginated, &response.Meta{
+			Total:   total,
+			Limit:   pageSize,
+			Offset:  offset,
+			HasMore: end < total,
+		})
+		return
+	}
+
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(skills, filter, sortVal, pag)
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
 // getSkillHandler returns a single skill by ID.

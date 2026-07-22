@@ -30,9 +30,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Validate production environment fast-fail checks
+	if err := config.ValidateProductionEnv(); err != nil {
+		slog.Error("production validation failed", "error", err)
+		os.Exit(1)
+	}
+
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+
+	// Validate production config defaults
+	if err := config.ValidateProduction(cfg); err != nil {
+		slog.Error("production config validation failed", "error", err)
 		os.Exit(1)
 	}
 

@@ -1,0 +1,2011 @@
+openapi: 3.0.3
+info:
+  title: VigilAgent API
+  description: |
+    Centralized API for VigilAgent orchestrator, agent runtime, safety, analytics, and security posture scanning.
+
+    ## Authentication
+    All protected endpoints require either:
+    - **Bearer JWT**: Authorization: Bearer <token>
+    - **API Key**: X-API-Key: va_* header
+
+    ## Rate Limiting
+    Rate limits vary by plan tier: Free (30/min), Pro (120/min), Team (600/min).
+  version: 1.0.0
+servers:
+  - url: /api/v1
+    description: Local API server
+paths:
+  /health:
+    get:
+      summary: Health check
+      tags: [Infrastructure]
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /ready:
+    get:
+      summary: Readiness check
+      tags: [Infrastructure]
+      responses:
+        '200':
+          description: All dependencies healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: One or more dependencies unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      tags: [Infrastructure]
+      responses:
+        '200':
+          description: Prometheus metrics format
+  /auth/register:
+    post:
+      summary: Register a new user
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 12
+                name:
+                  type: string
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/login:
+    post:
+      summary: Authenticate and log in
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '423':
+          description: Account locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/logout:
+    post:
+      summary: Log out and revoke current JWT
+      tags: [Auth]
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/refresh:
+    post:
+      summary: Refresh JWT token
+      tags: [Auth]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: New token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/forgot-password:
+    post:
+      summary: Request password reset email
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+      responses:
+        '200':
+          description: Reset email sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/reset-password:
+    post:
+      summary: Reset password with token
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 12
+      responses:
+        '200':
+          description: Password has been reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /auth/verify-email:
+    get:
+      summary: Verify email address
+      tags: [Auth]
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Email verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /users/me:
+    get:
+      summary: Get current user profile
+      tags: [Users]
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      summary: Update current user profile
+      tags: [Users]
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                avatar_url:
+                  type: string
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /users/me/password:
+    put:
+      summary: Change password (revokes all tokens)
+      tags: [Users]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /organizations:
+    post:
+      summary: Create an organization
+      tags: [Organizations]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+    get:
+      summary: List organizations
+      tags: [Organizations]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of organizations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Organization'
+  /organizations/{orgID}:
+    get:
+      summary: Get organization
+      tags: [Organizations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgID'
+      responses:
+        '200':
+          description: Organization details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      summary: Update organization
+      tags: [Organizations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                plan:
+                  type: string
+                settings:
+                  type: object
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Delete organization
+      tags: [Organizations]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgID'
+      responses:
+        '204':
+          description: Deleted
+  /projects:
+    post:
+      summary: Create a project
+      tags: [Projects]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [org_id, name]
+              properties:
+                org_id:
+                  type: string
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+    get:
+      summary: List projects
+      tags: [Projects]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: org_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+  /projects/{projectID}:
+    get:
+      summary: Get project
+      tags: [Projects]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectID'
+      responses:
+        '200':
+          description: Project details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+    put:
+      summary: Update project
+      tags: [Projects]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                status:
+                  type: string
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Delete project
+      tags: [Projects]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectID'
+      responses:
+        '204':
+          description: Deleted
+  /tasks:
+    post:
+      summary: Create and run a task
+      tags: [Tasks]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '201':
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+    get:
+      summary: List tasks
+      tags: [Tasks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+  /tasks/{taskID}:
+    get:
+      summary: Get task
+      tags: [Tasks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+      responses:
+        '200':
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+  /tasks/{taskID}/cancel:
+    post:
+      summary: Cancel a task
+      tags: [Tasks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /tasks/{taskID}/stream:
+    get:
+      summary: Stream task updates (SSE)
+      tags: [Tasks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /tasks/{taskID}/hitl:
+    post:
+      summary: Approve/reject HITL checkpoint
+      tags: [Tasks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TaskID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approved]
+              properties:
+                approved:
+                  type: boolean
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /projects/{projectID}/agents:
+    post:
+      summary: Create an agent
+      tags: [Agents]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                config:
+                  type: object
+      responses:
+        '201':
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+    get:
+      summary: List agents
+      tags: [Agents]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProjectID'
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Agent'
+  /agents/{agentID}:
+    get:
+      summary: Get agent
+      tags: [Agents]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentID'
+      responses:
+        '200':
+          description: Agent details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+    put:
+      summary: Update agent
+      tags: [Agents]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                status:
+                  type: string
+                config:
+                  type: object
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Delete agent
+      tags: [Agents]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentID'
+      responses:
+        '204':
+          description: Deleted
+  /agents/{agentID}/sessions:
+    post:
+      summary: Create session
+      tags: [Sessions]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentID'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+    get:
+      summary: List sessions
+      tags: [Sessions]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AgentID'
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Session'
+  /sessions/{sessionID}:
+    get:
+      summary: Get session
+      tags: [Sessions]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+    put:
+      summary: Update session
+      tags: [Sessions]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /sessions/{sessionID}/events:
+    post:
+      summary: Create event
+      tags: [Events]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventInput'
+      responses:
+        '201':
+          description: Event created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+  /sessions/{sessionID}/events/batch:
+    post:
+      summary: Batch create events
+      tags: [Events]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/EventInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  created:
+                    type: integer
+  /memory/search:
+    post:
+      summary: Search memory
+      tags: [Memory]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                limit:
+                  type: integer
+      responses:
+        '200':
+          description: Results
+          content:
+            application/json:
+              schema:
+                type: array
+  /memory:
+    post:
+      summary: Create memory
+      tags: [Memory]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+      responses:
+        '201':
+          description: Created
+  /skills:
+    get:
+      summary: List skills
+      tags: [Skills]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Skill'
+    post:
+      summary: Create skill
+      tags: [Skills]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, slug, category]
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+                category:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+  /skills/{skillID}:
+    get:
+      summary: Get skill
+      tags: [Skills]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SkillID'
+      responses:
+        '200':
+          description: Skill details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+    put:
+      summary: Update skill
+      tags: [Skills]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SkillID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Delete skill
+      tags: [Skills]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SkillID'
+      responses:
+        '204':
+          description: Deleted
+  /skills/{skillID}/rate:
+    post:
+      summary: Rate skill
+      tags: [Skills]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SkillID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                review:
+                  type: string
+      responses:
+        '200':
+          description: Rated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /skills/{skillID}/install:
+    post:
+      summary: Install skill
+      tags: [Skills]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SkillID'
+      responses:
+        '200':
+          description: Installed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /skills/{skillID}/ratings:
+    get:
+      summary: List skill ratings
+      tags: [Skills]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SkillID'
+      responses:
+        '200':
+          description: List of ratings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillRating'
+  /alerts:
+    get:
+      summary: List alerts
+      tags: [Alerts]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of alerts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Alert'
+    post:
+      summary: Create alert
+      tags: [Alerts]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, condition, channel]
+              properties:
+                type:
+                  type: string
+                condition:
+                  type: object
+                channel:
+                  type: string
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+  /alerts/{alertID}:
+    get:
+      summary: Get alert
+      tags: [Alerts]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AlertID'
+      responses:
+        '200':
+          description: Alert details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alert'
+    put:
+      summary: Update alert
+      tags: [Alerts]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AlertID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Delete alert
+      tags: [Alerts]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AlertID'
+      responses:
+        '204':
+          description: Deleted
+  /api-keys:
+    get:
+      summary: List API keys
+      tags: [API Keys]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/APIKey'
+    post:
+      summary: Create API key
+      tags: [API Keys]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                scopes:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Key created (shown once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyCreated'
+  /api-keys/{keyID}:
+    delete:
+      summary: Revoke API key
+      tags: [API Keys]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/KeyID'
+      responses:
+        '204':
+          description: Revoked
+  /api-keys/{keyID}/rotate:
+    post:
+      summary: Rotate API key
+      tags: [API Keys]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/KeyID'
+      responses:
+        '200':
+          description: New key generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyCreated'
+  /webhooks:
+    get:
+      summary: List webhooks
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of webhooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Webhook'
+    post:
+      summary: Create webhook
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, events]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+  /webhooks/stats:
+    get:
+      summary: Webhook statistics
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookStats'
+  /webhooks/{webhookID}:
+    get:
+      summary: Get webhook
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WebhookID'
+      responses:
+        '200':
+          description: Details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+    delete:
+      summary: Delete webhook
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WebhookID'
+      responses:
+        '204':
+          description: Deleted
+  /webhooks/{webhookID}/deliveries:
+    get:
+      summary: List deliveries
+      tags: [Webhooks]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/WebhookID'
+      responses:
+        '200':
+          description: List of deliveries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookDelivery'
+  /billing/invoices:
+    get:
+      summary: List invoices
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of invoices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Invoice'
+  /billing/checkout:
+    post:
+      summary: Create checkout session
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /billing/subscription:
+    get:
+      summary: Get subscription
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /billing/portal:
+    post:
+      summary: Create billing portal
+      tags: [Billing]
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /analytics/cost:
+    get:
+      summary: Cost analytics
+      tags: [Analytics]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: org_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cost analytics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostSummary'
+  /analytics/tokens:
+    get:
+      summary: Token analytics
+      tags: [Analytics]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: org_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Token analytics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenSummary'
+  /dashboard/overview:
+    get:
+      summary: Dashboard overview
+      tags: [Dashboard]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Overview
+          content:
+            application/json:
+              schema:
+                type: object
+  /dashboard/activity:
+    get:
+      summary: Recent activity
+      tags: [Dashboard]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Activity
+          content:
+            application/json:
+              schema:
+                type: array
+  /dashboard/top-agents:
+    get:
+      summary: Top agents
+      tags: [Dashboard]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Top agents
+          content:
+            application/json:
+              schema:
+                type: array
+  /scan:
+    post:
+      summary: Run code scan
+      tags: [Scan]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, filename]
+              properties:
+                code:
+                  type: string
+                filename:
+                  type: string
+      responses:
+        '200':
+          description: Scan results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanResult'
+  /review:
+    post:
+      summary: Full review pipeline
+      tags: [Scan]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                prompt:
+                  type: string
+                language:
+                  type: string
+                filename:
+                  type: string
+      responses:
+        '200':
+          description: Review results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResult'
+  /middleware/process:
+    post:
+      summary: Process through middleware (deterministic)
+      tags: [Middleware]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                language:
+                  type: string
+      responses:
+        '200':
+          description: Results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanResult'
+  /admin/stats:
+    get:
+      summary: Platform statistics
+      tags: [Admin]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Statistics
+          content:
+            application/json:
+              schema:
+                type: object
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/users:
+    get:
+      summary: List all users
+      tags: [Admin]
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+  /admin/users/{userID}/role:
+    put:
+      summary: Update user role
+      tags: [Admin]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [user, admin]
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /admin/users/{userID}:
+    delete:
+      summary: Delete user
+      tags: [Admin]
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '204':
+          description: Deleted
+  /ws:
+    get:
+      summary: WebSocket connection
+      tags: [Realtime]
+      security:
+        - BearerAuth: []
+      responses:
+        '101':
+          description: WebSocket upgrade
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  parameters:
+    OrgID:
+      name: orgID
+      in: path
+      required: true
+      schema:
+        type: string
+    ProjectID:
+      name: projectID
+      in: path
+      required: true
+      schema:
+        type: string
+    AgentID:
+      name: agentID
+      in: path
+      required: true
+      schema:
+        type: string
+    SessionID:
+      name: sessionID
+      in: path
+      required: true
+      schema:
+        type: string
+    TaskID:
+      name: taskID
+      in: path
+      required: true
+      schema:
+        type: string
+    SkillID:
+      name: skillID
+      in: path
+      required: true
+      schema:
+        type: string
+    AlertID:
+      name: alertID
+      in: path
+      required: true
+      schema:
+        type: string
+    KeyID:
+      name: keyID
+      in: path
+      required: true
+      schema:
+        type: string
+    WebhookID:
+      name: webhookID
+      in: path
+      required: true
+      schema:
+        type: string
+    UserID:
+      name: userID
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Missing/invalid auth
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+    ReadinessResponse:
+      type: object
+      properties:
+        status:
+          type: object
+          properties:
+            ready:
+              type: boolean
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+    RegisterResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user_id:
+          type: string
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+        is_active:
+          type: boolean
+        email_verified:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+        new_password:
+          type: string
+          minLength: 12
+    Organization:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        owner_id:
+          type: string
+        plan:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+        org_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    CreateTaskRequest:
+      type: object
+      required: [prompt, project_id]
+      properties:
+        prompt:
+          type: string
+        project_id:
+          type: string
+        model:
+          type: string
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        user_id:
+          type: string
+        prompt:
+          type: string
+        status:
+          type: string
+        model:
+          type: string
+        cost:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        config:
+          type: object
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        agent_id:
+          type: string
+        user_id:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    EventInput:
+      type: object
+      required: [event_type]
+      properties:
+        event_type:
+          type: string
+        source:
+          type: string
+        payload:
+          type: object
+        tokens_used:
+          type: integer
+        cost_usd:
+          type: number
+        latency_ms:
+          type: integer
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        event_type:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Skill:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        downloads:
+          type: integer
+        rating:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+    SkillRating:
+      type: object
+      properties:
+        id:
+          type: string
+        skill_id:
+          type: string
+        rating:
+          type: integer
+        review:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Alert:
+      type: object
+      properties:
+        id:
+          type: string
+        organization_id:
+          type: string
+        user_id:
+          type: string
+        type:
+          type: string
+        condition:
+          type: object
+        channel:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        prefix:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    APIKeyCreated:
+      type: object
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+    Webhook:
+      type: object
+      properties:
+        id:
+          type: string
+        url:
+          type: string
+        events:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    WebhookStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        successful:
+          type: integer
+        failed:
+          type: integer
+    WebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: string
+        event_type:
+          type: string
+        status_code:
+          type: integer
+        success:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: string
+        amount_usd:
+          type: number
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    CostSummary:
+      type: object
+      properties:
+        total_cost_usd:
+          type: number
+    TokenSummary:
+      type: object
+      properties:
+        total_tokens:
+          type: integer
+    ScanResult:
+      type: object
+      properties:
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Finding'
+        score:
+          type: number
+        summary:
+          type: string
+    ReviewResult:
+      type: object
+      properties:
+        findings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Finding'
+        verdict:
+          type: string
+        confidence:
+          type: number
+        fixed_code:
+          type: string
+    Finding:
+      type: object
+      properties:
+        rule_id:
+          type: string
+        severity:
+          type: string
+          enum: [info, warning, error, critical]
+        message:
+          type: string
+        file:
+          type: string
+        line:
+          type: integer

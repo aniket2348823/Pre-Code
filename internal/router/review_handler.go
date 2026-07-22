@@ -2,10 +2,12 @@ package router
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/vigilagent/vigilagent/internal/auth"
+	"github.com/vigilagent/vigilagent/internal/llm"
 	"github.com/vigilagent/vigilagent/internal/pipeline"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
@@ -14,6 +16,11 @@ import (
 // Main LLM → Deterministic Engine → Parallel Reviewer LLMs → Evidence → Knowledge Graph → Skill Extraction → Confidence → Output
 //
 // POST /api/v1/review
+//
+// Supports BYOK (Bring Your Own Key) via the X-LLM-Key header.
+// When present, a temporary LLM provider is created from the user's key
+// and used for the review pipeline instead of (or as fallback to) the
+// backend's configured providers.
 //
 // Request body:
 //
@@ -27,12 +34,6 @@ import (
 func (r *Router) reviewHandler(w http.ResponseWriter, req *http.Request) {
 	if _, ok := auth.ClaimsFromContext(req.Context()); !ok {
 		response.Unauthorized(w, "missing authentication")
-		return
-	}
-
-	// Reject if no LLM router configured.
-	if r.llmRouter == nil {
-		response.Error(w, http.StatusServiceUnavailable, "LLM router not configured — review endpoint requires an LLM provider")
 		return
 	}
 
@@ -79,13 +80,25 @@ func (r *Router) reviewHandler(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Build the full Shift-Zero pipeline using persistent Router-level instances.
-	// IMPORTANT: These are NOT created per-request — they live on the Router struct
-	// and survive across requests by design. This allows findings, skills, and
-	// knowledge graph edges to accumulate over time, making the system smarter
-	// with every review. Do not replace with per-request instances.
+	// ── BYOK: Read user's LLM key from X-LLM-Key header ──
+	// When a client (VS Code extension, MCP server, or direct API caller)
+	// sends an LLM provider key via this header, we create a temporary
+	// provider and register it on a per-request ModelRouter so the review
+	// pipeline uses the user's own key instead of the backend's configured keys.
+	llmRouter := r.llmRouter // default: use backend-configured router
+	if userKey := req.Header.Get("X-LLM-Key"); userKey != "" {
+		llmRouter = r.buildBYOKRouter(userKey)
+	}
+
+	// Reject if no LLM router available.
+	if llmRouter == nil {
+		response.Error(w, http.StatusServiceUnavailable, "LLM router not configured — review endpoint requires an LLM provider (pass X-LLM-Key header or configure backend providers)")
+		return
+	}
+
+	// Build the full Shift-Zero pipeline.
 	szp := pipeline.NewShiftZeroPipeline(
-		r.llmRouter,
+		llmRouter,
 		r.engine,
 		r.knowledge,
 		r.skillEng,
@@ -101,4 +114,73 @@ func (r *Router) reviewHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	response.JSON(w, http.StatusOK, report)
+}
+
+// buildBYOKRouter creates a temporary ModelRouter from a user-provided API key.
+// It auto-detects the provider from the key prefix and registers it.
+// The returned router is ephemeral and not cached.
+func (r *Router) buildBYOKRouter(apiKey string) *llm.ModelRouter {
+	router := llm.NewModelRouter(&llm.RouterConfig{
+		DefaultModel:  "gpt-4o",
+		BudgetPerTask: 5.00, // generous per-request budget for BYOK
+	})
+
+	provider := detectProviderFromKey(apiKey)
+	switch provider {
+	case "openai":
+		router.RegisterProvider("openai", llm.NewOpenAI(apiKey))
+		slog.Info("BYOK: registered temporary OpenAI provider")
+	case "anthropic":
+		router.RegisterProvider("anthropic", llm.NewAnthropic(apiKey))
+		slog.Info("BYOK: registered temporary Anthropic provider")
+	case "gemini":
+		p, err := llm.NewGemini(apiKey)
+		if err != nil {
+			slog.Warn("BYOK: failed to create Gemini provider", "error", err)
+			return router
+		}
+		router.RegisterProvider("gemini", p)
+		slog.Info("BYOK: registered temporary Gemini provider")
+	case "openrouter":
+		router.RegisterProvider("openrouter", llm.NewOpenRouter(apiKey))
+		slog.Info("BYOK: registered temporary OpenRouter provider")
+	case "mistral":
+		router.RegisterProvider("mistral", llm.NewMistral(apiKey))
+		slog.Info("BYOK: registered temporary Mistral provider")
+	case "groq":
+		router.RegisterProvider("groq", llm.NewGroq(apiKey))
+		slog.Info("BYOK: registered temporary Groq provider")
+	case "cohere":
+		router.RegisterProvider("cohere", llm.NewCohere(apiKey))
+		slog.Info("BYOK: registered temporary Cohere provider")
+	default:
+		// Unknown key prefix — try OpenAI as default (most common)
+		router.RegisterProvider("openai", llm.NewOpenAI(apiKey))
+		slog.Info("BYOK: unknown key prefix, defaulting to OpenAI provider")
+	}
+
+	return router
+}
+
+// detectProviderFromKey infers the LLM provider from the API key prefix.
+func detectProviderFromKey(key string) string {
+	// Check MORE SPECIFIC prefixes first — sk-ant- and sk-or- both start with sk-
+	switch {
+	case strings.HasPrefix(key, "sk-ant-"):
+		return "anthropic"
+	case strings.HasPrefix(key, "sk-or-"):
+		return "openrouter"
+	case strings.HasPrefix(key, "AIza"):
+		return "gemini"
+	case strings.HasPrefix(key, "ms-"):
+		return "mistral"
+	case strings.HasPrefix(key, "gsk_"):
+		return "groq"
+	case strings.HasPrefix(key, "co-"):
+		return "cohere"
+	case strings.HasPrefix(key, "sk-"):
+		return "openai"
+	default:
+		return "unknown"
+	}
 }
