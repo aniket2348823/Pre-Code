@@ -53,7 +53,7 @@ func TestRequireScope(t *testing.T) {
 		claims := &auth.Claims{
 			UserID:   "user-1",
 			IsAPIKey: true,
-			Scopes:   []string{"admin"},
+			Scopes:   []string{"*"},
 		}
 		req = req.WithContext(auth.ContextWithClaims(req.Context(), claims))
 

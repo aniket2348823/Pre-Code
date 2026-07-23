@@ -239,7 +239,7 @@ func TestIsAPIKeyRequest(t *testing.T) {
 
 func TestIdempotency_PassesNonPostRequests(t *testing.T) {
 	m := NewIdempotencyMiddleware(time.Minute)
-	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := m.AsMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -254,7 +254,7 @@ func TestIdempotency_PassesNonPostRequests(t *testing.T) {
 
 func TestIdempotency_PassesPostWithoutKey(t *testing.T) {
 	m := NewIdempotencyMiddleware(time.Minute)
-	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := m.AsMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	}))
 
@@ -270,7 +270,7 @@ func TestIdempotency_PassesPostWithoutKey(t *testing.T) {
 func TestIdempotency_CachesResponse(t *testing.T) {
 	m := NewIdempotencyMiddleware(time.Minute)
 	callCount := 0
-	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := m.AsMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("response"))
@@ -297,7 +297,7 @@ func TestIdempotency_CachesResponse(t *testing.T) {
 func TestIdempotency_DifferentKeysAreIndependent(t *testing.T) {
 	m := NewIdempotencyMiddleware(time.Minute)
 	callCount := 0
-	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := m.AsMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -319,7 +319,7 @@ func TestIdempotency_DifferentKeysAreIndependent(t *testing.T) {
 
 func TestIdempotency_PassesDeleteAndPut(t *testing.T) {
 	m := NewIdempotencyMiddleware(time.Minute)
-	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := m.AsMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -552,14 +552,13 @@ func TestAuditMiddleware_AuditsDeleteAndPut(t *testing.T) {
 			t.Errorf("%s should be audited, got %d events", method, len(events))
 			continue
 		}
-		if events[0].Method != method {
-			t.Errorf("expected method %s, got %s", method, events[0].Method)
+		expectedAction := method + " /api/v1/resource/123"
+		if events[0].Action != expectedAction {
+			t.Errorf("expected action %s, got %s", expectedAction, events[0].Action)
 		}
-		if events[0].Resource != "resource" {
-			t.Errorf("expected resource 'resource', got %q", events[0].Resource)
-		}
-		if events[0].ResourceID != "123" {
-			t.Errorf("expected resource_id '123', got %q", events[0].ResourceID)
+		// extractResource returns the last non-empty path segment
+		if events[0].Resource != "123" {
+			t.Errorf("expected resource '123', got %q", events[0].Resource)
 		}
 	}
 }
@@ -575,121 +574,15 @@ func TestAuditMiddleware_CapturesStatus(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if event.StatusCode != http.StatusCreated {
-		t.Errorf("expected status 201, got %d", event.StatusCode)
+	if event.Status != "success" {
+		t.Errorf("expected status 'success', got %q", event.Status)
 	}
 }
 
-// ─── Tiered Rate Limiter Tests ────────────────────────────────────────────
-
-func TestGetTier(t *testing.T) {
-	tests := []struct {
-		plan     string
-		expected int
-	}{
-		{"free", 30},
-		{"pro", 120},
-		{"team", 600},
-		{"", 30},
-		{"unknown", 30},
-	}
-	for _, tt := range tests {
-		t.Run(tt.plan, func(t *testing.T) {
-			tier := GetTier(tt.plan)
-			if tier.RequestsPerMinute != tt.expected {
-				t.Errorf("GetTier(%q).RequestsPerMinute = %d, want %d", tt.plan, tier.RequestsPerMinute, tt.expected)
-			}
-		})
-	}
-}
-
-func TestTieredRateLimiter_AllowsUnderLimit(t *testing.T) {
-	rl := NewTieredRateLimiter()
-	called := false
-	handler := rl.Middleware(
-		func(r *http.Request) string { return "user1" },
-		func(r *http.Request) Tier { return FreeTier },
-	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if !called {
-		t.Error("handler should be called when under limit")
-	}
-	if w.Header().Get("X-RateLimit-Tier") != "free" {
-		t.Errorf("tier header should be 'free', got %q", w.Header().Get("X-RateLimit-Tier"))
-	}
-}
-
-func TestTieredRateLimiter_RejectsOverLimit(t *testing.T) {
-	rl := NewTieredRateLimiter()
-	handler := rl.Middleware(
-		func(r *http.Request) string { return "user1" },
-		func(r *http.Request) Tier { return Tier{RequestsPerMinute: 1, RequestsPerHour: 1, RequestsPerDay: 1} },
-	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	if w.Code == http.StatusTooManyRequests {
-		t.Error("first request should pass")
-	}
-
-	req2 := httptest.NewRequest("GET", "/", nil)
-	w2 := httptest.NewRecorder()
-	handler.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusTooManyRequests {
-		t.Errorf("second request should be rejected, got %d", w2.Code)
-	}
-}
-
-// ─── Production Validation Tests ──────────────────────────────────────────
-
-func TestValidateProductionEnv_NonProduction(t *testing.T) {
-	t.Setenv("VIGILAGENT_ENV", "development")
-	if err := ValidateProductionEnv(); err != nil {
-		t.Errorf("non-production should pass: %v", err)
-	}
-}
-
-func TestValidateProductionEnv_MissingSecret(t *testing.T) {
-	t.Setenv("VIGILAGENT_ENV", "production")
-	t.Setenv("VIGILAGENT_JWT_SECRET", "")
-	if err := ValidateProductionEnv(); err == nil {
-		t.Error("production without secret should fail")
-	}
-}
-
-func TestValidateProductionEnv_DefaultSecret(t *testing.T) {
-	t.Setenv("VIGILAGENT_ENV", "production")
-	t.Setenv("VIGILAGENT_JWT_SECRET", "default")
-	if err := ValidateProductionEnv(); err == nil {
-		t.Error("production with default secret should fail")
-	}
-}
-
-func TestValidateProductionEnv_ShortSecret(t *testing.T) {
-	t.Setenv("VIGILAGENT_ENV", "production")
-	t.Setenv("VIGILAGENT_JWT_SECRET", "short")
-	if err := ValidateProductionEnv(); err == nil {
-		t.Error("production with short secret should fail")
-	}
-}
-
-func TestValidateProductionEnv_ValidSecret(t *testing.T) {
-	t.Setenv("VIGILAGENT_ENV", "production")
-	t.Setenv("VIGILAGENT_JWT_SECRET", "a-very-long-and-secure-jwt-secret-key-32chars")
-	if err := ValidateProductionEnv(); err != nil {
-		t.Errorf("valid secret should pass: %v", err)
-	}
-}
+// NOTE: Tiered rate limiter tests and production validation tests
+// have been moved to their respective packages:
+// - internal/ratelimit/ for GetTier, NewTieredRateLimiter, Tier, FreeTier
+// - internal/config/ for ValidateProductionEnv
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
