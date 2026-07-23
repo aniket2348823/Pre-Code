@@ -88,28 +88,57 @@ export class VigilAgentClient {
     }
 
     private async getLLMKey(provider?: string): Promise<string | undefined> {
-        if (!this.extensionContext) { return undefined; }
-        // Use the stored provider preference, or try each provider in order
-        if (provider) {
-            return this.extensionContext.secrets.get(`vigilagent.llmKey.${provider}`);
+        if (this.extensionContext) {
+            // Use the stored provider preference, or try each provider in order
+            if (provider) {
+                const key = await this.extensionContext.secrets.get(`vigilagent.llmKey.${provider}`);
+                if (key) { return key; }
+            }
+            // Try the stored provider preference
+            const storedProvider = await this.extensionContext.secrets.get('vigilagent.selectedProvider');
+            if (storedProvider) {
+                const key = await this.extensionContext.secrets.get(`vigilagent.llmKey.${storedProvider}`);
+                if (key) { return key; }
+            }
+            // Fallback: try each provider in order
+            const providers = ['NVIDIA NIM', 'OpenAI', 'Anthropic', 'Google Gemini', 'Mistral', 'Groq', 'Cohere'];
+            for (const p of providers) {
+                const key = await this.extensionContext.secrets.get(`vigilagent.llmKey.${p}`);
+                if (key) { return key; }
+            }
         }
-        // Try the stored provider preference
-        const storedProvider = await this.extensionContext.secrets.get('vigilagent.selectedProvider');
-        if (storedProvider) {
-            return this.extensionContext.secrets.get(`vigilagent.llmKey.${storedProvider}`);
-        }
-        // Fallback: try each provider in order
-        const providers = ['OpenAI', 'Anthropic', 'Google Gemini', 'Mistral', 'Groq', 'Cohere'];
-        for (const p of providers) {
-            const key = await this.extensionContext.secrets.get(`vigilagent.llmKey.${p}`);
-            if (key) { return key; }
-        }
+        // Final fallback: read from workspace settings (settings.json)
+        const config = vscode.workspace.getConfiguration('vigilagent');
+        const settingsKey = config.get<string>('llmApiKey', '');
+        if (settingsKey) { return settingsKey; }
         return undefined;
+    }
+
+    private async getSelectedProvider(): Promise<string | undefined> {
+        if (this.extensionContext) {
+            const stored = await this.extensionContext.secrets.get('vigilagent.selectedProvider');
+            if (stored) { return stored; }
+        }
+        // Fallback to settings.json
+        const config = vscode.workspace.getConfiguration('vigilagent');
+        return config.get<string>('llmProvider', 'NVIDIA NIM');
+    }
+
+    private async getSelectedModel(): Promise<string | undefined> {
+        if (this.extensionContext) {
+            const stored = await this.extensionContext.secrets.get('vigilagent.selectedModel');
+            if (stored) { return stored; }
+        }
+        // Fallback to settings.json
+        const config = vscode.workspace.getConfiguration('vigilagent');
+        return config.get<string>('llmModel', 'kimi-k2.6');
     }
 
     private async request<T>(path: string, body: Record<string, unknown>): Promise<T> {
         const apiKey = await this.getApiKey();
         const llmKey = await this.getLLMKey();
+        const provider = await this.getSelectedProvider();
+        const model = await this.getSelectedModel();
         const url = `${this.backendUrl}${path}`;
 
         const headers: Record<string, string> = {
@@ -119,6 +148,13 @@ export class VigilAgentClient {
         // Pass user's LLM key to backend so it can use it for the review pipeline
         if (llmKey) {
             headers['X-LLM-Key'] = llmKey;
+        }
+        // Pass provider and model so backend routes to the correct LLM
+        if (provider) {
+            headers['X-LLM-Provider'] = provider;
+        }
+        if (model) {
+            headers['X-LLM-Model'] = model;
         }
 
         const response = await fetch(url, {

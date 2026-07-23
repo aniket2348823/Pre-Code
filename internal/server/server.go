@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/vigilagent/vigilagent/internal/agent"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/config"
@@ -54,57 +55,100 @@ func New(cfg *config.Config) (*Server, error) {
 
 	srv := &Server{cfg: cfg}
 
+	isDev := cfg.Server.Env == "development" || cfg.Server.Env == "dev"
+	maxDBAttempts := 10
+	if isDev {
+		maxDBAttempts = 1
+	}
+
 	// Connect to PostgreSQL with retry (services may not be ready yet in Docker)
 	var err error
 	var db *database.Postgres
-	for attempt := 1; attempt <= 10; attempt++ {
+	for attempt := 1; attempt <= maxDBAttempts; attempt++ {
 		db, err = database.NewPostgres(context.Background(), &cfg.Database)
 		if err == nil {
 			break
 		}
-		slog.Warn("database connection failed, retrying...", "attempt", attempt, "max", 10, "error", err)
-		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		if !isDev {
+			slog.Warn("database connection failed, retrying...", "attempt", attempt, "max", maxDBAttempts, "error", err)
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("database initialization failed after 10 attempts: %w", err)
+		if isDev {
+			slog.Warn("database connection failed; continuing in mock/in-memory mode for development", "error", err)
+			db = nil
+		} else {
+			return nil, fmt.Errorf("database initialization failed after %d attempts: %w", maxDBAttempts, err)
+		}
 	}
 	srv.db = db
 
-	if err := srv.runMigrations(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("database migration failed: %w", err)
+	if db != nil {
+		if err := srv.runMigrations(); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("database migration failed: %w", err)
+		}
 	}
 
 	// Connect to Redis with retry
 	var rds *database.Redis
-	for attempt := 1; attempt <= 5; attempt++ {
+	maxRedisAttempts := 5
+	if isDev {
+		maxRedisAttempts = 1
+	}
+	for attempt := 1; attempt <= maxRedisAttempts; attempt++ {
 		rds, err = database.NewRedis(context.Background(), &cfg.Redis)
 		if err == nil {
 			break
 		}
-		slog.Warn("redis connection failed, retrying...", "attempt", attempt, "max", 5, "error", err)
-		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		if !isDev {
+			slog.Warn("redis connection failed, retrying...", "attempt", attempt, "max", maxRedisAttempts, "error", err)
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
 	}
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("redis initialization failed after 5 attempts: %w", err)
+		if isDev {
+			slog.Warn("redis connection failed; continuing in in-memory mode for development", "error", err)
+			rds = nil
+		} else {
+			if db != nil {
+				db.Close()
+			}
+			return nil, fmt.Errorf("redis initialization failed after %d attempts: %w", maxRedisAttempts, err)
+		}
 	}
 	srv.redis = rds
 
 	// Connect to NATS with retry
 	var natsConn *queue.NATS
-	for attempt := 1; attempt <= 5; attempt++ {
+	maxNatsAttempts := 5
+	if isDev {
+		maxNatsAttempts = 1
+	}
+	for attempt := 1; attempt <= maxNatsAttempts; attempt++ {
 		natsConn, err = queue.NewNATS(&cfg.NATS)
 		if err == nil {
 			break
 		}
-		slog.Warn("nats connection failed, retrying...", "attempt", attempt, "max", 5, "error", err)
-		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		if !isDev {
+			slog.Warn("nats connection failed, retrying...", "attempt", attempt, "max", maxNatsAttempts, "error", err)
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
 	}
 	if err != nil {
-		db.Close()
-		rds.Close()
-		return nil, fmt.Errorf("nats initialization failed after 5 attempts: %w", err)
+		if isDev {
+			slog.Warn("nats connection failed; continuing without NATS for development", "error", err)
+			natsConn = nil
+		} else {
+			if db != nil {
+				db.Close()
+			}
+			if rds != nil {
+				rds.Close()
+			}
+			return nil, fmt.Errorf("nats initialization failed after %d attempts: %w", maxNatsAttempts, err)
+		}
 	}
 	srv.nats = natsConn
 
@@ -118,7 +162,15 @@ func New(cfg *config.Config) (*Server, error) {
 		srv.cleanup = cleanup
 	}
 
-	conn := db.Conn()
+	var conn *database.Conn
+	if db != nil {
+		conn = db.Conn()
+	}
+
+	var redisClient *redis.Client
+	if rds != nil {
+		redisClient = rds.Client
+	}
 	userRepo := repository.NewUserRepository(conn)
 	orgRepo := repository.NewOrganizationRepository(conn)
 	projectRepo := repository.NewProjectRepository(conn)
@@ -131,8 +183,8 @@ func New(cfg *config.Config) (*Server, error) {
 	alertRepo := repository.NewAlertRepository(conn)
 
 	apiKeyAuth := mw.NewAPIKeyAuth(conn)
-	rl := mw.NewRateLimiter(rds.Client, 100, time.Minute)
-	authRL := mw.NewRateLimiter(rds.Client, 10, time.Minute)
+	rl := mw.NewRateLimiter(redisClient, 100, time.Minute)
+	authRL := mw.NewRateLimiter(redisClient, 10, time.Minute)
 
 	modelRouter := llm.NewModelRouter(&llm.RouterConfig{
 		DefaultModel:  cfg.LLM.DefaultModel,
@@ -185,19 +237,22 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	budgetMgr := cost.NewBudgetManager(conn, 0, cfg.LLM.BudgetPerTask)
-	webhookEngine := webhook.NewEngine(db.Pool)
-	budgetMgr.OnExceeded(func(ctx context.Context, err *cost.BudgetExceededError) {
-		webhookEngine.Dispatch(ctx, webhook.Event{
-			Type: "budget.exceeded",
-			Payload: map[string]interface{}{
-				"type":     err.Type,
-				"id":       err.ID,
-				"usage":    err.Usage,
-				"budget":   err.Budget,
-				"proposed": err.Proposed,
-			},
+	var webhookEngine *webhook.Engine
+	if db != nil {
+		webhookEngine = webhook.NewEngine(db.Pool)
+		budgetMgr.OnExceeded(func(ctx context.Context, err *cost.BudgetExceededError) {
+			webhookEngine.Dispatch(ctx, webhook.Event{
+				Type: "budget.exceeded",
+				Payload: map[string]interface{}{
+					"type":     err.Type,
+					"id":       err.ID,
+					"usage":    err.Usage,
+					"budget":   err.Budget,
+					"proposed": err.Proposed,
+				},
+			})
 		})
-	})
+	}
 	modelRouter.SetBudgetGuard(budgetMgr)
 	modelRouter.SetCache(llm.NewInMemoryCache(time.Hour))
 	slog.Info("router budget enforcement + response cache enabled", "budget_per_task", cfg.LLM.BudgetPerTask)
@@ -259,12 +314,20 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Wire feature flags
 	featureFlagMgr := featureflags.NewManager(conn)
-	featureFlagMgr.StartRefresh(context.Background(), 5*time.Minute)
-	_ = featureflags.EnsureTable(context.Background(), conn)
+	if conn != nil {
+		featureFlagMgr.StartRefresh(context.Background(), 5*time.Minute)
+		_ = featureflags.EnsureTable(context.Background(), conn)
+	} else {
+		slog.Warn("feature flags: skipping DB setup (no database connection)")
+	}
 
 	// Wire RAG engine for skill marketplace search
 	skillRAG := skills.NewRAGEngine(conn, memory.NewNoOpEmbedder(1536))
-	_ = skills.EnsureRequiredTables(context.Background(), conn)
+	if conn != nil {
+		_ = skills.EnsureRequiredTables(context.Background(), conn)
+	} else {
+		slog.Warn("skill RAG: skipping DB setup (no database connection)")
+	}
 
 	opts := router.Options{
 		Config:     cfg,

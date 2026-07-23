@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vigilagent/vigilagent/internal/config"
 )
@@ -21,6 +22,9 @@ func NewPostgres(ctx context.Context, cfg *config.DatabaseConfig) (*Postgres, er
 	if err != nil {
 		return nil, fmt.Errorf("unable to parse database config: %w", err)
 	}
+
+	// Disable prepared statement caching for compatibility with PgBouncer / Supabase Pooler
+	poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 
 	poolCfg.MaxConns = int32(cfg.MaxOpenConns)
 	poolCfg.MinConns = int32(cfg.MaxIdleConns)

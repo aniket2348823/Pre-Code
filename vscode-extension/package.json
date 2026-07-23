@@ -79,6 +79,27 @@
           "type": "boolean",
           "default": true,
           "description": "Show confidence score in the status bar"
+        },
+        "vigilagent.apiKey": {
+          "type": "string",
+          "default": "local-dev",
+          "description": "VigilAgent backend API key. Use 'local-dev' for local development without auth."
+        },
+        "vigilagent.llmProvider": {
+          "type": "string",
+          "default": "NVIDIA NIM",
+          "enum": ["NVIDIA NIM", "OpenAI", "Anthropic", "Google Gemini", "Mistral", "Groq", "Cohere"],
+          "description": "LLM provider for the review pipeline"
+        },
+        "vigilagent.llmModel": {
+          "type": "string",
+          "default": "kimi-k2.6",
+          "description": "Model name to use with the selected LLM provider"
+        },
+        "vigilagent.llmApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for the selected LLM provider (e.g., nvapi-... for NVIDIA NIM)"
         }
       }
     }

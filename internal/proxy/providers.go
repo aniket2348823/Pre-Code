@@ -40,6 +40,19 @@ func RouteRequest(model string, cfg *Config) *ProviderConfig {
 			ModelPrefixes: []string{"gemini-"},
 		}
 	}
+	// NVIDIA NIM: supports kimi-k2.6, deepseek, llama, mistral, etc.
+	if strings.HasPrefix(model, "kimi-") ||
+		strings.HasPrefix(model, "deepseek-") ||
+		strings.HasPrefix(model, "nvidia/") ||
+		strings.HasPrefix(model, "meta/") ||
+		strings.HasPrefix(model, "mistralai/") {
+		return &ProviderConfig{
+			Name:          "nvidia",
+			BaseURL:       "https://integrate.api.nvidia.com",
+			APIKey:        cfg.NVIDIAKey,
+			ModelPrefixes: []string{"kimi-", "deepseek-", "nvidia/", "meta/", "mistralai/"},
+		}
+	}
 	return nil
 }
 
@@ -51,7 +64,7 @@ func ForwardToProvider(ctx context.Context, client *http.Client, provider *Provi
 	}
 	req.Header.Set("Content-Type", "application/json")
 	
-	if provider.Name == "openai" {
+	if provider.Name == "openai" || provider.Name == "nvidia" {
 		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	} else if provider.Name == "anthropic" {
 		req.Header.Set("x-api-key", provider.APIKey)

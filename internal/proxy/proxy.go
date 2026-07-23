@@ -17,6 +17,7 @@ type Config struct {
 	OpenAIKey    string
 	AnthropicKey string
 	GeminiKey    string
+	NVIDIAKey    string
 }
 
 type ProxyServer struct {

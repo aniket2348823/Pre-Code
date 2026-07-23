@@ -49,33 +49,63 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 async function configureAPIKeys(context: vscode.ExtensionContext): Promise<void> {
-    // Store VigilAgent API key
-    const vigilApiKey = await vscode.window.showInputBox({
-        prompt: 'Enter your VigilAgent API key (va_...)',
-        password: true,
-        placeHolder: 'va_xxxxxxxxxxxxxxxxxxxx'
-    });
-    if (vigilApiKey) {
-        await context.secrets.store('vigilagent.apiKey', vigilApiKey);
-        vscode.window.showInformationMessage('VigilAgent API key saved securely.');
+    // Ask if running locally (no API key needed) or remote
+    const mode = await vscode.window.showQuickPick(
+        [
+            'Local development (no API key needed)',
+            'Remote / Production (enter API key)'
+        ],
+        { placeHolder: 'How are you connecting to the VigilAgent backend?' }
+    );
+
+    if (mode === 'Remote / Production (enter API key)') {
+        const vigilApiKey = await vscode.window.showInputBox({
+            prompt: 'Enter your VigilAgent API key (va_...)',
+            password: true,
+            placeHolder: 'va_xxxxxxxxxxxxxxxxxxxx'
+        });
+        if (vigilApiKey) {
+            await context.secrets.store('vigilagent.apiKey', vigilApiKey);
+            vscode.window.showInformationMessage('VigilAgent API key saved securely.');
+        }
+    } else if (mode === 'Local development (no API key needed)') {
+        // Store a placeholder key so the client doesn't throw
+        await context.secrets.store('vigilagent.apiKey', 'local-dev');
+        vscode.window.showInformationMessage('Configured for local development (no auth).');
     }
 
     // Store LLM provider API key
     const provider = await vscode.window.showQuickPick(
-        ['OpenAI', 'Anthropic', 'Google Gemini', 'Mistral', 'Groq', 'Cohere'],
+        ['NVIDIA NIM', 'OpenAI', 'Anthropic', 'Google Gemini', 'Mistral', 'Groq', 'Cohere'],
         { placeHolder: 'Select your LLM provider' }
     );
     if (provider) {
         const llmKey = await vscode.window.showInputBox({
             prompt: `Enter your ${provider} API key`,
             password: true,
-            placeHolder: 'sk-...'
+            placeHolder: provider === 'NVIDIA NIM' ? 'nvapi-...' : 'sk-...'
         });
         if (llmKey) {
             await context.secrets.store(`vigilagent.llmKey.${provider}`, llmKey);
-            // Store which provider was selected so the client uses the right key
             await context.secrets.store('vigilagent.selectedProvider', provider);
             vscode.window.showInformationMessage(`${provider} API key saved securely.`);
+        }
+
+        // Ask for model name
+        let defaultModel = 'gpt-4o';
+        if (provider === 'NVIDIA NIM') { defaultModel = 'kimi-k2.6'; }
+        else if (provider === 'Anthropic') { defaultModel = 'claude-sonnet-4-20250514'; }
+        else if (provider === 'Google Gemini') { defaultModel = 'gemini-2.5-pro'; }
+        else if (provider === 'Mistral') { defaultModel = 'mistral-large-latest'; }
+
+        const model = await vscode.window.showInputBox({
+            prompt: `Enter the model name to use with ${provider}`,
+            value: defaultModel,
+            placeHolder: defaultModel
+        });
+        if (model) {
+            await context.secrets.store('vigilagent.selectedModel', model);
+            vscode.window.showInformationMessage(`Model set to ${model}.`);
         }
     }
 }
