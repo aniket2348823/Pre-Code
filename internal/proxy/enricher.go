@@ -45,7 +45,7 @@ func ExtractCodeBlocks(text string) []CodeBlock {
 	return blocks
 }
 
-func AnalyzeCode(ctx context.Context, backendURL, apiKey, code, language string) (*AnalysisResult, error) {
+func AnalyzeCode(ctx context.Context, client *http.Client, backendURL, apiKey, code, language string) (*AnalysisResult, error) {
 	payload := map[string]string{
 		"code":     code,
 		"language": language,
@@ -59,7 +59,6 @@ func AnalyzeCode(ctx context.Context, backendURL, apiKey, code, language string)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

@@ -170,6 +170,8 @@ func detectProviderFromKey(key string) string {
 		return "anthropic"
 	case strings.HasPrefix(key, "sk-or-"):
 		return "openrouter"
+	case strings.HasPrefix(key, "nvapi-"):
+		return "nvidia_nim"
 	case strings.HasPrefix(key, "AIza"):
 		return "gemini"
 	case strings.HasPrefix(key, "ms-"):

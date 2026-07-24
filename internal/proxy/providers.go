@@ -8,69 +8,61 @@ import (
 	"strings"
 )
 
+// ProviderConfig holds routing info for a single LLM provider.
 type ProviderConfig struct {
-	Name          string
-	BaseURL       string
-	APIKey        string
-	ModelPrefixes []string
+	Name    string
+	BaseURL string
+	APIKey  string
 }
 
+// RouteRequest determines the provider from the model name prefix.
+// Used as fallback when no BYOK header is provided.
 func RouteRequest(model string, cfg *Config) *ProviderConfig {
-	if strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o1-") || strings.HasPrefix(model, "o3-") {
-		return &ProviderConfig{
-			Name:          "openai",
-			BaseURL:       "https://api.openai.com",
-			APIKey:        cfg.OpenAIKey,
-			ModelPrefixes: []string{"gpt-", "o1-", "o3-"},
-		}
+	switch {
+	case strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o1-") || strings.HasPrefix(model, "o3-") || strings.HasPrefix(model, "o4-") || strings.HasPrefix(model, "gpt-4.5"):
+		return &ProviderConfig{Name: "openai", BaseURL: "https://api.openai.com", APIKey: cfg.OpenAIKey}
+	case strings.HasPrefix(model, "claude-"):
+		return &ProviderConfig{Name: "anthropic", BaseURL: "https://api.anthropic.com", APIKey: cfg.AnthropicKey}
+	case strings.HasPrefix(model, "gemini-"):
+		return &ProviderConfig{Name: "gemini", BaseURL: "https://generativelanguage.googleapis.com", APIKey: cfg.GeminiKey}
+	case strings.HasPrefix(model, "kimi-") || strings.HasPrefix(model, "deepseek-") || strings.HasPrefix(model, "nvidia/") || strings.HasPrefix(model, "meta/") || strings.HasPrefix(model, "mistralai/") || strings.HasPrefix(model, "moonshotai/") || strings.HasPrefix(model, "qwen/"):
+		return &ProviderConfig{Name: "nvidia", BaseURL: "https://build.nvidia.com", APIKey: cfg.NVIDIAKey}
+	case strings.HasPrefix(model, "llama-") || strings.HasPrefix(model, "mixtral-") || strings.HasPrefix(model, "gemma"):
+		return &ProviderConfig{Name: "groq", BaseURL: "https://api.groq.com", APIKey: cfg.GroqKey}
+	case strings.HasPrefix(model, "mistral") || strings.HasPrefix(model, "open-mixtral") || strings.HasPrefix(model, "codestral") || strings.HasPrefix(model, "pixtral"):
+		return &ProviderConfig{Name: "mistral", BaseURL: "https://api.mistral.ai", APIKey: cfg.MistralKey}
+	case strings.HasPrefix(model, "command"):
+		return &ProviderConfig{Name: "cohere", BaseURL: "https://api.cohere.com", APIKey: cfg.CohereKey}
+	case strings.Contains(model, "/"):
+		// OpenRouter uses provider/model format (e.g., "anthropic/claude-opus-4")
+		return &ProviderConfig{Name: "openrouter", BaseURL: "https://openrouter.ai", APIKey: cfg.OpenRouterKey}
+	default:
+		return nil
 	}
-	if strings.HasPrefix(model, "claude-") {
-		return &ProviderConfig{
-			Name:          "anthropic",
-			BaseURL:       "https://api.anthropic.com",
-			APIKey:        cfg.AnthropicKey,
-			ModelPrefixes: []string{"claude-"},
-		}
-	}
-	if strings.HasPrefix(model, "gemini-") {
-		return &ProviderConfig{
-			Name:          "gemini",
-			BaseURL:       "https://generativelanguage.googleapis.com",
-			APIKey:        cfg.GeminiKey,
-			ModelPrefixes: []string{"gemini-"},
-		}
-	}
-	// NVIDIA NIM: supports kimi-k2.6, deepseek, llama, mistral, etc.
-	if strings.HasPrefix(model, "kimi-") ||
-		strings.HasPrefix(model, "deepseek-") ||
-		strings.HasPrefix(model, "nvidia/") ||
-		strings.HasPrefix(model, "meta/") ||
-		strings.HasPrefix(model, "mistralai/") {
-		return &ProviderConfig{
-			Name:          "nvidia",
-			BaseURL:       "https://integrate.api.nvidia.com",
-			APIKey:        cfg.NVIDIAKey,
-			ModelPrefixes: []string{"kimi-", "deepseek-", "nvidia/", "meta/", "mistralai/"},
-		}
-	}
-	return nil
 }
 
-func ForwardToProvider(ctx context.Context, client *http.Client, provider *ProviderConfig, requestBody []byte, path string) ([]byte, error) {
+// forwardToProvider sends the request to the real LLM provider and returns the raw response.
+func forwardToProvider(ctx context.Context, client *http.Client, provider *ProviderConfig, requestBody []byte, path string) ([]byte, error) {
+	// Map path: /v1/chat/completions -> provider-specific path
 	url := provider.BaseURL + path
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	
-	if provider.Name == "openai" || provider.Name == "nvidia" {
+
+	// Set auth headers based on provider
+	switch provider.Name {
+	case "openai", "nvidia", "groq", "mistral", "openrouter":
 		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
-	} else if provider.Name == "anthropic" {
+	case "anthropic":
 		req.Header.Set("x-api-key", provider.APIKey)
 		req.Header.Set("anthropic-version", "2023-06-01")
-	} else if provider.Name == "gemini" {
+	case "gemini":
 		req.Header.Set("x-goog-api-key", provider.APIKey)
+	case "cohere":
+		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	}
 
 	resp, err := client.Do(req)

@@ -5,32 +5,224 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/vigilagent/vigilagent/internal/llm"
 )
 
-func (s *ProxyServer) handleStreaming(w http.ResponseWriter, r *http.Request, provider *ProviderConfig, requestBody []byte, defaultFormat string) {
-	url := provider.BaseURL + r.URL.Path
-	req, err := http.NewRequestWithContext(r.Context(), "POST", url, bytes.NewBuffer(requestBody))
-	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+// handleStreaming proxies a streaming request through ModelRouter,
+// streams tokens to the client in real-time, and runs background analysis.
+func (s *ProxyServer) handleStreaming(
+	w http.ResponseWriter,
+	r *http.Request,
+	modelRouter *llm.ModelRouter,
+	requestBody []byte,
+	defaultFormat string,
+	model string,
+) {
+	// Build the LLM task for ModelRouter
+	messages, err := s.parseMessages(requestBody)
+	if err != nil || len(messages) == 0 {
+		http.Error(w, `{"error":"invalid request: missing messages"}`, http.StatusBadRequest)
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	
-	if provider.Name == "openai" {
-		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
-	} else if provider.Name == "anthropic" {
-		req.Header.Set("x-api-key", provider.APIKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	} else if provider.Name == "gemini" {
-		req.Header.Set("x-goog-api-key", provider.APIKey)
+
+	if model == "" {
+		model = "gpt-4o-mini"
 	}
 
-	resp, err := s.client.Do(req)
+	task := &llm.Task{
+		ID:          "proxy-stream-" + time.Now().Format("20060102150405"),
+		Type:        "feature",
+		Description: "Proxy streaming request",
+		Messages:    messages,
+	}
+
+	// Stream through ModelRouter with smart failover
+	streamResult, err := modelRouter.StreamWithFailover(r.Context(), task)
 	if err != nil {
-		http.Error(w, "Failed to forward stream: "+err.Error(), http.StatusBadGateway)
+		log.Printf("ModelRouter streaming failed: %v, falling back to direct forward", err)
+		s.handleStreamingDirect(w, r, requestBody, defaultFormat)
+		return
+	}
+
+	// Stream tokens to the client
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-VigilAgent-Provider", streamResult.Provider)
+	w.Header().Set("X-VigilAgent-Model", streamResult.Model)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	var fullContent strings.Builder
+	start := time.Now()
+
+	for chunk := range streamResult.Ch {
+		if chunk.Content != "" {
+			fullContent.WriteString(chunk.Content)
+			// Forward chunk in OpenAI SSE format
+			sseChunk := map[string]interface{}{
+				"id":      fmt.Sprintf("chatcmpl-vigil-%d", time.Now().UnixNano()),
+				"object":  "chat.completion.chunk",
+				"created": time.Now().Unix(),
+				"model":   streamResult.Model,
+				"choices": []map[string]interface{}{
+					{
+						"index": 0,
+						"delta": map[string]interface{}{
+							"content": chunk.Content,
+						},
+						"finish_reason": nil,
+					},
+				},
+			}
+			chunkBytes, _ := json.Marshal(sseChunk)
+			fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
+			flusher.Flush()
+		}
+		if chunk.Finish {
+			break
+		}
+	}
+
+	// Run analysis on accumulated content
+	analysisMode := r.Header.Get("X-VigilAgent-Mode")
+	if analysisMode != "passthrough" {
+		content := fullContent.String()
+		blocks := ExtractCodeBlocks(content)
+
+		if len(blocks) > 0 {
+			var results []*AnalysisResult
+			for _, block := range blocks {
+				res, err := AnalyzeCode(r.Context(), s.client, s.cfg.BackendURL, s.cfg.APIKey, block.Code, block.Language)
+				if err == nil {
+					results = append(results, res)
+				}
+			}
+
+			summary := FormatAnalysisSummary(results)
+			if summary != "" {
+				// Inject summary as a final SSE chunk
+				summaryChunk := map[string]interface{}{
+					"id":      fmt.Sprintf("chatcmpl-vigil-analysis-%d", time.Now().UnixNano()),
+					"object":  "chat.completion.chunk",
+					"created": time.Now().Unix(),
+					"model":   streamResult.Model,
+					"choices": []map[string]interface{}{
+						{
+							"index": 0,
+							"delta": map[string]interface{}{
+								"content": "\n\n" + summary,
+							},
+							"finish_reason": nil,
+						},
+					},
+				}
+				chunkBytes, _ := json.Marshal(summaryChunk)
+				fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
+				flusher.Flush()
+			}
+		}
+	}
+
+	// Send final [DONE]
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+
+	latency := time.Since(start)
+	log.Printf("Streaming complete: model=%s provider=%s latency=%s content_len=%d blocks=%d",
+		streamResult.Model, streamResult.Provider, latency.Round(time.Millisecond), fullContent.Len(), len(ExtractCodeBlocks(fullContent.String())))
+}
+
+// parseMessages extracts messages from the request body.
+func (s *ProxyServer) parseMessages(body []byte) ([]llm.Message, error) {
+	var reqBody struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &reqBody); err != nil {
+		return nil, err
+	}
+	messages := make([]llm.Message, len(reqBody.Messages))
+	for i, m := range reqBody.Messages {
+		messages[i] = llm.Message{Role: m.Role, Content: m.Content}
+	}
+	return messages, nil
+}
+
+// handleStreamingDirect falls back to direct provider forwarding when ModelRouter fails.
+// Includes timeout protection and write-error checking.
+func (s *ProxyServer) handleStreamingDirect(
+	w http.ResponseWriter,
+	r *http.Request,
+	requestBody []byte,
+	defaultFormat string,
+) {
+	llmKey := r.Header.Get("X-LLM-Key")
+	llmProvider := r.Header.Get("X-LLM-Provider")
+	llmModel := r.Header.Get("X-LLM-Model")
+
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(requestBody, &req); err != nil {
+		log.Printf("streaming direct: failed to parse model from body: %v", err)
+	}
+	if llmModel != "" {
+		req.Model = llmModel
+	}
+
+	provider := s.resolveProvider(req.Model, llmKey, llmProvider)
+	if provider == nil {
+		http.Error(w, `{"error":"unsupported model"}`, http.StatusBadRequest)
+		return
+	}
+
+	url := provider.BaseURL + r.URL.Path
+	// Re-marshal with potential model override
+	fwdBody := requestBody
+	if llmModel != "" {
+		var bodyMap map[string]interface{}
+		if err := json.Unmarshal(requestBody, &bodyMap); err == nil {
+			bodyMap["model"] = llmModel
+			fwdBody, _ = json.Marshal(bodyMap)
+		}
+	}
+
+	reqHTTP, err := http.NewRequestWithContext(r.Context(), "POST", url, bytes.NewReader(fwdBody))
+	if err != nil {
+		http.Error(w, `{"error":"failed to create request"}`, http.StatusInternalServerError)
+		return
+	}
+	reqHTTP.Header.Set("Content-Type", "application/json")
+	reqHTTP.Header.Set("Accept", "text/event-stream")
+
+	// Set auth headers
+	switch provider.Name {
+	case "openai", "nvidia", "groq", "mistral", "openrouter":
+		reqHTTP.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	case "anthropic":
+		reqHTTP.Header.Set("x-api-key", provider.APIKey)
+		reqHTTP.Header.Set("anthropic-version", "2023-06-01")
+	case "gemini":
+		reqHTTP.Header.Set("x-goog-api-key", provider.APIKey)
+	case "cohere":
+		reqHTTP.Header.Set("Authorization", "Bearer "+provider.APIKey)
+	}
+
+	resp, err := s.client.Do(reqHTTP)
+	if err != nil {
+		http.Error(w, `{"error":"failed to forward stream: `+err.Error()+`"}`, http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -48,18 +240,17 @@ func (s *ProxyServer) handleStreaming(w http.ResponseWriter, r *http.Request, pr
 	reader := bufio.NewReader(resp.Body)
 	var fullContent string
 
+	// Read with a deadline to detect hanging providers
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			break
 		}
-
 		if strings.HasPrefix(line, "data: ") {
 			data := strings.TrimSpace(line[6:])
 			if data == "[DONE]" {
 				continue
 			}
-
 			if defaultFormat == "openai" {
 				var oResp struct {
 					Choices []struct {
@@ -87,46 +278,45 @@ func (s *ProxyServer) handleStreaming(w http.ResponseWriter, r *http.Request, pr
 				}
 			}
 		}
-		w.Write([]byte(line))
+		if _, err := w.Write([]byte(line)); err != nil {
+			log.Printf("streaming direct: client disconnected: %v", err)
+			return
+		}
 		flusher.Flush()
 	}
 
-	blocks := ExtractCodeBlocks(fullContent)
-	var results []*AnalysisResult
-	for _, block := range blocks {
-		res, err := AnalyzeCode(r.Context(), s.cfg.BackendURL, s.cfg.APIKey, block.Code, block.Language)
-		if err == nil {
-			results = append(results, res)
+	// Post-stream analysis
+	analysisMode := r.Header.Get("X-VigilAgent-Mode")
+	if analysisMode != "passthrough" {
+		blocks := ExtractCodeBlocks(fullContent)
+		var results []*AnalysisResult
+		for _, block := range blocks {
+			res, err := AnalyzeCode(r.Context(), s.client, s.cfg.BackendURL, s.cfg.APIKey, block.Code, block.Language)
+			if err == nil {
+				results = append(results, res)
+			}
 		}
-	}
 
-	summary := FormatAnalysisSummary(results)
-	if summary != "" {
-		if defaultFormat == "openai" {
-			summaryChunk := map[string]interface{}{
-				"choices": []map[string]interface{}{
-					{
-						"delta": map[string]interface{}{
-							"content": "\n\n" + summary,
-							"role":    "assistant",
-						},
+		summary := FormatAnalysisSummary(results)
+		if summary != "" {
+			if defaultFormat == "openai" {
+				summaryChunk := map[string]interface{}{
+					"choices": []map[string]interface{}{
+						{"delta": map[string]interface{}{"content": "\n\n" + summary, "role": "assistant"}},
 					},
-				},
+				}
+				chunkBytes, _ := json.Marshal(summaryChunk)
+				fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
+			} else if defaultFormat == "anthropic" {
+				summaryChunk := map[string]interface{}{
+					"type":  "content_block_delta",
+					"delta": map[string]interface{}{"type": "text_delta", "text": "\n\n" + summary},
+				}
+				chunkBytes, _ := json.Marshal(summaryChunk)
+				fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
 			}
-			chunkBytes, _ := json.Marshal(summaryChunk)
-			fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
-		} else if defaultFormat == "anthropic" {
-			summaryChunk := map[string]interface{}{
-				"type": "content_block_delta",
-				"delta": map[string]interface{}{
-					"type": "text_delta",
-					"text": "\n\n" + summary,
-				},
-			}
-			chunkBytes, _ := json.Marshal(summaryChunk)
-			fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
+			flusher.Flush()
 		}
-		flusher.Flush()
 	}
 
 	fmt.Fprintf(w, "data: [DONE]\n\n")

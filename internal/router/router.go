@@ -143,6 +143,11 @@ func (r *Router) setupRoutes() {
 			public.Post("/auth/forgot-password", r.forgotPasswordHandler)
 			public.Post("/auth/reset-password", r.resetPasswordHandler)
 			public.Get("/auth/verify-email", r.verifyEmailHandler)
+
+			// Provider catalog — public, no auth required (used by VS Code extension, etc.)
+			public.Get("/providers", r.listProvidersHandler)
+			public.Get("/providers/{providerID}/models", r.listProviderModelsHandler)
+			public.Get("/models/{modelID}", r.getModelHandler)
 		}
 
 		protected := v1.Group(nil)

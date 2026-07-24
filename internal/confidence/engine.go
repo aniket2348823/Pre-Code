@@ -10,7 +10,8 @@ import (
 	"sort"
 
 	"github.com/vigilagent/vigilagent/internal/scanner"
-	"github.com/vigilagent/vigilagent/internal/util"
+	"strconv"
+	"strings"
 )
 
 // Evidence represents a single piece of evidence for or against confidence.
@@ -142,12 +143,12 @@ func buildReason(s *Score) string {
 		return "No evidence collected"
 	}
 	parts := []string{}
-	parts = append(parts, util.Itoa(s.Passed)+" passed")
+	parts = append(parts, strconv.Itoa(s.Passed)+" passed")
 	if s.Failed > 0 {
-		parts = append(parts, util.Itoa(s.Failed)+" failed")
+		parts = append(parts, strconv.Itoa(s.Failed)+" failed")
 	}
 	if s.Warned > 0 {
-		parts = append(parts, util.Itoa(s.Warned)+" warnings")
+		parts = append(parts, strconv.Itoa(s.Warned)+" warnings")
 	}
 
 	// Find most critical failure
@@ -166,7 +167,7 @@ func buildReason(s *Score) string {
 		parts = append(parts, "high severity issues found")
 	}
 
-	return util.Join(parts, ", ")
+	return strings.Join(parts, ", ")
 }
 
 type Severity int

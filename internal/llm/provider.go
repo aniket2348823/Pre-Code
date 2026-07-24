@@ -186,13 +186,14 @@ type RoutingCandidate struct {
 
 // ModelRouter selects the optimal LLM for each task.
 type ModelRouter struct {
-	providers     map[string]Provider
-	healthMonitor *HealthMonitor
-	config        *RouterConfig
-	prices        map[string]ModelInfo
-	cache         ResponseCache
-	budget        BudgetGuard
-	mu            sync.RWMutex
+	providers      map[string]Provider
+	healthMonitor  *HealthMonitor
+	circuitBreakers map[string]*CircuitBreaker
+	config         *RouterConfig
+	prices         map[string]ModelInfo
+	cache          ResponseCache
+	budget         BudgetGuard
+	mu             sync.RWMutex
 }
 
 // RouterConfig holds routing configuration.
@@ -207,10 +208,11 @@ type RouterConfig struct {
 // NewModelRouter creates a new model router.
 func NewModelRouter(cfg *RouterConfig) *ModelRouter {
 	r := &ModelRouter{
-		providers:     make(map[string]Provider),
-		healthMonitor: NewHealthMonitor(),
-		config:        cfg,
-		prices:        PriceTable, // default; override with SetPrices
+		providers:       make(map[string]Provider),
+		healthMonitor:   NewHealthMonitor(),
+		circuitBreakers: make(map[string]*CircuitBreaker),
+		config:          cfg,
+		prices:          PriceTable, // default; override with SetPrices
 	}
 	if r.config == nil {
 		r.config = &RouterConfig{DefaultModel: "claude-sonnet-4-20250514", BudgetPerTask: 1.00}
@@ -251,12 +253,14 @@ func (r *ModelRouter) priceTable() map[string]ModelInfo {
 	return r.prices
 }
 
-// RegisterProvider adds a provider to the router.
+// RegisterProvider adds a provider to the router with a circuit breaker.
 func (r *ModelRouter) RegisterProvider(name string, p Provider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.providers[name] = p
 	r.healthMonitor.RegisterProvider(name, p)
+	// 5 failures opens the circuit for 30 seconds
+	r.circuitBreakers[name] = NewCircuitBreaker(5, 30*time.Second)
 }
 
 // Route selects the optimal model for a task.
@@ -335,7 +339,7 @@ func (r *ModelRouter) classifyComplexity(task *Task) Complexity {
 		}
 	}
 
-	return Complexity(minf(1.0, score))
+	return Complexity(min(1.0, score))
 }
 
 // estimateInputTokens approximates prompt size from the task's messages and
@@ -485,17 +489,23 @@ func (r *ModelRouter) ExecuteWithFailover(ctx context.Context, task *Task) (*Cha
 	return nil, fmt.Errorf("all providers failed for task %s", task.ID)
 }
 
-// attempt runs a single (provider, model) try with cache, budget gating, and
-// cost recording. A BudgetExceededError is returned without trying fallbacks-worth
-// of spend, since the budget applies regardless of provider.
+// attempt runs a single (provider, model) try with circuit breaker, cache,
+// budget gating, and cost recording. A BudgetExceededError is returned
+// without trying fallbacks since the budget applies regardless of provider.
 func (r *ModelRouter) attempt(ctx context.Context, task *Task, opt FallbackOption) (*ChatResponse, error) {
 	r.mu.RLock()
 	provider, ok := r.providers[opt.Provider]
 	cache := r.cache
 	budget := r.budget
+	cb := r.circuitBreakers[opt.Provider]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("provider %s not registered", opt.Provider)
+	}
+
+	// Circuit breaker check: skip provider if circuit is open
+	if cb != nil && cb.IsOpen() {
+		return nil, fmt.Errorf("provider %s circuit breaker is open", opt.Provider)
 	}
 
 	req := &ChatRequest{
@@ -523,9 +533,15 @@ func (r *ModelRouter) attempt(ctx context.Context, task *Task, opt FallbackOptio
 	resp, err := provider.Chat(ctx, req)
 	if err != nil {
 		r.healthMonitor.RecordFailure(opt.Provider)
+		if cb != nil {
+			cb.Execute(func() error { return err })
+		}
 		return nil, err
 	}
 	r.healthMonitor.RecordSuccess(opt.Provider, resp.Latency)
+	if cb != nil {
+		cb.Execute(func() error { return nil })
+	}
 
 	if budget != nil {
 		budget.RecordCost(task.OrgID, task.ID, resp.Cost)
@@ -615,14 +631,21 @@ func (r *ModelRouter) StreamWithFailover(ctx context.Context, task *Task) (*Stre
 	return nil, fmt.Errorf("all providers failed to stream for task %s", task.ID)
 }
 
-// streamAttempt runs a single streaming try with budget gating and cost recording.
+// streamAttempt runs a single streaming try with circuit breaker, budget gating,
+// and cost recording.
 func (r *ModelRouter) streamAttempt(ctx context.Context, task *Task, opt FallbackOption) (<-chan *ChatChunk, error) {
 	r.mu.RLock()
 	provider, ok := r.providers[opt.Provider]
 	budget := r.budget
+	cb := r.circuitBreakers[opt.Provider]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("provider %s not registered", opt.Provider)
+	}
+
+	// Circuit breaker check
+	if cb != nil && cb.IsOpen() {
+		return nil, fmt.Errorf("provider %s circuit breaker is open", opt.Provider)
 	}
 
 	req := &ChatRequest{
@@ -643,6 +666,9 @@ func (r *ModelRouter) streamAttempt(ctx context.Context, task *Task, opt Fallbac
 	rawCh, err := provider.Stream(ctx, req)
 	if err != nil {
 		r.healthMonitor.RecordFailure(opt.Provider)
+		if cb != nil {
+			cb.Execute(func() error { return err })
+		}
 		return nil, err
 	}
 
@@ -676,6 +702,9 @@ func (r *ModelRouter) streamAttempt(ctx context.Context, task *Task, opt Fallbac
 		// Only record success if stream completed normally (not cancelled).
 		if finished {
 			r.healthMonitor.RecordSuccess(opt.Provider, latency)
+			if cb != nil {
+				cb.Execute(func() error { return nil })
+			}
 
 			// Estimate cost from accumulated content (output tokens ~ chars/4).
 			outputTokens := content.Len() / 4
@@ -687,6 +716,9 @@ func (r *ModelRouter) streamAttempt(ctx context.Context, task *Task, opt Fallbac
 			}
 		} else {
 			r.healthMonitor.RecordFailure(opt.Provider)
+			if cb != nil {
+				cb.Execute(func() error { return fmt.Errorf("stream cancelled") })
+			}
 		}
 	}()
 
@@ -697,20 +729,29 @@ func systemPrompt(task *Task) string {
 	if task == nil {
 		return ""
 	}
-	// Messages already carry the conversation; no separate system prompt yet.
-	return ""
+	var b strings.Builder
+	b.WriteString("You are VigilAgent, an AI coding assistant. ")
+	switch task.Type {
+	case "bug_fix":
+		b.WriteString("Focus on identifying and fixing the bug with minimal changes. ")
+	case "feature":
+		b.WriteString("Implement the requested feature following existing code patterns. ")
+	case "refactoring":
+		b.WriteString("Refactor the code for clarity and maintainability without changing behavior. ")
+	case "security":
+		b.WriteString("Analyze and fix security vulnerabilities. Follow security best practices. ")
+	case "architecture":
+		b.WriteString("Design and implement architectural changes. Consider scalability and maintainability. ")
+	default:
+		b.WriteString("Complete the requested task accurately and efficiently. ")
+	}
+	if len(task.FilesChanged) > 0 {
+		b.WriteString(fmt.Sprintf("Files involved: %s. ", strings.Join(task.FilesChanged, ", ")))
+	}
+	if len(task.Tags) > 0 {
+		b.WriteString(fmt.Sprintf("Context tags: %s. ", strings.Join(task.Tags, ", ")))
+	}
+	return b.String()
 }
 
-func minf(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
 
-func maxf(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}

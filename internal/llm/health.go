@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -24,6 +25,7 @@ type ProviderHealth struct {
 	ConsecutiveFails int
 	LastChecked      time.Time
 	LatencyP50       time.Duration
+	latencies        []time.Duration // ring buffer for P50 computation
 }
 
 // HealthMonitor tracks provider health and availability.
@@ -77,9 +79,9 @@ func (h *HealthMonitor) Confidence(name string) float64 {
 	}
 	switch health.Status {
 	case StatusHealthy:
-		return maxf(0.5, 1.0-health.ErrorRate)
+		return max(0.5, 1.0-health.ErrorRate)
 	case StatusDegraded:
-		return maxf(0.3, 0.8-health.ErrorRate)
+		return max(0.3, 0.8-health.ErrorRate)
 	case StatusUnhealthy:
 		return 0.2
 	default: // StatusDown
@@ -111,7 +113,7 @@ func (h *HealthMonitor) RecordFailure(name string) {
 	}
 }
 
-// RecordSuccess records a success for a provider.
+// RecordSuccess records a success for a provider and computes real P50 latency.
 func (h *HealthMonitor) RecordSuccess(name string, latency time.Duration) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -127,8 +129,21 @@ func (h *HealthMonitor) RecordSuccess(name string, latency time.Duration) {
 	} else {
 		health.ErrorRate = 0
 	}
-	health.LatencyP50 = latency
 	health.LastChecked = time.Now()
+
+	// Maintain a ring buffer of the last 100 latencies for P50 computation
+	health.latencies = append(health.latencies, latency)
+	if len(health.latencies) > 100 {
+		health.latencies = health.latencies[1:]
+	}
+	// Compute actual P50
+	if len(health.latencies) > 0 {
+		sorted := make([]time.Duration, len(health.latencies))
+		copy(sorted, health.latencies)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+		p50Idx := len(sorted) / 2
+		health.LatencyP50 = sorted[p50Idx]
+	}
 
 	if health.ErrorRate < 0.1 {
 		health.Status = StatusHealthy

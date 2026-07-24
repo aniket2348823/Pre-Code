@@ -20,7 +20,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Register commands
     context.subscriptions.push(
         vscode.commands.registerCommand('vigilagent.configure', async () => {
-            await configureAPIKeys(context);
+            await configureProviderWizard(context);
         }),
         vscode.commands.registerCommand('vigilagent.scanFile', async () => {
             await scanCurrentFile(client);
@@ -48,13 +48,54 @@ export function activate(context: vscode.ExtensionContext) {
     );
 }
 
-async function configureAPIKeys(context: vscode.ExtensionContext): Promise<void> {
-    // Ask if running locally (no API key needed) or remote
+// ═══════════════════════════════════════════════════════════════════════════
+// PROVIDER/MODEL SELECTION WIZARD
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface ProviderInfo {
+    id: string;
+    name: string;
+    base_url: string;
+    key_prefix: string;
+    description: string;
+    key_hint: string;
+}
+
+interface ModelEntry {
+    id: string;
+    name: string;
+    provider: string;
+    context_window: number;
+    max_output: number;
+    input_cost_per_1m: number;
+    output_cost_per_1m: number;
+    capabilities: string[];
+    description: string;
+    deprecated?: boolean;
+}
+
+interface ProviderModelsResponse {
+    provider: ProviderInfo;
+    models: ModelEntry[];
+    count: number;
+}
+
+// All known providers (fallback if API is unreachable)
+const KNOWN_PROVIDERS: ProviderInfo[] = [
+    { id: 'openai', name: 'OpenAI', base_url: 'https://api.openai.com/v1', key_prefix: 'sk-', key_hint: 'sk-...', description: 'GPT models including o-series reasoning' },
+    { id: 'anthropic', name: 'Anthropic', base_url: 'https://api.anthropic.com', key_prefix: 'sk-ant-', key_hint: 'sk-ant-...', description: 'Claude models with strong safety and reasoning' },
+    { id: 'gemini', name: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com', key_prefix: 'AIza', key_hint: 'AIza...', description: "Google's multimodal models with huge context windows" },
+    { id: 'groq', name: 'Groq', base_url: 'https://api.groq.com/openai/v1', key_prefix: 'gsk_', key_hint: 'gsk_...', description: 'Ultra-fast inference on custom LPU hardware' },
+    { id: 'mistral', name: 'Mistral AI', base_url: 'https://api.mistral.ai/v1', key_prefix: 'ms-', key_hint: 'ms-...', description: 'European AI lab with strong open and closed models' },
+    { id: 'cohere', name: 'Cohere', base_url: 'https://api.cohere.com', key_prefix: 'co-', key_hint: 'co-...', description: 'RAG-optimized models with strong enterprise features' },
+    { id: 'nvidia_nim', name: 'NVIDIA NIM', base_url: 'https://build.nvidia.com/v1', key_prefix: 'nvapi-', key_hint: 'nvapi-...', description: "NVIDIA's inference microservices with optimized open models" },
+    { id: 'openrouter', name: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1', key_prefix: 'sk-or-', key_hint: 'sk-or-...', description: 'Unified gateway to 200+ models from all providers' },
+];
+
+async function configureProviderWizard(context: vscode.ExtensionContext): Promise<void> {
+    // ── Step 1: VigilAgent Backend Auth ──
     const mode = await vscode.window.showQuickPick(
-        [
-            'Local development (no API key needed)',
-            'Remote / Production (enter API key)'
-        ],
+        ['Local development (no API key needed)', 'Remote / Production (enter API key)'],
         { placeHolder: 'How are you connecting to the VigilAgent backend?' }
     );
 
@@ -69,46 +110,150 @@ async function configureAPIKeys(context: vscode.ExtensionContext): Promise<void>
             vscode.window.showInformationMessage('VigilAgent API key saved securely.');
         }
     } else if (mode === 'Local development (no API key needed)') {
-        // Store a placeholder key so the client doesn't throw
         await context.secrets.store('vigilagent.apiKey', 'local-dev');
         vscode.window.showInformationMessage('Configured for local development (no auth).');
     }
 
-    // Store LLM provider API key
-    const provider = await vscode.window.showQuickPick(
-        ['NVIDIA NIM', 'OpenAI', 'Anthropic', 'Google Gemini', 'Mistral', 'Groq', 'Cohere'],
-        { placeHolder: 'Select your LLM provider' }
-    );
-    if (provider) {
-        const llmKey = await vscode.window.showInputBox({
-            prompt: `Enter your ${provider} API key`,
-            password: true,
-            placeHolder: provider === 'NVIDIA NIM' ? 'nvapi-...' : 'sk-...'
-        });
-        if (llmKey) {
-            await context.secrets.store(`vigilagent.llmKey.${provider}`, llmKey);
-            await context.secrets.store('vigilagent.selectedProvider', provider);
-            vscode.window.showInformationMessage(`${provider} API key saved securely.`);
+    // ── Step 2: Select LLM Provider ──
+    const backendUrl = vscode.workspace.getConfiguration('vigilagent').get<string>('backendUrl', 'http://localhost:8080');
+    
+    // Try to fetch providers from the API, fall back to static list
+    let providers: ProviderInfo[] = KNOWN_PROVIDERS;
+    try {
+        const resp = await fetch(`${backendUrl}/api/v1/providers`);
+        if (resp.ok) {
+            const data = await resp.json() as { providers: ProviderInfo[] };
+            if (data.providers && data.providers.length > 0) {
+                providers = data.providers;
+            }
         }
+    } catch {
+        // API unreachable, use static list
+    }
 
-        // Ask for model name
-        let defaultModel = 'gpt-4o';
-        if (provider === 'NVIDIA NIM') { defaultModel = 'kimi-k2.6'; }
-        else if (provider === 'Anthropic') { defaultModel = 'claude-sonnet-4-20250514'; }
-        else if (provider === 'Google Gemini') { defaultModel = 'gemini-2.5-pro'; }
-        else if (provider === 'Mistral') { defaultModel = 'mistral-large-latest'; }
+    const providerItems = providers.map(p => ({
+        label: p.name,
+        description: p.description,
+        detail: `Key prefix: ${p.key_hint}`,
+        provider: p,
+    }));
 
+    const selectedProviderItem = await vscode.window.showQuickPick(providerItems, {
+        placeHolder: 'Select your LLM provider',
+        matchOnDescription: true,
+        matchOnDetail: true,
+    });
+
+    if (!selectedProviderItem) { return; }
+    const selectedProvider = selectedProviderItem.provider;
+
+    // ── Step 3: Enter API Key ──
+    const llmKey = await vscode.window.showInputBox({
+        prompt: `Enter your ${selectedProvider.name} API key`,
+        password: true,
+        placeHolder: selectedProvider.key_hint,
+        validateInput: (value) => {
+            if (!value || value.trim().length === 0) {
+                return 'API key is required';
+            }
+            if (selectedProvider.key_prefix && !value.startsWith(selectedProvider.key_prefix)) {
+                return `Key should start with "${selectedProvider.key_prefix}" — you entered a key starting with "${value.substring(0, Math.min(6, value.length))}..."`;
+            }
+            return undefined;
+        }
+    });
+
+    if (!llmKey) { return; }
+
+    await context.secrets.store(`vigilagent.llmKey.${selectedProvider.id}`, llmKey);
+    await context.secrets.store('vigilagent.selectedProvider', selectedProvider.id);
+    vscode.window.showInformationMessage(`${selectedProvider.name} API key saved securely.`);
+
+    // ── Step 4: Select Model ──
+    let models: ModelEntry[] = [];
+
+    // Try to fetch models from the API
+    try {
+        const resp = await fetch(`${backendUrl}/api/v1/providers/${selectedProvider.id}/models`);
+        if (resp.ok) {
+            const data = await resp.json() as ProviderModelsResponse;
+            if (data.models) {
+                models = data.models;
+            }
+        }
+    } catch {
+        // API unreachable
+    }
+
+    if (models.length === 0) {
+        // Fallback: ask user to type the model name manually
+        const defaultModel = getDefaultModel(selectedProvider.id);
         const model = await vscode.window.showInputBox({
-            prompt: `Enter the model name to use with ${provider}`,
+            prompt: `Enter the model name to use with ${selectedProvider.name}`,
             value: defaultModel,
-            placeHolder: defaultModel
+            placeHolder: defaultModel,
         });
         if (model) {
             await context.secrets.store('vigilagent.selectedModel', model);
             vscode.window.showInformationMessage(`Model set to ${model}.`);
         }
+        return;
+    }
+
+    // Show model picker with rich metadata
+    const modelItems = models
+        .filter(m => !m.deprecated)
+        .map(m => {
+            const caps = m.capabilities.length > 0 ? m.capabilities.join(', ') : 'basic';
+            const cost = `$${m.input_cost_per_1M.toFixed(2)} / $${m.output_cost_per_1M.toFixed(2)} per 1M tokens`;
+            const ctx = formatContextWindow(m.context_window);
+            return {
+                label: m.name,
+                description: `${ctx} context`,
+                detail: `${cost} — Capabilities: ${caps} — ${m.description}`,
+                model: m,
+            };
+        });
+
+    // Group models by capability tier
+    const selectedModelItem = await vscode.window.showQuickPick(modelItems, {
+        placeHolder: `Select a model from ${selectedProvider.name}`,
+        matchOnDescription: true,
+        matchOnDetail: true,
+    });
+
+    if (!selectedModelItem) { return; }
+
+    await context.secrets.store('vigilagent.selectedModel', selectedModelItem.model.id);
+    
+    const modelInfo = `${selectedModelItem.model.name} (${formatContextWindow(selectedModelItem.model.context_window)} ctx, ${selectedModelItem.model.capabilities.join(', ')})`;
+    vscode.window.showInformationMessage(`Model set to ${modelInfo}`);
+}
+
+function getDefaultModel(providerId: string): string {
+    switch (providerId) {
+        case 'openai': return 'gpt-4o';
+        case 'anthropic': return 'claude-sonnet-4-20250514';
+        case 'gemini': return 'gemini-2.5-pro';
+        case 'groq': return 'llama-3.3-70b-versatile';
+        case 'mistral': return 'mistral-large-latest';
+        case 'cohere': return 'command-r-plus';
+        case 'nvidia_nim': return 'nvidia/llama-3.1-70b-instruct';
+        case 'openrouter': return 'openai/gpt-4o';
+        default: return 'gpt-4o';
     }
 }
+
+function formatContextWindow(tokens: number): string {
+    if (tokens >= 1000000) {
+        return `${(tokens / 1000000).toFixed(0)}M`;
+    }
+    return `${(tokens / 1000).toFixed(0)}K`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILE OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════
 
 async function scanCurrentFile(client: VigilAgentClient): Promise<void> {
     const editor = vscode.window.activeTextEditor;

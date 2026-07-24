@@ -6,38 +6,6 @@ import (
 	"strings"
 )
 
-// Itoa converts an integer to its string representation without
-// allocating from the fmt pool. Safe for non-negative values.
-func Itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := make([]byte, 0, 20)
-	for n > 0 {
-		buf = append(buf, byte('0'+n%10))
-		n /= 10
-	}
-	// Reverse
-	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
-		buf[i], buf[j] = buf[j], buf[i]
-	}
-	return string(buf)
-}
-
-// Join joins a slice of strings with a separator.
-func Join(parts []string, sep string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString(parts[0])
-	for _, p := range parts[1:] {
-		b.WriteString(sep)
-		b.WriteString(p)
-	}
-	return b.String()
-}
-
 // ContainsWord checks if text contains keyword. For keywords ≤3 chars,
 // it requires word boundaries to prevent false positives from substring
 // matches (e.g., "api" should not match inside "captcha").

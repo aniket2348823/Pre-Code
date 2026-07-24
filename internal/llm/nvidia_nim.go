@@ -20,7 +20,7 @@ type NVIDIANIMAdapter struct {
 func NewNVIDIANIM(apiKey string) *NVIDIANIMAdapter {
 	return &NVIDIANIMAdapter{
 		apiKey:  apiKey,
-		baseURL: "https://integrate.api.nvidia.com/v1",
+		baseURL: "https://build.nvidia.com/v1",
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},

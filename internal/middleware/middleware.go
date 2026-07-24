@@ -483,36 +483,6 @@ func (p *Pipeline) GetMetrics() map[string]interface{} {
 	}
 }
 
-// GetCache returns the response cache for external inspection.
-func (p *Pipeline) GetCache() *cache.ResponseCache {
-	return p.responseCache
-}
-
-// GetCostIntel returns the cost intelligence engine.
-func (p *Pipeline) GetCostIntel() *costintel.Engine {
-	return p.costIntel
-}
-
-// GetTracer returns the distributed tracer.
-func (p *Pipeline) GetTracer() *observability.Tracer {
-	return p.tracer
-}
-
-// GetMetricsCollector returns the performance metrics collector.
-func (p *Pipeline) GetMetricsCollector() *observability.PerformanceMetrics {
-	return p.metrics
-}
-
-// GetFeedback returns the feedback engine.
-func (p *Pipeline) GetFeedback() *feedback.Engine {
-	return p.feedback
-}
-
-// GetHealth returns the health checker.
-func (p *Pipeline) GetHealth() *health.Health {
-	return p.healthChecker
-}
-
 // critiqueAndRetry critiques the response and retries with feedback if rejected.
 func (p *Pipeline) critiqueAndRetry(ctx context.Context, req *Request, resp *Response, enhancedPrompt string) {
 	critique, critiqueErr := p.critic.Evaluate(ctx, req.Description, resp.Content, req.TaskType)

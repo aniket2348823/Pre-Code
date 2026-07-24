@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vigilagent/vigilagent/internal/util"
+	"strconv"
 )
 
 // Skill represents a validated security pattern extracted from findings.
@@ -217,5 +217,5 @@ func generateSkillID(trigger string) string {
 	if h < 0 {
 		h = -h
 	}
-	return "skill-" + util.Itoa(h)
+	return "skill-" + strconv.Itoa(h)
 }
