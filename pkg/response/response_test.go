@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/vigilagent/vigilagent/internal/requestid"
 )
 
 func TestJSON(t *testing.T) {
@@ -239,5 +241,269 @@ func TestValidationErrorResponse(t *testing.T) {
 	}
 	if resp.Error == nil {
 		t.Fatal("expected error to be set")
+	}
+}
+
+// Helper to create a request with request ID in context via middleware
+func reqWithID(id string) *http.Request {
+	r := httptest.NewRequest("GET", "/test", nil)
+	r.Header.Set("X-Request-Id", id)
+	var captured *http.Request
+	rr := httptest.NewRecorder()
+	mw := requestid.Middleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		captured = req
+	}))
+	mw.ServeHTTP(rr, r)
+	return captured
+}
+
+func TestRid(t *testing.T) {
+	t.Run("nil request", func(t *testing.T) {
+		if got := rid(nil); got != "" {
+			t.Errorf("expected empty string for nil request, got %q", got)
+		}
+	})
+	t.Run("request with id", func(t *testing.T) {
+		r := reqWithID("my-req-id")
+		if got := rid(r); got != "my-req-id" {
+			t.Errorf("expected 'my-req-id', got %q", got)
+		}
+	})
+	t.Run("request without id", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/test", nil)
+		if got := rid(r); got != "" {
+			t.Errorf("expected empty string for request without id, got %q", got)
+		}
+	})
+}
+
+func TestSuccessR(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-123")
+	SuccessR(w, r, http.StatusOK, "data")
+
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if !resp.Success {
+		t.Fatal("expected success=true")
+	}
+	if resp.RequestID != "req-123" {
+		t.Errorf("expected request_id=req-123, got %q", resp.RequestID)
+	}
+}
+
+func TestCreatedR(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-456")
+	CreatedR(w, r, map[string]string{"id": "1"})
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected 201, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if !resp.Success {
+		t.Fatal("expected success=true")
+	}
+	if resp.RequestID != "req-456" {
+		t.Errorf("expected request_id=req-456, got %q", resp.RequestID)
+	}
+}
+
+func TestErrorR(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-err")
+	ErrorR(w, r, http.StatusBadRequest, "CODE_001", "bad request")
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Success {
+		t.Fatal("expected success=false")
+	}
+	if resp.Error.Code != "CODE_001" {
+		t.Errorf("expected code=CODE_001, got %q", resp.Error.Code)
+	}
+	if resp.RequestID != "req-err" {
+		t.Errorf("expected request_id=req-err, got %q", resp.RequestID)
+	}
+}
+
+func TestNotFoundR(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-nf")
+	NotFoundR(w, r, "not found")
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error.Code != "RES_001" {
+		t.Errorf("expected code RES_001, got %q", resp.Error.Code)
+	}
+}
+
+func TestBadRequestR(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-br")
+	BadRequestR(w, r, "bad request")
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error.Code != "VAL_001" {
+		t.Errorf("expected code VAL_001, got %q", resp.Error.Code)
+	}
+}
+
+func TestUnauthorizedR(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-unauth")
+	UnauthorizedR(w, r, "unauthorized")
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error.Code != "AUTH_001" {
+		t.Errorf("expected code AUTH_001, got %q", resp.Error.Code)
+	}
+}
+
+func TestForbiddenR(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-forbid")
+	ForbiddenR(w, r, "forbidden")
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error.Code != "AUTH_007" {
+		t.Errorf("expected code AUTH_007, got %q", resp.Error.Code)
+	}
+}
+
+func TestInternalErrorR(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-ise")
+	InternalErrorR(w, r, "internal error")
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error.Code != "INFRA_002" {
+		t.Errorf("expected code INFRA_002, got %q", resp.Error.Code)
+	}
+}
+
+func TestTooManyRequests(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-429")
+	TooManyRequests(w, r, "rate limited")
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error.Code != "INFRA_001" {
+		t.Errorf("expected code INFRA_001, got %q", resp.Error.Code)
+	}
+}
+
+func TestConflict(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-conflict")
+	Conflict(w, r, "conflict")
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error.Code != "RES_002" {
+		t.Errorf("expected code RES_002, got %q", resp.Error.Code)
+	}
+}
+
+func TestServiceUnavailable(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-503")
+	ServiceUnavailable(w, r, "unavailable")
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", w.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Error.Code != "INFRA_002" {
+		t.Errorf("expected code INFRA_002, got %q", resp.Error.Code)
+	}
+}
+
+func TestSuccessR_NoRequestID(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/test", nil)
+	SuccessR(w, r, http.StatusOK, "data")
+
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if !resp.Success {
+		t.Fatal("expected success=true")
+	}
+	if resp.RequestID != "" {
+		t.Errorf("expected empty request_id, got %q", resp.RequestID)
+	}
+}
+
+func TestErrorR_NoRequestID(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/test", nil)
+	ErrorR(w, r, http.StatusBadRequest, "CODE", "msg")
+
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.RequestID != "" {
+		t.Errorf("expected empty request_id, got %q", resp.RequestID)
+	}
+}
+
+func TestSuccessWithMeta_NilMeta(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-meta")
+	SuccessWithMeta(w, r, http.StatusOK, "data", nil)
+
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if !resp.Success {
+		t.Fatal("expected success=true")
+	}
+	if resp.Meta != nil {
+		t.Error("expected nil meta")
+	}
+}
+
+func TestSuccessWithMeta_WithCursor(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := reqWithID("req-cursor")
+	SuccessWithMeta(w, r, http.StatusOK, "data", &Meta{
+		NextCursor: "abc123",
+		HasMore:    true,
+	})
+
+	var resp APIResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Meta.NextCursor != "abc123" {
+		t.Errorf("expected cursor abc123, got %q", resp.Meta.NextCursor)
 	}
 }

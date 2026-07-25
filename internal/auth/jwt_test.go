@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -145,4 +146,15 @@ func TestClaimsFromContext(t *testing.T) {
 			t.Fatal("expected false when no claims in context")
 		}
 	})
+}
+
+func TestValidateToken_NonHMACMethod(t *testing.T) {
+	j := newTestJWT()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"u"}`))
+	tokenStr := header + "." + payload + ".dummysignature"
+	_, err := j.ValidateToken(tokenStr)
+	if err == nil {
+		t.Fatal("expected error for non-HMAC token")
+	}
 }

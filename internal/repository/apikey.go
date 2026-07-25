@@ -49,7 +49,7 @@ func (r *APIKeyRepository) Create(ctx context.Context, key *APIKey) error {
 func (r *APIKeyRepository) FindByHash(ctx context.Context, keyHash string) (*APIKey, error) {
 	query := `
 		SELECT id, user_id, name, key_hash, prefix, scopes, is_active, last_used_at, expires_at, created_at
-		FROM api_keys WHERE key_hash = $1 AND is_active = TRUE
+		FROM api_keys WHERE key_hash = $1 AND is_active = TRUE AND (expires_at IS NULL OR expires_at > NOW())
 	`
 	key := &APIKey{}
 	err := r.pool.QueryRow(ctx, query, keyHash).Scan(

@@ -230,6 +230,7 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 		return
 	}
 
+	// Limit webhook response body to prevent OOM from large payloads.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep.URL, bytes.NewReader(payload))
 	if err != nil {
 		slog.Error("webhook: failed to create request", "error", err, "endpoint_id", ep.ID)
@@ -262,6 +263,7 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 		result.Success = false
 		e.recordResult(ctx, result)
 
+		// Retry with exponential backoff, capped at maxRetry.
 		if retryCount < e.maxRetry {
 			delay := time.Duration(1<<uint(retryCount)) * time.Second
 			time.AfterFunc(delay, func() {
@@ -276,6 +278,7 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 	result.Success = resp.StatusCode >= 200 && resp.StatusCode < 300
 
 	if !result.Success {
+		// Limit response body read to 1KB to prevent memory issues.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		result.Error = fmt.Sprintf("status %d: %s", resp.StatusCode, string(body))
 

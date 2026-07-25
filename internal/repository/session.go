@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -86,6 +87,69 @@ func (r *SessionRepository) EndSession(ctx context.Context, id string) error {
 	`
 	_, err := r.pool.Exec(ctx, query, id)
 	return err
+}
+
+// CleanupStaleSessions marks sessions as 'expired' if they have been inactive
+// beyond the given threshold (no activity in updated_at for the threshold duration).
+// Only expires sessions that have no associated active tasks in the same project
+// for the same user — this prevents killing sessions that have background agent
+// goroutines still executing.
+func (r *SessionRepository) CleanupStaleSessions(ctx context.Context, staleThreshold time.Duration) (int64, error) {
+	secs := int(staleThreshold.Seconds())
+	// NOTE: tasks table has no session_id column, so we match on project_id + user_id.
+	// The sessions.user_id IS NULL guard handles the edge case where a session has
+	// no user_id — in that case, we skip the active-task check and expire normally.
+	query := `
+		UPDATE sessions
+		SET status = 'expired', updated_at = NOW()
+		WHERE status = 'active'
+		  AND updated_at < NOW() - ($1 || ' seconds')::interval
+		  AND (
+			sessions.user_id IS NULL
+			OR NOT EXISTS (
+				SELECT 1 FROM tasks
+				WHERE tasks.project_id = sessions.project_id
+				  AND tasks.user_id = sessions.user_id
+				  AND tasks.status IN ('pending', 'planning', 'executing', 'waiting_hitl')
+			)
+		  )
+	`
+	tag, err := r.pool.Exec(ctx, query, secs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to cleanup stale sessions: %w", err)
+	}
+	rows := tag.RowsAffected()
+	if rows > 0 {
+		slog.Info("cleaned up stale sessions", "count", rows, "threshold", staleThreshold)
+	}
+	return rows, nil
+}
+
+// StartStaleSessionCleanup starts a background goroutine that periodically expires
+// sessions inactive beyond the threshold. Returns a stop function.
+func (r *SessionRepository) StartStaleSessionCleanup(ctx context.Context, threshold, interval time.Duration) context.CancelFunc {
+	if threshold <= 0 {
+		threshold = 30 * time.Minute
+	}
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := r.CleanupStaleSessions(ctx, threshold); err != nil {
+					slog.Warn("stale session cleanup failed", "error", err)
+				}
+			}
+		}
+	}()
+	return cancel
 }
 
 // ListByAgent returns all sessions for an agent.

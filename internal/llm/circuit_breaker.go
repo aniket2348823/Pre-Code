@@ -20,13 +20,14 @@ const (
 
 // CircuitBreaker prevents cascade failures by stopping requests to failing providers.
 type CircuitBreaker struct {
-	state        CircuitState
-	failCount    int
-	successCount int
-	lastFailure  time.Time
-	threshold    int
-	timeout      time.Duration
-	mu           sync.RWMutex
+	state          CircuitState
+	failCount      int
+	successCount   int
+	lastFailure    time.Time
+	threshold      int
+	timeout        time.Duration
+	halfOpenProbes int // tracks probe requests in HalfOpen state
+	mu             sync.RWMutex
 }
 
 // NewCircuitBreaker creates a new circuit breaker.
@@ -39,23 +40,36 @@ func NewCircuitBreaker(threshold int, timeout time.Duration) *CircuitBreaker {
 }
 
 // Execute runs a function with circuit breaker protection.
+// The lock is released during fn() to avoid blocking other goroutines
+// during slow network calls, then re-acquired to update state.
 func (cb *CircuitBreaker) Execute(fn func() error) error {
-	cb.mu.RLock()
-	state := cb.state
-	cb.mu.RUnlock()
+	cb.mu.Lock()
 
-	if state == CircuitOpen {
+	if cb.state == CircuitOpen {
 		if time.Since(cb.lastFailure) > cb.timeout {
-			cb.mu.Lock()
 			cb.state = CircuitHalfOpen
-			cb.mu.Unlock()
+			cb.halfOpenProbes = 0
 		} else {
+			cb.mu.Unlock()
 			return ErrCircuitOpen
 		}
 	}
 
+	// In HalfOpen, allow only 1 probe request to avoid overloading recovering provider.
+	if cb.state == CircuitHalfOpen {
+		if cb.halfOpenProbes >= 1 {
+			cb.mu.Unlock()
+			return ErrCircuitOpen
+		}
+		cb.halfOpenProbes++
+	}
+
+	// Release lock during fn() to avoid blocking other goroutines on slow network calls.
+	cb.mu.Unlock()
+
 	err := fn()
 
+	// Re-acquire lock to update state.
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 

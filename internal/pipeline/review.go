@@ -11,6 +11,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -93,6 +94,9 @@ type ShiftZeroPipeline struct {
 	attackGraph  *attackgraph.Engine
 	confidence   *confidence.Engine
 	pipeline     *Pipeline
+	// DeterministicOnly skips all LLM reviewer calls (zero LLM cost).
+	// Only the deterministic scanner + confidence scoring run.
+	DeterministicOnly bool
 }
 
 // NewShiftZeroPipeline creates the full pipeline with all components.
@@ -156,6 +160,9 @@ func (szp *ShiftZeroPipeline) Run(ctx context.Context, req *ReviewRequest) (*Rev
 	if req.Code != "" {
 		// Code provided directly — use it.
 		mainResponse = req.Code
+	} else if szp.DeterministicOnly {
+		// Deterministic-only mode with no code: use prompt as-is for scanning.
+		mainResponse = req.Prompt
 	} else {
 		// Generate from prompt using Main LLM.
 		resp, err := szp.runMainLLM(ctx, req)
@@ -204,11 +211,13 @@ func (szp *ShiftZeroPipeline) Run(ctx context.Context, req *ReviewRequest) (*Rev
 	// ════════════════════════════════════════════════════════════════
 	// STAGE 3: Parallel Specialized Reviewer LLMs
 	// ════════════════════════════════════════════════════════════════
-	// Build context for reviewers: main LLM output + deterministic findings.
-	reviewerContext := szp.buildReviewerContext(mainResponse, scanReport.Findings, req.Context)
-
-	// Run ALL reviewers in parallel.
-	reviewers := szp.runReviewersInParallel(ctx, reviewerContext, req.Prompt)
+	// Run ALL reviewers in parallel (skip if deterministic-only mode).
+	var reviewers []ReviewerOutput
+	if !szp.DeterministicOnly {
+		// Build context for reviewers: main LLM output + deterministic findings.
+		reviewerContext := szp.buildReviewerContext(mainResponse, scanReport.Findings, req.Context)
+		reviewers = szp.runReviewersInParallel(ctx, reviewerContext, req.Prompt)
+	}
 	report.Reviewers = reviewers
 
 	// ════════════════════════════════════════════════════════════════
@@ -220,7 +229,7 @@ func (szp *ShiftZeroPipeline) Run(ctx context.Context, req *ReviewRequest) (*Rev
 	// ════════════════════════════════════════════════════════════════
 	// STAGE 5: Knowledge Graph validation
 	// ════════════════════════════════════════════════════════════════
-	kgContext := szp.validateKnowledgeGraph(req.Prompt, mainResponse)
+	kgContext := szp.validateKnowledgeGraph(ctx, req.Prompt, mainResponse)
 	if kgContext != "" {
 		report.KnowledgeGraphContext = kgContext
 		// Add KG findings to evidence.
@@ -355,7 +364,13 @@ func (szp *ShiftZeroPipeline) runMainLLM(ctx context.Context, req *ReviewRequest
 	return resp.Content, nil
 }
 
+// maxReviewerFindings limits the number of findings sent to each reviewer.
+// Prevents sending 30KB+ of context to each LLM reviewer, reducing cost and latency.
+const maxReviewerFindings = 10
+
 // buildReviewerContext builds the context string for specialized reviewers.
+// Findings are sorted by severity (critical first) before truncating,
+// so the most important issues are always sent to reviewers.
 func (szp *ShiftZeroPipeline) buildReviewerContext(mainLLM string, findings []scanner.Finding, projectCtx string) string {
 	var sb strings.Builder
 	sb.WriteString("=== MAIN LLM OUTPUT ===\n")
@@ -364,10 +379,24 @@ func (szp *ShiftZeroPipeline) buildReviewerContext(mainLLM string, findings []sc
 
 	if len(findings) > 0 {
 		sb.WriteString("=== DETERMINISTIC ENGINE FINDINGS ===\n")
-		for i, f := range findings {
+		// Sort by severity descending (critical > high > medium > low) before truncating.
+		sorted := make([]scanner.Finding, len(findings))
+		copy(sorted, findings)
+		sort.Slice(sorted, func(i, j int) bool {
+			return scanner.SeverityRank(sorted[i].Severity) > scanner.SeverityRank(sorted[j].Severity)
+		})
+		limit := len(sorted)
+		if limit > maxReviewerFindings {
+			limit = maxReviewerFindings
+		}
+		for i := 0; i < limit; i++ {
+			f := sorted[i]
 			sb.WriteString(fmt.Sprintf("%d. [%s] %s (confidence: %.0f%%)\n   Line %d: %s\n   Fix: %s\n\n",
 				i+1, strings.ToUpper(string(f.Severity)), f.Message, f.Confidence*100,
 				f.Line, f.Snippet, f.Fix))
+		}
+		if len(sorted) > limit {
+			sb.WriteString(fmt.Sprintf("... and %d more findings (truncated)\n", len(sorted)-limit))
 		}
 	}
 
@@ -383,10 +412,9 @@ func (szp *ShiftZeroPipeline) buildReviewerContext(mainLLM string, findings []sc
 // runReviewersInParallel runs all specialized reviewer LLMs concurrently.
 func (szp *ShiftZeroPipeline) runReviewersInParallel(ctx context.Context, reviewerContext string, prompt string) []ReviewerOutput {
 	defs := []reviewerDef{
-		{
-			name: "security",
-			role: "Principal Security Architect",
-			instruction: `You are a Principal Security Architect. Review the output above with a red-team mindset.
+		{		name: "security",
+				role: "Principal Security Architect",
+				instruction: `You are a Principal Security Architect. Review the output above with a red-team mindset.
 
 Find:
 - Attack vectors and vulnerabilities
@@ -463,6 +491,7 @@ Think like an adversary. Find the weaknesses that defenders miss.`,
 		wg.Add(1)
 		go func(d reviewerDef) {
 			defer wg.Done()
+			// ctx already carries OTel trace context via Go's context mechanism.
 			output := szp.runSingleReviewer(ctx, reviewerContext, prompt, d)
 			mu.Lock()
 			outputs = append(outputs, output)
@@ -474,8 +503,14 @@ Think like an adversary. Find the weaknesses that defenders miss.`,
 	return outputs
 }
 
-// runSingleReviewer runs one specialized reviewer LLM.
-func (szp *ShiftZeroPipeline) runSingleReviewer(ctx context.Context, context string, prompt string, def reviewerDef) ReviewerOutput {
+// reviewerTimeout is the maximum time a single reviewer LLM call can take.
+const reviewerTimeout = 30 * time.Second
+
+// maxKnowledgeGraphNodes limits BFS traversals to prevent CPU saturation.
+const maxKnowledgeGraphNodes = 20
+
+// runSingleReviewer runs one specialized reviewer LLM with a per-reviewer timeout.
+func (szp *ShiftZeroPipeline) runSingleReviewer(ctx context.Context, codeContext string, prompt string, def reviewerDef) ReviewerOutput {
 	if szp.llmRouter == nil {
 		return ReviewerOutput{
 			Name:    def.name,
@@ -487,10 +522,14 @@ func (szp *ShiftZeroPipeline) runSingleReviewer(ctx context.Context, context str
 
 	messages := []llm.Message{
 		{Role: "system", Content: def.instruction},
-		{Role: "user", Content: fmt.Sprintf("Original developer request: %s\n\n%s", prompt, context)},
+		{Role: "user", Content: fmt.Sprintf("Original developer request: %s\n\n%s", prompt, codeContext)},
 	}
 
-	resp, err := szp.llmRouter.ExecuteWithFailover(ctx, &llm.Task{
+	// Apply per-reviewer timeout to prevent pipeline blocking on slow/dead providers.
+	reviewerCtx, cancel := context.WithTimeout(ctx, reviewerTimeout)
+	defer cancel()
+
+	resp, err := szp.llmRouter.ExecuteWithFailover(reviewerCtx, &llm.Task{
 		ID:          "reviewer-" + def.name,
 		Type:        "security",
 		Description: def.role + " review",
@@ -546,7 +585,11 @@ func (szp *ShiftZeroPipeline) runSecurityFix(ctx context.Context, originalCode s
 		{Role: "user", Content: fmt.Sprintf("Security findings to fix:\n%s\n\nReviewer suggestions:\n%s\n\nOriginal code:\n```%s\n%s\n```\n\nReturn the COMPLETE fixed code:", findingsText.String(), strings.Join(suggestions, "\n"), "go", originalCode)},
 	}
 
-	resp, err := szp.llmRouter.ExecuteWithFailover(ctx, &llm.Task{
+	// Apply reviewer timeout to prevent re-validation loop from blocking indefinitely.
+	fixCtx, fixCancel := context.WithTimeout(ctx, reviewerTimeout)
+	defer fixCancel()
+
+	resp, err := szp.llmRouter.ExecuteWithFailover(fixCtx, &llm.Task{
 		ID:          "security-fix",
 		Type:        "bug_fix",
 		Description: "Security fix based on reviewer findings",
@@ -565,6 +608,16 @@ func (szp *ShiftZeroPipeline) runSecurityFix(ctx context.Context, originalCode s
 	fixed = strings.TrimSpace(fixed)
 
 	return fixed, nil
+}
+
+// reviewerWeightMap maps reviewer names to their evidence weights.
+// Single source of truth — used by both reviewerDefs and aggregateEvidence.
+var reviewerWeightMap = map[string]float64{
+	"security":     0.85,
+	"architecture": 0.70,
+	"compliance":   0.75,
+	"cost":         0.50,
+	"red_team":     0.90,
 }
 
 // aggregateEvidence combines scanner findings and reviewer outputs into evidence.
@@ -588,13 +641,17 @@ func (szp *ShiftZeroPipeline) aggregateEvidence(findings []scanner.Finding, revi
 		})
 	}
 
-	// Reviewer outputs → evidence.
+	// Reviewer outputs → evidence with per-reviewer weights from reviewerWeightMap.
 	for _, r := range reviewers {
+		weight := 0.6 // default fallback
+		if w, ok := reviewerWeightMap[r.Name]; ok {
+			weight = w
+		}
 		evidence = append(evidence, confidence.Evidence{
 			Source:  "reviewer_" + r.Name,
 			Verdict: r.Verdict,
 			Detail:  fmt.Sprintf("%s: %d findings", r.Role, len(r.Findings)),
-			Weight:  0.6,
+			Weight:  weight,
 		})
 	}
 
@@ -602,10 +659,36 @@ func (szp *ShiftZeroPipeline) aggregateEvidence(findings []scanner.Finding, revi
 }
 
 // validateKnowledgeGraph checks the prompt against the knowledge graph.
-func (szp *ShiftZeroPipeline) validateKnowledgeGraph(prompt string, llmOutput string) string {
-	lower := strings.ToLower(prompt + " " + llmOutput)
+func (szp *ShiftZeroPipeline) validateKnowledgeGraph(ctx context.Context, prompt string, llmOutput string) string {
+	var allWarnings []string
 
-	// Check for services that should have specific controls.
+	// 1. Use the pgvector-backed graph's ValidatePrompt for graph-aware validation.
+	if szp.knowledge != nil {
+		warnings := szp.knowledge.ValidatePrompt(ctx, prompt, llmOutput, "")
+		for _, w := range warnings {
+			allWarnings = append(allWarnings, w.Message)
+		}
+
+		// Also check reachability for related entities (capped to prevent CPU saturation).
+		if nodes := szp.knowledge.NodesByType(knowledge.EntityService); len(nodes) > 0 {
+			checked := 0
+			for _, node := range nodes {
+				if checked >= maxKnowledgeGraphNodes {
+					break
+				}
+				if strings.Contains(strings.ToLower(prompt+" "+llmOutput), strings.ToLower(node.Name)) {
+					checked++
+					reachable := szp.knowledge.Reachable(node.ID, 3)
+					if len(reachable) == 0 {
+						allWarnings = append(allWarnings, fmt.Sprintf("service '%s' has no connected entities in knowledge graph", node.Name))
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Fall back to built-in keyword matching for hard-coded rules.
+	lower := strings.ToLower(prompt + " " + llmOutput)
 	controls := map[string][]string{
 		"payment":  {"audit_log", "encryption", "rate_limiting", "fraud_detection"},
 		"auth":     {"session_management", "mfa", "password_policy"},
@@ -614,39 +697,41 @@ func (szp *ShiftZeroPipeline) validateKnowledgeGraph(prompt string, llmOutput st
 		"api":      {"rate_limiting", "input_validation", "authentication"},
 	}
 
-	var missing []string
 	for service, required := range controls {
 		if strings.Contains(lower, service) {
 			for _, ctrl := range required {
 				if !strings.Contains(lower, strings.ReplaceAll(ctrl, "_", " ")) &&
 					!strings.Contains(lower, strings.ReplaceAll(ctrl, "_", "-")) {
-					missing = append(missing, fmt.Sprintf("%s requires %s", service, ctrl))
+					allWarnings = append(allWarnings, fmt.Sprintf("%s requires %s", service, ctrl))
 				}
 			}
 		}
 	}
 
-	if len(missing) > 0 {
-		return "Knowledge Graph warnings: " + strings.Join(missing, "; ")
+	if len(allWarnings) > 0 {
+		return "Knowledge Graph warnings: " + strings.Join(allWarnings, "; ")
 	}
 	return ""
 }
 
 // extractSkills converts validated findings into reusable skills.
+// Filters out nil skills to prevent nil pointer dereference downstream.
 func (szp *ShiftZeroPipeline) extractSkills(findings []scanner.Finding, reviewers []ReviewerOutput) []*skillengine.Skill {
 	var skills []*skillengine.Skill
 
 	for _, f := range findings {
 		skill, _ := szp.skills.ExtractFromFinding(skillengine.Finding{
-			Severity:  string(f.Severity),
-			Message:   f.Message,
-			Filename:  f.Filename,
-			Line:      f.Line,
-			Fix:       f.Fix,
-			Analyzers: f.Analyzers,
+			Severity:   string(f.Severity),
+			Message:    f.Message,
+			Filename:   f.Filename,
+			Line:       f.Line,
+			Fix:        f.Fix,
+			Analyzers:  f.Analyzers,
 			Confidence: f.Confidence,
 		})
-		skills = append(skills, skill)
+		if skill != nil {
+			skills = append(skills, skill)
+		}
 	}
 
 	return skills
@@ -708,6 +793,35 @@ func (szp *ShiftZeroPipeline) buildSummary(report *ReviewReport) string {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func inferLanguage(prompt, code string) string {
+	// Priority 1: Detect from code content (more reliable than prompt keywords).
+	if code != "" {
+		codeLower := strings.ToLower(code)
+		// Go indicators
+		if strings.Contains(codeLower, "package main") || strings.Contains(codeLower, "func main()") || strings.Contains(code, "fmt.") {
+			return "go"
+		}
+		// Python indicators
+		if strings.Contains(codeLower, "def ") || strings.Contains(codeLower, "import ") && strings.Contains(codeLower, ":") {
+			return "python"
+		}
+		// JavaScript/TypeScript indicators
+		if strings.Contains(codeLower, "const ") || strings.Contains(codeLower, "let ") || strings.Contains(codeLower, "=>") {
+			if strings.Contains(codeLower, ": string") || strings.Contains(codeLower, ": number") || strings.Contains(code, "interface ") {
+				return "typescript"
+			}
+			return "javascript"
+		}
+		// Rust indicators
+		if strings.Contains(codeLower, "fn main()") || strings.Contains(code, "let mut ") || strings.Contains(codeLower, "::new()") {
+			return "rust"
+		}
+		// Java indicators
+		if strings.Contains(codeLower, "public class ") || strings.Contains(codeLower, "public static void main") {
+			return "java"
+		}
+	}
+
+	// Priority 2: Fall back to prompt keywords if code detection fails.
 	lower := strings.ToLower(prompt + " " + code)
 	switch {
 	case strings.Contains(lower, "python") || strings.Contains(lower, "django") || strings.Contains(lower, "flask"):
@@ -721,7 +835,7 @@ func inferLanguage(prompt, code string) string {
 	case strings.Contains(lower, "java") || strings.Contains(lower, "spring"):
 		return "java"
 	default:
-		return "go"
+		return "unknown"
 	}
 }
 
@@ -761,12 +875,34 @@ func inferEntityFromPrompt(prompt string) string {
 func parseReviewerOutput(content string) (verdict string, findings []string, suggestions []string) {
 	lower := strings.ToLower(content)
 
-	// Determine verdict.
+	// Determine verdict using structured markers first, then fall back to keywords.
+	// Look for explicit verdict lines like "VERDICT: pass/fail/warn" or "Verdict: Pass".
 	verdict = "pass"
-	if strings.Contains(lower, "critical") || strings.Contains(lower, "high severity") || strings.Contains(lower, "rejected") {
-		verdict = "fail"
-	} else if strings.Contains(lower, "warning") || strings.Contains(lower, "medium") {
-		verdict = "warn"
+	for _, line := range strings.Split(lower, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "verdict:") {
+			v := strings.TrimSpace(strings.TrimPrefix(line, "verdict:"))
+			switch {
+			case strings.Contains(v, "fail") || strings.Contains(v, "reject"):
+				verdict = "fail"
+			case strings.Contains(v, "warn") || strings.Contains(v, "caution"):
+				verdict = "warn"
+			default:
+				verdict = "pass"
+			}
+			break
+		}
+	}
+	// Only use keyword fallback if no explicit verdict line found.
+	if verdict == "pass" {
+		// Check for negative signals: "no critical issues" means pass, not fail.
+		hasNegative := strings.Contains(lower, "no critical") || strings.Contains(lower, "no high severity") || strings.Contains(lower, "no issues found") || strings.Contains(lower, "looks good") || strings.Contains(lower, "well structured")
+		hasPositive := strings.Contains(lower, "critical issue") || strings.Contains(lower, "critical vulnerability") || strings.Contains(lower, "high severity issue")
+		if hasPositive && !hasNegative {
+			verdict = "fail"
+		} else if strings.Contains(lower, "warning") || strings.Contains(lower, "medium severity") {
+			verdict = "warn"
+		}
 	}
 
 	// Extract findings (lines starting with - or • or numbered).

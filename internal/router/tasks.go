@@ -15,6 +15,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	apperrors "github.com/vigilagent/vigilagent/internal/errors"
 	"github.com/vigilagent/vigilagent/internal/repository"
+	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/pagination"
 	"github.com/vigilagent/vigilagent/pkg/query"
@@ -59,8 +60,16 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 	if input.MaxTokens <= 0 {
 		input.MaxTokens = 8192
 	}
+	// Cap MaxTokens to prevent abuse and excessive LLM costs.
+	if input.MaxTokens > 128000 {
+		input.MaxTokens = 128000
+	}
 	if input.MaxIterations <= 0 {
 		input.MaxIterations = 20
+	}
+	// Cap MaxIterations to prevent infinite loops.
+	if input.MaxIterations > 50 {
+		input.MaxIterations = 50
 	}
 
 	task := &repository.Task{
@@ -82,6 +91,9 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 		r.wsManager.SSERegister(task.ID, sseCh)
 		defer r.wsManager.SSEUnregister(task.ID)
 	}
+
+	// Capture start time for TaskDuration metric
+	taskStartTime := time.Now()
 
 	// Start agent execution in background using a fresh context
 	go func() {
@@ -176,8 +188,10 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 				})
 			}
 
-			result, err := r.agentExec.ExecuteTask(bgCtx, agentTask)
-			if err != nil {
+		result, err := r.agentExec.ExecuteTask(bgCtx, agentTask)
+		taskDuration := time.Since(taskStartTime)
+		telemetry.TaskDuration.Observe(taskDuration.Seconds())
+		if err != nil {
 				if err := r.tasks.UpdateStatus(bgCtx, task.ID, "failed"); err != nil {
 					slog.Error("failed to update task status to failed", "error", err, "task_id", task.ID)
 				}

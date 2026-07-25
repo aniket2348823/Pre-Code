@@ -27,8 +27,20 @@ type AnalysisResult struct {
 
 func ExtractCodeBlocks(text string) []CodeBlock {
 	var blocks []CodeBlock
-	re := regexp.MustCompile("(?s)```([a-zA-Z0-9+-]*)\n(.*?)\n```")
-	matches := re.FindAllStringSubmatchIndex(text, -1)
+	// Support both backtick and tilde fences (must match on both sides)
+	backtickRe := regexp.MustCompile("(?s)```([a-zA-Z0-9+-]*)\n(.*?)\n```")
+	tildeRe := regexp.MustCompile("(?s)~~~([a-zA-Z0-9+-]*)\n(.*?)\n~~~")
+	allMatches := append(backtickRe.FindAllStringSubmatchIndex(text, -1),
+		tildeRe.FindAllStringSubmatchIndex(text, -1)...)
+	// Sort by start position to maintain order
+	for i := 0; i < len(allMatches); i++ {
+		for j := i + 1; j < len(allMatches); j++ {
+			if allMatches[i][0] > allMatches[j][0] {
+				allMatches[i], allMatches[j] = allMatches[j], allMatches[i]
+			}
+		}
+	}
+	matches := allMatches
 
 	for _, match := range matches {
 		if len(match) >= 6 {

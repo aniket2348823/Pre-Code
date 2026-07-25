@@ -26,6 +26,7 @@ scrape_configs:
       - targets: ['nats:8222']
 
 rule_files:
+  - 'recording_rules.yml'
   - 'alert_rules.yml'
 
 alerting:

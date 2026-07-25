@@ -73,7 +73,7 @@ func main() {
 		fmt.Printf("current migration version: %d\n", version)
 		fmt.Println("\nChecking schema...")
 		var tableExists bool
-		err = pg.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'audit_logs')`).Scan(&tableExists)
+		err = pg.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'audit_logs')`).Scan(&tableExists)
 		if err != nil {
 			fmt.Printf("error checking tables: %v\n", err)
 		} else if tableExists {

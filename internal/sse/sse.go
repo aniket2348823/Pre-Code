@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // Event represents a single SSE event.
@@ -17,6 +18,9 @@ type Event struct {
 	Data  interface{} `json:"data"`
 }
 
+// maxStreamLifetime is the maximum duration an SSE stream can stay open.
+const maxStreamLifetime = 5 * time.Minute
+
 // Streamer manages an SSE connection to a client.
 type Streamer struct {
 	w       io.Writer
@@ -24,6 +28,7 @@ type Streamer struct {
 	mu      sync.Mutex
 	closed  bool
 	eventID int
+	createdAt time.Time
 }
 
 // NewStreamer creates a new SSE streamer from an HTTP response writer.
@@ -37,15 +42,21 @@ func NewStreamer(w http.ResponseWriter) *Streamer {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
-	return &Streamer{w: w, flusher: flusher}
+	return &Streamer{w: w, flusher: flusher, createdAt: time.Now()}
 }
 
 // Send writes an SSE event to the client.
+// Enforces max stream lifetime to prevent goroutine leaks from stalled clients.
 func (s *Streamer) Send(evt Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("stream closed")
+	}
+	// Enforce maximum stream lifetime to prevent goroutine leaks.
+	if time.Since(s.createdAt) > maxStreamLifetime {
+		s.closed = true
+		return fmt.Errorf("stream lifetime exceeded (%s)", maxStreamLifetime)
 	}
 
 	s.eventID++

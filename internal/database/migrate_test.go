@@ -1,6 +1,9 @@
 package database
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -11,54 +14,14 @@ func TestMigrationVersion(t *testing.T) {
 		wantVer int
 		wantOK  bool
 	}{
-		{
-			name:    "standard migration",
-			input:   "000001_init_schema.up.sql",
-			wantVer: 1,
-			wantOK:  true,
-		},
-		{
-			name:    "five-digit version",
-			input:   "000123_add_users.up.sql",
-			wantVer: 123,
-			wantOK:  true,
-		},
-		{
-			name:    "down migration",
-			input:   "000001_init_schema.down.sql",
-			wantVer: 1,
-			wantOK:  true,
-		},
-		{
-			name:    "no underscore",
-			input:   "migration.sql",
-			wantVer: 0,
-			wantOK:  false,
-		},
-		{
-			name:    "no numeric prefix",
-			input:   "abc_init.up.sql",
-			wantVer: 0,
-			wantOK:  false,
-		},
-		{
-			name:    "empty string",
-			input:   "",
-			wantVer: 0,
-			wantOK:  false,
-		},
-		{
-			name:    "single digit",
-			input:   "1_test.up.sql",
-			wantVer: 1,
-			wantOK:  true,
-		},
-		{
-			name:    "zero version",
-			input:   "000000_init.up.sql",
-			wantVer: 0,
-			wantOK:  true,
-		},
+		{"standard", "000001_init_schema.up.sql", 1, true},
+		{"five-digit", "000123_add_users.up.sql", 123, true},
+		{"down", "000001_init_schema.down.sql", 1, true},
+		{"no_underscore", "migration.sql", 0, false},
+		{"no_numeric_prefix", "abc_init.up.sql", 0, false},
+		{"empty", "", 0, false},
+		{"single_digit", "1_test.up.sql", 1, true},
+		{"zero", "000000_init.up.sql", 0, true},
 	}
 
 	for _, tt := range tests {
@@ -73,15 +36,12 @@ func TestMigrationVersion(t *testing.T) {
 }
 
 func TestMigrationVersion_SortOrder(t *testing.T) {
-	// Verify that version extraction produces correct sort order
 	versions := []string{
 		"000010_later.up.sql",
 		"000001_first.up.sql",
 		"000005_middle.up.sql",
 	}
-
 	expected := []int{10, 1, 5}
-
 	for i, v := range versions {
 		ver, ok := migrationVersion(v)
 		if !ok {
@@ -90,5 +50,36 @@ func TestMigrationVersion_SortOrder(t *testing.T) {
 		if ver != expected[i] {
 			t.Errorf("migrationVersion(%q) = %d, want %d", v, ver, expected[i])
 		}
+	}
+}
+
+func TestMigrate_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	err := Migrate(context.Background(), nil, dir)
+	if err != nil {
+		t.Fatalf("expected nil error for empty dir, got %v", err)
+	}
+}
+
+func TestMigrate_NoMatchingFiles(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not a migration"), 0644)
+	err := Migrate(context.Background(), nil, dir)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestMigrate_NonExistentDir(t *testing.T) {
+	err := Migrate(context.Background(), nil, "/nonexistent/path/xyz")
+	if err != nil {
+		t.Fatalf("expected nil error for nonexistent dir, got %v", err)
+	}
+}
+
+func TestMigrate_BadGlobPattern(t *testing.T) {
+	err := Migrate(context.Background(), nil, "[")
+	if err == nil {
+		t.Fatal("expected error for bad glob pattern")
 	}
 }

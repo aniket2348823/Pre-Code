@@ -147,6 +147,17 @@ func (w *TaskWorker) processMessage(ctx context.Context, msg jetstream.Msg) {
 
 	slog.Info("processing task", "task_id", payload.TaskID, "retries", msg.Headers().Get("Nats-Retry"))
 
+	// Recover from panics to prevent poison message loops.
+	// On panic: NAK the message to trigger retry with backoff, then dead-letter after max retries.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("task handler panicked", "task_id", payload.TaskID, "panic", r)
+			// NAK with short delay — NATS retries up to MaxDeliver times, then dead-letter.
+			// 2s delay avoids 10s idle window that compounds under high load.
+			_ = msg.NakWithDelay(2 * time.Second)
+		}
+	}()
+
 	if err := w.handler(ctx, payload); err != nil {
 		slog.Error("task handler failed", "task_id", payload.TaskID, "error", err)
 		_ = msg.NakWithDelay(5 * time.Second)

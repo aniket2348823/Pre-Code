@@ -80,12 +80,15 @@ func (r *Router) setupResilienceMiddleware(cfg *MiddlewareConfig) {
 }
 
 // setupObservabilityMiddleware applies observability-focused middleware:
-// request ID propagation and structured logging.
+// request ID propagation, structured logging, and sensitive field redaction.
 func (r *Router) setupObservabilityMiddleware(cfg *MiddlewareConfig) {
 	// 1. Request ID (use dedicated package if configured)
 	if cfg != nil && cfg.RequestID {
 		r.Use(requestid.Middleware)
 	}
+
+	// 2. Sensitive field redaction — logs requests without passwords/API keys.
+	r.Use(mw.RedactLogger)
 }
 
 // NewWithMiddleware creates a Router with the full middleware stack wired.

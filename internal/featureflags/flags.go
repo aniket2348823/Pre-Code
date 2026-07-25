@@ -59,6 +59,11 @@ func (m *Manager) Get(ctx context.Context, name string) (*Flag, error) {
 	}
 	m.mu.RUnlock()
 
+	// If no pool, return nil for cache miss
+	if m.pool == nil {
+		return nil, nil
+	}
+
 	// Fetch from DB
 	query := `
 		SELECT name, description, enabled, rules, created_at, updated_at
@@ -91,6 +96,10 @@ func (m *Manager) Get(ctx context.Context, name string) (*Flag, error) {
 
 // GetAll returns all feature flags.
 func (m *Manager) GetAll(ctx context.Context) ([]Flag, error) {
+	if m.pool == nil {
+		return nil, nil
+	}
+
 	query := `
 		SELECT name, description, enabled, rules, created_at, updated_at
 		FROM feature_flags ORDER BY name
@@ -121,6 +130,10 @@ func (m *Manager) GetAll(ctx context.Context) ([]Flag, error) {
 
 // Set creates or updates a feature flag.
 func (m *Manager) Set(ctx context.Context, flag *Flag) error {
+	if m.pool == nil {
+		return nil
+	}
+
 	rulesJSON, _ := json.Marshal(flag.Rules)
 	query := `
 		INSERT INTO feature_flags (name, description, enabled, rules, created_at, updated_at)
@@ -147,6 +160,13 @@ func (m *Manager) Set(ctx context.Context, flag *Flag) error {
 
 // Delete removes a feature flag.
 func (m *Manager) Delete(ctx context.Context, name string) error {
+	if m.pool == nil {
+		m.mu.Lock()
+		delete(m.cache, name)
+		m.mu.Unlock()
+		return nil
+	}
+
 	_, err := m.pool.Exec(ctx, `DELETE FROM feature_flags WHERE name = $1`, name)
 	if err != nil {
 		return err

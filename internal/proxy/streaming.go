@@ -63,10 +63,15 @@ func (s *ProxyServer) handleStreaming(
 	}
 
 	var fullContent strings.Builder
+	const maxStreamContent = 10 << 20 // 10MB limit for accumulated stream content
 	start := time.Now()
 
 	for chunk := range streamResult.Ch {
 		if chunk.Content != "" {
+			if fullContent.Len()+len(chunk.Content) > maxStreamContent {
+				log.Printf("streaming: content limit reached (%d bytes), stopping accumulation", maxStreamContent)
+				break
+			}
 			fullContent.WriteString(chunk.Content)
 			// Forward chunk in OpenAI SSE format
 			sseChunk := map[string]interface{}{

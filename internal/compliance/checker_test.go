@@ -1,6 +1,10 @@
 package compliance
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/vigilagent/vigilagent/internal/scanner"
+)
 
 func TestCheckPaymentTriggersPCIDSS(t *testing.T) {
 	c := NewChecker()
@@ -59,6 +63,26 @@ func TestCheckDeduplicatesControls(t *testing.T) {
 		if count > 1 {
 			t.Fatalf("control %s appeared %d times (should be 1)", id, count)
 		}
+	}
+}
+
+func TestCheckDedupBranch(t *testing.T) {
+	shared := Control{ID: "shared_ctrl", Framework: FrameworkSOC2, Title: "Shared", Severity: scanner.SeverityHigh, Description: "shared"}
+	c := &Checker{rules: []entityRule{
+		{entity: "payment", keywords: []string{"payment"}, minScore: 0.1, controls: []Control{shared}},
+		{entity: "auth", keywords: []string{"authentication"}, minScore: 0.1, controls: []Control{shared}},
+	}}
+	rep := c.Check("payment authentication system", nil)
+	count := 0
+	for _, m := range rep.Required {
+		for _, ctrl := range m.Controls {
+			if ctrl.ID == "shared_ctrl" {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected shared_ctrl deduped to 1, got %d", count)
 	}
 }
 

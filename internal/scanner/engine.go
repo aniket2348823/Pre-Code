@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -44,6 +45,9 @@ func DefaultEngine() *Engine {
 	return NewEngine(NewBuiltinAnalyzer(), NewBanditAnalyzer(nil), NewSemgrepAnalyzer(nil))
 }
 
+// maxCodeSize is the maximum code size (5MB) allowed per scan to prevent OOM.
+const maxCodeSize = 5 * 1024 * 1024
+
 // Run analyzes the input with every available analyzer and returns a merged,
 // scored report. Unavailable analyzers are skipped; erroring ones are recorded
 // without aborting the scan.
@@ -52,6 +56,13 @@ func (e *Engine) Run(ctx context.Context, in Input) *Report {
 		AnalyzersSkipped: map[string]string{},
 		AnalyzerErrors:   map[string]string{},
 	}
+
+	// Guard against oversized input to prevent OOM.
+	if len(in.Code) > maxCodeSize {
+		rep.AnalyzerErrors["engine"] = fmt.Sprintf("code too large: %d bytes (max %d)", len(in.Code), maxCodeSize)
+		return rep
+	}
+
 	var raw []Finding
 	for _, a := range e.analyzers {
 		if !a.Available() {

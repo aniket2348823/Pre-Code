@@ -129,5 +129,5 @@ func (s *savepointTx) Begin(ctx context.Context) (pgx.Tx, error) {
 	if _, err := s.Tx.Exec(ctx, "SAVEPOINT "+name); err != nil {
 		return nil, err
 	}
-	return &savepointTx{Tx: s.Tx, name: name, counter: 0}, nil
+	return &savepointTx{Tx: s.Tx, name: name, counter: s.counter}, nil
 }

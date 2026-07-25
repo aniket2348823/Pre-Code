@@ -20,27 +20,30 @@ type Config struct {
 	CORS     CORSConfig
 	Log      LogConfig
 	SMTP     SMTPConfig
+	SendGrid SendGridConfig
 }
 
 type ServerConfig struct {
-	Host         string
-	Port         int
-	Env          string
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	IdleTimeout  time.Duration
+	Host              string
+	Port              int
+	Env               string
+	ReadTimeout       time.Duration
+	ReadHeaderTimeout time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
 }
 
 type DatabaseConfig struct {
-	Host         string
-	Port         int
-	User         string
-	Password     string
-	Name         string
-	SSLMode      string
-	MaxOpenConns int
-	MaxIdleConns int
-	MaxLifetime  time.Duration
+	Host          string
+	Port          int
+	User          string
+	Password      string
+	Name          string
+	SSLMode       string
+	MaxOpenConns  int
+	MaxIdleConns  int
+	MaxLifetime   time.Duration
+	ConnIdleTime  time.Duration // MaxConnIdleTime — how long idle connections stay open (default 5min)
 }
 
 type RedisConfig struct {
@@ -108,6 +111,13 @@ type SMTPConfig struct {
 	FromName string
 }
 
+// SendGridConfig holds SendGrid API configuration.
+type SendGridConfig struct {
+	APIKey    string
+	FromEmail string
+	FromName  string
+}
+
 func Load() (*Config, error) {
 	// Auto-load .env file if present
 	loadEnvFile(".env")
@@ -126,8 +136,9 @@ func Load() (*Config, error) {
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.env", "development")
-	viper.SetDefault("server.read_timeout", 10*time.Second)
-	viper.SetDefault("server.write_timeout", 10*time.Second)
+	viper.SetDefault("server.read_timeout", 30*time.Second)
+	viper.SetDefault("server.read_header_timeout", 10*time.Second)
+	viper.SetDefault("server.write_timeout", 60*time.Second)
 	viper.SetDefault("server.idle_timeout", 120*time.Second)
 
 	viper.SetDefault("database.host", "localhost")
@@ -139,6 +150,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("database.max_open_conns", 25)
 	viper.SetDefault("database.max_idle_conns", 10)
 	viper.SetDefault("database.max_lifetime", 5*time.Minute)
+	viper.SetDefault("database.conn_idle_time", 5*time.Minute)
 
 	viper.SetDefault("redis.host", "localhost")
 	viper.SetDefault("redis.port", 6379)
@@ -177,12 +189,13 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			Host:         viper.GetString("server.host"),
-			Port:         viper.GetInt("server.port"),
-			Env:          viper.GetString("server.env"),
-			ReadTimeout:  viper.GetDuration("server.read_timeout"),
-			WriteTimeout: viper.GetDuration("server.write_timeout"),
-			IdleTimeout:  viper.GetDuration("server.idle_timeout"),
+			Host:              viper.GetString("server.host"),
+			Port:              viper.GetInt("server.port"),
+			Env:               viper.GetString("server.env"),
+			ReadTimeout:       viper.GetDuration("server.read_timeout"),
+			ReadHeaderTimeout: viper.GetDuration("server.read_header_timeout"),
+			WriteTimeout:      viper.GetDuration("server.write_timeout"),
+			IdleTimeout:       viper.GetDuration("server.idle_timeout"),
 		},
 		Database: DatabaseConfig{
 			Host:         viper.GetString("database.host"),
@@ -191,9 +204,10 @@ func Load() (*Config, error) {
 			Password:     viper.GetString("database.password"),
 			Name:         viper.GetString("database.name"),
 			SSLMode:      viper.GetString("database.sslmode"),
-			MaxOpenConns: viper.GetInt("database.max_open_conns"),
-			MaxIdleConns: viper.GetInt("database.max_idle_conns"),
-			MaxLifetime:  viper.GetDuration("database.max_lifetime"),
+			MaxOpenConns:  viper.GetInt("database.max_open_conns"),
+			MaxIdleConns:  viper.GetInt("database.max_idle_conns"),
+			MaxLifetime:   viper.GetDuration("database.max_lifetime"),
+			ConnIdleTime:  viper.GetDuration("database.conn_idle_time"),
 		},
 		Redis: RedisConfig{
 			Host:     viper.GetString("redis.host"),
@@ -236,6 +250,11 @@ func Load() (*Config, error) {
 			Password: viper.GetString("smtp.password"),
 			From:     viper.GetString("smtp.from"),
 			FromName: viper.GetString("smtp.from_name"),
+		},
+		SendGrid: SendGridConfig{
+			APIKey:    viper.GetString("sendgrid.api_key"),
+			FromEmail: viper.GetString("sendgrid.from_email"),
+			FromName:  viper.GetString("sendgrid.from_name"),
 		},
 		CORS: CORSConfig{
 			AllowedOrigins:  viper.GetStringSlice("cors.allowed_origins"),

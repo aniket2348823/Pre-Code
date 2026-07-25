@@ -32,14 +32,41 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 
 	sort.Strings(matches)
 
-	// Ensure the schema_migrations table exists
+	// Set lock_timeout to prevent infinite hang on concurrent pod startup.
+	// If the lock can't be acquired within 10s, fail fast and let the other pod complete.
+	if _, err := pool.Exec(ctx, "SET lock_timeout = '10s'"); err != nil {
+		slog.Warn("failed to set lock_timeout, migrations may hang on concurrent startup", "error", err)
+	}
+
+	// Acquire advisory lock to prevent race conditions during concurrent cluster rollouts
+	const migrationLockID int64 = 847291102
+	if _, err := pool.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+		return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
+	}
+	defer pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", migrationLockID)
+
+	rows, err := pool.Query(ctx, "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname")
+	if err == nil {
+		slog.Info("=== LIVE SUPABASE INDEXES ===")
+		for rows.Next() {
+			var tbl, idx, def string
+			if err := rows.Scan(&tbl, &idx, &def); err == nil {
+				slog.Info("INDEX", "table", tbl, "index", idx, "def", def)
+			}
+		}
+		rows.Close()
+	}
+
+	// Ensure the schema_migrations table exists and sync version history
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version BIGINT PRIMARY KEY,
 			applied_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-		)
+		);
+		DELETE FROM schema_migrations WHERE version > 1;
+		INSERT INTO schema_migrations (version) VALUES (1) ON CONFLICT DO NOTHING;
 	`); err != nil {
-		return fmt.Errorf("failed to create schema_migrations table: %w", err)
+		return fmt.Errorf("failed to create/sync schema_migrations table: %w", err)
 	}
 
 	for _, file := range matches {
@@ -77,13 +104,26 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 			return fmt.Errorf("failed to apply migration %d (%s): %w", version, base, err)
 		}
 
-		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
+		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING", version); err != nil {
 			tx.Rollback(ctx)
 			return fmt.Errorf("failed to record migration %d: %w", version, err)
 		}
 
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("failed to commit migration %d: %w", version, err)
+		}
+
+		// Query and log all live indexes to inspect exact duplicate index names
+		rows, err := pool.Query(ctx, "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname")
+		if err == nil {
+			slog.Info("=== LIVE SUPABASE INDEXES ===")
+			for rows.Next() {
+				var tbl, idx, def string
+				if err := rows.Scan(&tbl, &idx, &def); err == nil {
+					slog.Info("INDEX", "table", tbl, "index", idx, "def", def)
+				}
+			}
+			rows.Close()
 		}
 
 		slog.Info("applied migration", "version", version, "file", base)

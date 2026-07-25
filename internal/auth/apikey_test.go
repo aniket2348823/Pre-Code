@@ -136,3 +136,11 @@ func TestValidatePrefix(t *testing.T) {
 		}
 	})
 }
+
+func TestGenerateKey_LongPrefixBcryptError(t *testing.T) {
+	svc := NewAPIKeyService(strings.Repeat("a", 9))
+	_, _, _, err := svc.GenerateKey()
+	if err == nil {
+		t.Fatal("expected error for key exceeding bcrypt password length limit")
+	}
+}

@@ -88,6 +88,14 @@ type Options struct {
 	// Knowledge graph
 	Knowledge *knowledge.Graph
 
+	// HITL queue
+	HITLQueue *mw.HITLQueue
+
+	// Plan-based rate limiting
+	PlanRateLimiter *mw.PlanAwareRateLimiter
+	UsageMetering  *mw.UsageMeteringMiddleware
+	QuotaEnforcer  *mw.QuotaEnforcer
+
 	// Skill engine
 	SkillEngine *skillengine.Engine
 
@@ -161,6 +169,11 @@ type Router struct {
 	attackGraph         *attackgraph.Engine
 	audit               *audit.Engine
 	costIntel           *costintel.Engine
+	hitlQueue           *mw.HITLQueue
+	hitlHandler         *mw.HITLHandler
+	planRateLimiter     *mw.PlanAwareRateLimiter
+	usageMetering       *mw.UsageMeteringMiddleware
+	quotaEnforcer       *mw.QuotaEnforcer
 	lockout             mw.Lockout
 	lockoutCancel       context.CancelFunc
 
@@ -236,7 +249,11 @@ func newRouter(opts Options) *Router {
 		webhookEngine: opts.Webhook,
 		wsManager:     NewWebSocketManager(DefaultWebSocketManagerConfig()),
 		lockout:       lockout,
-		costIntel:     opts.CostIntel,
+		costIntel:       opts.CostIntel,
+		hitlQueue:       opts.HITLQueue,
+		planRateLimiter: opts.PlanRateLimiter,
+		usageMetering:   opts.UsageMetering,
+		quotaEnforcer:   opts.QuotaEnforcer,
 		email:       opts.Email,
 		featureFlags: opts.FeatureFlags,
 		skillRAG:    opts.SkillRAG,
@@ -341,5 +358,8 @@ func (r *Router) initHandlers() {
 func (r *Router) Shutdown() {
 	if r.lockoutCancel != nil {
 		r.lockoutCancel()
+	}
+	if r.hitlQueue != nil {
+		r.hitlQueue.Close()
 	}
 }

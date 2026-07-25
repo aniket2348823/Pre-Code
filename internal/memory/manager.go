@@ -3,7 +3,10 @@ package memory
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
+
+	"github.com/go-redis/redis/v8"
 	"github.com/pgvector/pgvector-go"
 	"github.com/vigilagent/vigilagent/internal/database"
 )
@@ -29,10 +32,30 @@ func NewManager(pool *database.Conn) *Manager {
 
 // NewManagerWithEmbedder creates a memory manager that embeds queries and
 // stored content using the given Embedder, enabling real vector search.
+// It validates embedding dimensions at startup to prevent silent data corruption.
 func NewManagerWithEmbedder(pool *database.Conn, embedder Embedder) *Manager {
 	if embedder == nil {
 		embedder = NewNoOpEmbedder(1536)
 	}
+
+	// Validate embedding dimension matches table schema at startup.
+	if pool != nil {
+		var dbDim int
+		err := pool.QueryRow(context.Background(),
+			"SELECT vector_dims(embedding) FROM memory_patterns LIMIT 1").Scan(&dbDim)
+		if err == nil && dbDim != embedder.Dimensions() {
+			slog.Warn("EMBEDDING DIMENSION MISMATCH",
+				"embedder", embedder.Name(),
+				"embedder_dims", embedder.Dimensions(),
+				"db_dims", dbDim,
+				"action", "falling back to NoOpEmbedder to prevent data corruption",
+			)
+			embedder = NewNoOpEmbedder(dbDim)
+		} else if err != nil {
+			slog.Warn("could not verify embedding dimensions (table may not exist yet)", "error", err)
+		}
+	}
+
 	return &Manager{
 		episodic:   NewEpisodicStore(pool),
 		semantic:   NewSemanticStore(pool),
@@ -76,6 +99,20 @@ func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]Memory
 
 	// Embed the query once and reuse across vector-backed layers.
 	queryVec := m.embed(ctx, query)
+
+	// Guard: if the query vector is all zeros (NoOpEmbedder), skip vector search
+	// to avoid pgvector returning garbage results or crashing on NaN similarity.
+	isZeroVector := true
+	for _, v := range queryVec.Slice() {
+		if v != 0 {
+			isZeroVector = false
+			break
+		}
+	}
+	if isZeroVector {
+		slog.Debug("semantic recall skipped: zero-vector embedder (no embedding provider configured)")
+		return results, nil
+	}
 
 	// Layer 2: Check episodic memory (past interactions)
 	if m.episodic != nil {
@@ -145,6 +182,16 @@ func (m *Manager) StorePattern(ctx context.Context, userID, projectID, patternTy
 // AddWorkingMessage adds a message to working memory.
 func (m *Manager) AddWorkingMessage(role, content string, tokens int) {
 	m.working.Add(Message{Role: role, Content: content, Tokens: tokens})
+}
+
+// EnableRedisBacking configures working memory to persist to Redis
+// so messages survive server restarts. Call after creating the manager.
+func (m *Manager) EnableRedisBacking(rds *redis.Client, sessionID string) {
+	if rds == nil || sessionID == "" {
+		return
+	}
+	m.working = NewRedisBackedWorkingMemory(rds, sessionID, 24*time.Hour)
+	slog.Info("working memory: Redis-backed", "session_id", sessionID)
 }
 
 // GetWorkingMessages returns all working memory messages.

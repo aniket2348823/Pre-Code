@@ -46,12 +46,13 @@ func (hr *HotReloader) OnChange(fn OnConfigChangeFunc) {
 func readFromViper() *Config {
 	cfg := &Config{
 		Server: ServerConfig{
-			Host:         viper.GetString("server.host"),
-			Port:         viper.GetInt("server.port"),
-			Env:          viper.GetString("server.env"),
-			ReadTimeout:  viper.GetDuration("server.read_timeout"),
-			WriteTimeout: viper.GetDuration("server.write_timeout"),
-			IdleTimeout:  viper.GetDuration("server.idle_timeout"),
+			Host:              viper.GetString("server.host"),
+			Port:              viper.GetInt("server.port"),
+			Env:               viper.GetString("server.env"),
+			ReadTimeout:       viper.GetDuration("server.read_timeout"),
+			ReadHeaderTimeout: viper.GetDuration("server.read_header_timeout"),
+			WriteTimeout:      viper.GetDuration("server.write_timeout"),
+			IdleTimeout:       viper.GetDuration("server.idle_timeout"),
 		},
 		Database: DatabaseConfig{
 			Host:         viper.GetString("database.host"),

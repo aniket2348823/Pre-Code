@@ -3,8 +3,10 @@ package router
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/vigilagent/vigilagent/internal/agent"
 	"github.com/vigilagent/vigilagent/internal/auth"
@@ -45,10 +47,10 @@ func (r *Router) middlewareMetricsHandler(w http.ResponseWriter, req *http.Reque
 	}
 
 	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"health":          healthData,
-		"cost_by_model":   costData,
-		"total_records":   totalRecords,
-		"total_cost":      totalCost,
+		"health":        healthData,
+		"cost_by_model": costData,
+		"total_records": totalRecords,
+		"total_cost":    totalCost,
 	})
 }
 
@@ -100,6 +102,27 @@ func (r *Router) batchTaskHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Per-user batch task limit: max 5 concurrent batch operations.
+	// Uses Redis INCR with 5-minute TTL. Prevents resource exhaustion.
+	batchKey := fmt.Sprintf("batch:%s", claims.UserID)
+	if r.rds != nil && r.rds.Client != nil {
+		count, err := r.rds.Client.Incr(req.Context(), batchKey).Result()
+		if err == nil {
+			if count == 1 {
+				r.rds.Client.Expire(req.Context(), batchKey, 5*time.Minute)
+			}
+			if count > 5 {
+				r.rds.Client.Decr(req.Context(), batchKey)
+				response.JSON(w, http.StatusTooManyRequests, map[string]interface{}{
+					"code":    "RATE_003",
+					"error":   "batch rate limit exceeded",
+					"message": "maximum 5 concurrent batch operations per user",
+				})
+				return
+			}
+		}
+	}
+
 	// Create all tasks
 	type taskResult struct {
 		Index  int    `json:"index"`
@@ -136,7 +159,7 @@ func (r *Router) batchTaskHandler(w http.ResponseWriter, req *http.Request) {
 
 		// Start execution in background (copy the struct, not the pointer)
 		taskCopy := *task
-		go r.executeTaskBackground(&taskCopy)
+		go r.executeTaskBackground(&taskCopy, claims.UserID)
 	}
 
 	// Dispatch batch webhook
@@ -156,7 +179,15 @@ func (r *Router) batchTaskHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 // executeTaskBackground runs a task in the background goroutine.
-func (r *Router) executeTaskBackground(task *repository.Task) {
+func (r *Router) executeTaskBackground(task *repository.Task, userID string) {
+	// Decrement batch rate limit counter when task completes (success or failure).
+	if userID != "" && r.rds != nil && r.rds.Client != nil {
+		defer func() {
+			batchKey := fmt.Sprintf("batch:%s", userID)
+			r.rds.Client.Decr(context.Background(), batchKey)
+		}()
+	}
+
 	if r.agentExec == nil {
 		if err := r.tasks.Complete(context.Background(), task.ID, task.Prompt, "", "", 0, 0, 0, 0); err != nil {
 			slog.Error("failed to complete task (no agent)", "error", err, "task_id", task.ID)
@@ -261,5 +292,3 @@ func (r *Router) costOverrideHandler(w http.ResponseWriter, req *http.Request) {
 		"info":   info,
 	})
 }
-
-

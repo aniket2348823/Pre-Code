@@ -15,7 +15,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -45,9 +47,45 @@ func NewServer(apiURL, apiKey, llmKey string) *Server {
 	return s
 }
 
-// Run starts the MCP server on stdio transport.
+// Run starts the MCP server on stdio transport with EOF detection
+// to prevent zombie processes when parent crashes.
 func (s *Server) Run() error {
-	return server.ServeStdio(s.mcpServer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Detect stdin EOF to exit cleanly when parent process crashes.
+	// Uses a channel signal instead of os.Exit to allow deferred cleanup.
+	quit := make(chan struct{}, 1)
+	go func() {
+		defer cancel() // stop the stdin reader when server exits
+		buf := make([]byte, 1)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			_, err := io.ReadAtLeast(os.Stdin, buf, 1)
+			if err != nil {
+				slog.Info("MCP server: stdin closed/EOF, shutting down")
+				quit <- struct{}{}
+				return
+			}
+		}
+	}()
+
+	// Run server in goroutine, watch for EOF signal.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeStdio(s.mcpServer)
+	}()
+
+	select {
+	case <-quit:
+		return nil
+	case err := <-errCh:
+		return err
+	}
 }
 
 // ─── MCP Server Construction ─────────────────────────────────────────────
@@ -167,6 +205,10 @@ func (s *Server) buildMCPServer() *server.MCPServer {
 // ─── Tool Handlers ───────────────────────────────────────────────────────
 
 func (s *Server) handleVerify(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 60s for full pipeline reviews.
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
 	code, _ := req.RequireString("code")
 	if code == "" {
 		return mcp.NewToolResultError("code is required"), nil
@@ -185,6 +227,9 @@ func (s *Server) handleVerify(ctx context.Context, req mcp.CallToolRequest) (*mc
 
 	resp, err := s.callBackendWithKey(ctx, "/api/v1/review", payload, apiKey)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return mcp.NewToolResultError("VigilAgent review timed out (60s limit)"), nil
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent review failed: %v", err)), nil
 	}
 
@@ -197,6 +242,10 @@ func (s *Server) handleVerify(ctx context.Context, req mcp.CallToolRequest) (*mc
 }
 
 func (s *Server) handleScan(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 30s for deterministic scans.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	code, _ := req.RequireString("code")
 	if code == "" {
 		return mcp.NewToolResultError("code is required"), nil
@@ -213,6 +262,9 @@ func (s *Server) handleScan(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 	resp, err := s.callBackend(ctx, "/api/v1/middleware/process", payload)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return mcp.NewToolResultError("VigilAgent scan timed out (30s limit)"), nil
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent scan failed: %v", err)), nil
 	}
 
@@ -225,6 +277,10 @@ func (s *Server) handleScan(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 }
 
 func (s *Server) handleReview(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 60s for LLM reviewer calls.
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
 	code, _ := req.RequireString("code")
 	if code == "" {
 		return mcp.NewToolResultError("code is required"), nil
@@ -241,6 +297,9 @@ func (s *Server) handleReview(ctx context.Context, req mcp.CallToolRequest) (*mc
 
 	resp, err := s.callBackendWithKey(ctx, "/api/v1/review", payload, apiKey)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return mcp.NewToolResultError("VigilAgent review timed out (60s limit)"), nil
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent review failed: %v", err)), nil
 	}
 
@@ -251,6 +310,10 @@ func (s *Server) handleReview(ctx context.Context, req mcp.CallToolRequest) (*mc
 }
 
 func (s *Server) handleConfidence(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 30s for confidence scoring.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	code, _ := req.RequireString("code")
 	if code == "" {
 		return mcp.NewToolResultError("code is required"), nil
@@ -265,6 +328,9 @@ func (s *Server) handleConfidence(ctx context.Context, req mcp.CallToolRequest) 
 
 	resp, err := s.callBackendWithKey(ctx, "/api/v1/review", payload, apiKey)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return mcp.NewToolResultError("VigilAgent confidence scoring timed out (30s limit)"), nil
+		}
 		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent confidence scoring failed: %v", err)), nil
 	}
 
@@ -275,6 +341,10 @@ func (s *Server) handleConfidence(ctx context.Context, req mcp.CallToolRequest) 
 }
 
 func (s *Server) handleProcess(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 30s for middleware processing.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	description, _ := req.RequireString("description")
 	if description == "" {
 		return mcp.NewToolResultError("description is required"), nil

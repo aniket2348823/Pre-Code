@@ -1,0 +1,38 @@
+# Prometheus Recording Rules for VigilAgent Dashboard
+# Pre-computes expensive rate/quantile queries for fast dashboard rendering.
+# Groups are evaluated every 60s (2x scrape interval) for freshness.
+
+groups:
+  # NOTE: HTTP metrics (http_requests_total, http_request_duration_seconds_bucket)
+  # are NOT yet collected. Add promhttp.InstrumentHandlerCounter + InstrumentHandlerDuration
+  # middleware to enable Request Rate, Latency, and Error Rate panels in Grafana.
+
+  # ── LLM Metrics ──────────────────────────────────────────────
+  - name: vigilagent_llm_rules
+    interval: 30s
+    rules:
+      # LLM token consumption rate by model and type
+      - record: vigilagent:llm_tokens:rate5m
+        expr: rate(vigilagent_llm_tokens_total[5m])
+
+      # Token consumption by type (input vs output)
+      - record: vigilagent:tokens_by_type:rate5m
+        expr: sum by (token_type) (rate(vigilagent_tokens_consumed_total[5m]))
+
+  # ── Task Metrics ─────────────────────────────────────────────
+  - name: vigilagent_task_rules
+    interval: 30s
+    rules:
+      # Task duration P95 (5m window) — used by dashboard heatmap
+      - record: vigilagent:task_duration:p95_5m
+        expr: histogram_quantile(0.95, rate(vigilagent_task_duration_seconds_bucket[5m]))
+
+  # ── Verification Confidence ──────────────────────────────────
+  - name: vigilagent_confidence_rules
+    interval: 60s
+    rules:
+      # Confidence P95 by language (10m window — compromise between smoothness and freshness)
+      - record: vigilagent:confidence:p95_10m
+        expr: histogram_quantile(0.95, rate(vigilagent_verification_confidence_bucket[10m]))
+
+

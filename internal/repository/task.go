@@ -82,7 +82,86 @@ func (r *TaskRepository) FindByID(ctx context.Context, id string) (*Task, error)
 	return task, nil
 }
 
-// ListByProject lists tasks for a project with pagination.
+// CursorPage holds cursor-based pagination results.
+type CursorPage struct {
+	Tasks      []Task `json:"tasks"`
+	NextCursor string `json:"next_cursor,omitempty"` // cursor for next page
+	HasMore    bool   `json:"has_more"`
+}
+
+// ListByProjectCursor lists tasks for a project using O(1) cursor-based pagination.
+// cursor is the created_at timestamp of the last item from the previous page (RFC3339).
+// Pass empty cursor to start from the beginning.
+func (r *TaskRepository) ListByProjectCursor(ctx context.Context, projectID string, cursor string, limit int) (*CursorPage, error) {
+	var query string
+	var rows pgx.Rows
+	var err error
+
+	if cursor != "" {
+		// Decode cursor (RFC3339 timestamp)
+		cursorTime, parseErr := time.Parse(time.RFC3339Nano, cursor)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid cursor: %w", parseErr)
+		}
+		// Use keyset pagination: WHERE created_at < cursor
+		query = `
+			SELECT id, project_id, user_id, prompt, status, result, model, provider,
+			       complexity, max_tokens, max_iterations, input_tokens, output_tokens,
+			       total_tokens, cost, error, plan_json, created_at, updated_at, completed_at
+			FROM tasks WHERE project_id = $1 AND created_at < $2
+			ORDER BY created_at DESC
+			LIMIT $3
+		`
+		rows, err = r.pool.Query(ctx, query, projectID, cursorTime, limit+1) // fetch one extra to detect has_more
+	} else {
+		query = `
+			SELECT id, project_id, user_id, prompt, status, result, model, provider,
+			       complexity, max_tokens, max_iterations, input_tokens, output_tokens,
+			       total_tokens, cost, error, plan_json, created_at, updated_at, completed_at
+			FROM tasks WHERE project_id = $1
+			ORDER BY created_at DESC
+			LIMIT $2
+		`
+		rows, err = r.pool.Query(ctx, query, projectID, limit+1)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []Task
+	for rows.Next() {
+		var t Task
+		if err := rows.Scan(
+			&t.ID, &t.ProjectID, &t.UserID, &t.Prompt, &t.Status,
+			&t.Result, &t.Model, &t.Provider, &t.Complexity,
+			&t.MaxTokens, &t.MaxIterations, &t.InputTokens, &t.OutputTokens,
+			&t.TotalTokens, &t.Cost, &t.Error, &t.PlanJSON,
+			&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan task: %w", err)
+		}
+		tasks = append(tasks, t)
+	}
+
+	hasMore := len(tasks) > limit
+	if hasMore {
+		tasks = tasks[:limit]
+	}
+
+	page := &CursorPage{
+		Tasks:   tasks,
+		HasMore: hasMore,
+	}
+	if hasMore && len(tasks) > 0 {
+		page.NextCursor = tasks[len(tasks)-1].CreatedAt.Format(time.RFC3339Nano)
+	}
+
+	return page, nil
+}
+
+// ListByProject lists tasks for a project with OFFSET pagination.
+// Deprecated: Use ListByProjectCursor for O(1) deep-page performance.
 func (r *TaskRepository) ListByProject(ctx context.Context, projectID string, offset, limit int) ([]Task, int, error) {
 	countQuery := `SELECT COUNT(*) FROM tasks WHERE project_id = $1`
 	var total int

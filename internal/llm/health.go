@@ -5,6 +5,19 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+// telemetryLLMProviderHealth tracks provider health for Grafana dashboard.
+// Registered in health.go (not telemetry.go) to avoid duplicate metric registration.
+var telemetryLLMProviderHealth = promauto.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "vigilagent_llm_provider_healthy",
+		Help: "LLM provider health status (1 = healthy, 0 = unhealthy)",
+	},
+	[]string{"provider"},
 )
 
 // HealthStatus represents the health state of a provider.
@@ -65,10 +78,7 @@ func (h *HealthMonitor) GetHealthyProviders() []string {
 	return healthy
 }
 
-// Confidence returns a 0..1 score for a provider based on its current health:
-// 1.0 when fully healthy, degrading with error rate, and low when unhealthy or
-// unknown. Used by the router to rank candidates on reliability rather than an
-// arbitrary cost formula.
+// Confidence returns a 0..1 score for a provider based on its current health.
 func (h *HealthMonitor) Confidence(name string) float64 {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -111,12 +121,18 @@ func (h *HealthMonitor) RecordFailure(name string) {
 	} else if health.ConsecutiveFails >= 1 {
 		health.Status = StatusUnhealthy
 	}
+
+	// Update Prometheus gauge for Grafana dashboard.
+	telemetryLLMProviderHealth.WithLabelValues(name).Set(0)
 }
 
 // RecordSuccess records a success for a provider and computes real P50 latency.
 func (h *HealthMonitor) RecordSuccess(name string, latency time.Duration) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Update Prometheus gauge for Grafana dashboard.
+	telemetryLLMProviderHealth.WithLabelValues(name).Set(1)
 
 	health, ok := h.providers[name]
 	if !ok {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
@@ -86,23 +87,31 @@ func (r *EventRepository) Create(ctx context.Context, event *Event) error {
 }
 
 // BatchCreate inserts multiple events in a single transaction.
+// Uses ON CONFLICT to handle idempotent inserts (retry safety).
 func (r *EventRepository) BatchCreate(ctx context.Context, events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
+	// Use ON CONFLICT DO NOTHING for idempotent batch inserts.
+	// Do NOT use RETURNING here — ON CONFLICT DO NOTHING returns zero rows,
+	// causing Scan to fail with ErrNoRows for deduplicated inserts.
 	query := `
 		INSERT INTO events (session_id, event_type, source, payload, tokens_used, cost_usd, latency_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, created_at
+		ON CONFLICT DO NOTHING
 	`
 	for i := range events {
-		err := tx.QueryRow(ctx, query,
+		_, err := tx.Exec(ctx, query,
 			events[i].SessionID, events[i].EventType, events[i].Source, events[i].Payload,
 			events[i].TokensUsed, events[i].CostUsd, events[i].LatencyMs,
-		).Scan(&events[i].ID, &events[i].CreatedAt)
+		)
 		if err != nil {
 			return fmt.Errorf("failed to insert event %d: %w", i, err)
 		}

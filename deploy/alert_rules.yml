@@ -44,12 +44,21 @@ groups:
           summary: "Database connection pool nearly exhausted"
 
       - alert: LLMProviderDown
-        expr: llm_provider_healthy == 0
+        expr: vigilagent_llm_provider_healthy == 0
         for: 2m
         labels:
           severity: warning
         annotations:
           summary: "LLM provider health check failing"
+
+      - alert: HTTPMetricsMissing
+        expr: absent(http_requests_total)
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "HTTP metrics not collected"
+          description: "http_requests_total is not being scraped. Add promhttp.InstrumentHandlerCounter middleware to enable Request Rate, Latency, and Error Rate dashboard panels."
 
       - alert: BudgetExceeded
         expr: increase(budget_exceeded_total[1h]) > 0
@@ -58,3 +67,39 @@ groups:
           severity: warning
         annotations:
           summary: "Budget threshold exceeded"
+
+      - alert: LowVerificationConfidence
+        expr: vigilagent:confidence:p95_10m < 0.7
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Verification confidence below 70%"
+          description: "95th percentile confidence score has been below 0.7 for 10 minutes. This may indicate low-quality AI outputs or scanner issues."
+
+      - alert: CriticalConfidenceDrop
+        expr: vigilagent:confidence:p95_10m < 0.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Verification confidence critically low"
+          description: "95th percentile confidence score is below 0.5 — code quality is severely degraded. Investigate LLM providers and scanner immediately."
+
+      - alert: HITLCheckpointPending
+        expr: increase(vigilagent_hitl_checkpoints_total{status="pending"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HITL checkpoint pending for over 5 minutes"
+          description: "A human-in-the-loop checkpoint has been waiting for a decision for more than 5 minutes. Tasks may be stalled."
+
+      - alert: HITLCheckpointTimedOut
+        expr: increase(vigilagent_hitl_checkpoints_total{status="timed_out"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HITL checkpoint timed out"
+          description: "A human-in-the-loop checkpoint timed out. The task was auto-rejected. Increase the timeout or ensure humans respond within the deadline."

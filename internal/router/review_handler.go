@@ -9,6 +9,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/llm"
 	"github.com/vigilagent/vigilagent/internal/pipeline"
+	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -114,6 +115,11 @@ func (r *Router) reviewHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	response.JSON(w, http.StatusOK, report)
+
+	// Observe confidence score for Grafana dashboard.
+	if report.Confidence != nil {
+		telemetry.VerificationConfidenceTracks.WithLabelValues(input.Language, report.Confidence.Grade).Observe(report.Confidence.Confidence)
+	}
 }
 
 // buildBYOKRouter creates a temporary ModelRouter from a user-provided API key.

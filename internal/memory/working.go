@@ -2,16 +2,24 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-redis/redis/v8"
 )
 
 // WorkingMemory provides in-memory session-scoped context.
+// When a Redis client is provided, messages are persisted to survive restarts.
 type WorkingMemory struct {
 	messages []Message
 	mu       sync.RWMutex
+	sessionID string
+	rds       *redis.Client
+	ttl       time.Duration
 }
 
 // Message represents a conversation message in working memory.
@@ -29,12 +37,82 @@ func NewWorkingMemory(_ time.Duration) *WorkingMemory {
 	}
 }
 
-// Add appends a message to working memory.
+// NewRedisBackedWorkingMemory creates a working memory instance that persists
+// messages to Redis so they survive server restarts.
+func NewRedisBackedWorkingMemory(rds *redis.Client, sessionID string, ttl time.Duration) *WorkingMemory {
+	wm := &WorkingMemory{
+		messages:  make([]Message, 0),
+		sessionID: sessionID,
+		rds:       rds,
+		ttl:       ttl,
+	}
+	// Restore messages from Redis on creation.
+	if rds != nil && sessionID != "" {
+		wm.loadFromRedis()
+	}
+	return wm
+}
+
+func workingMemoryKey(sessionID string) string {
+	return fmt.Sprintf("vigilagent:working_memory:%s", sessionID)
+}
+
+// loadFromRedis restores messages from Redis.
+func (wm *WorkingMemory) loadFromRedis() {
+	if wm.rds == nil || wm.sessionID == "" {
+		return
+	}
+	ctx := context.Background()
+	data, err := wm.rds.Get(ctx, workingMemoryKey(wm.sessionID)).Bytes()
+	if err != nil {
+		return // key doesn't exist or Redis error — start empty
+	}
+	var msgs []Message
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		slog.Warn("failed to unmarshal working memory from Redis", "error", err)
+		return
+	}
+	wm.messages = msgs
+}
+
+// persistToRedis saves current messages to Redis.
+// Takes a snapshot under read lock to avoid data race with concurrent Add() calls.
+func (wm *WorkingMemory) persistToRedis() {
+	if wm.rds == nil || wm.sessionID == "" {
+		return
+	}
+	// Snapshot under read lock to avoid race with concurrent writers.
+	wm.mu.RLock()
+	snapshot := make([]Message, len(wm.messages))
+	copy(snapshot, wm.messages)
+	wm.mu.RUnlock()
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		slog.Warn("failed to marshal working memory", "error", err)
+		return
+	}
+	ctx := context.Background()
+	key := workingMemoryKey(wm.sessionID)
+	ttl := wm.ttl
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	if err := wm.rds.Set(ctx, key, data, ttl).Err(); err != nil {
+		slog.Warn("failed to persist working memory to Redis", "error", err)
+	}
+}
+
+// Add appends a message to working memory and persists to Redis if configured.
 func (wm *WorkingMemory) Add(msg Message) {
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 	msg.Timestamp = time.Now()
 	wm.messages = append(wm.messages, msg)
+	// Persist to Redis in background (non-blocking).
+	if wm.rds != nil {
+		go wm.persistToRedis()
+	}
 }
 
 // Get returns all messages in working memory.

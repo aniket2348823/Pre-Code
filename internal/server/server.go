@@ -155,11 +155,11 @@ func New(cfg *config.Config) (*Server, error) {
 	jwtSvc := auth.NewJWT(&cfg.Auth)
 	apiKeySvc := auth.NewAPIKeyService(cfg.Auth.APIKeyPrefix)
 
-	cleanup, err := telemetry.Setup(context.Background(), "vigilagent", version)
+	cleanup, err := telemetry.Setup(context.Background(), "vigilagent", "1.0.0")
 	if err != nil {
 		slog.Warn("opentelemetry setup failed, continuing without tracing", "error", err)
 	} else {
-		srv.cleanup = cleanup
+		srv.cleanup = func() { _ = cleanup(context.Background()) }
 	}
 
 	var conn *database.Conn
@@ -279,14 +279,25 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	// Wire memory system into agent for episodic recall during task execution
+	// Enable Redis-backed working memory so messages survive restarts.
+	if rds != nil && rds.Client != nil {
+		memMgr.EnableRedisBacking(rds.Client, "global")
+	}
 	agentExec.SetMemory(&memoryAdapter{mgr: memMgr})
 	slog.Info("agent memory wired", "layers", "working+episodic+semantic")
 
 	go modelRouter.StartHealthChecks(context.Background(), 2*time.Minute)
 
-	// Wire email service
+	// Wire email service — prefer SendGrid over SMTP when configured.
 	var emailSender email.Sender
-	if cfg.SMTP.Host != "" {
+	if cfg.SendGrid.APIKey != "" {
+		emailSender = email.NewSendGridSender(email.SendGridConfig{
+			APIKey:    cfg.SendGrid.APIKey,
+			FromEmail: cfg.SendGrid.FromEmail,
+			FromName:  cfg.SendGrid.FromName,
+		})
+		slog.Info("email sender configured", "provider", "sendgrid")
+	} else if cfg.SMTP.Host != "" {
 		emailSender = email.NewSMTPSender(email.SMTPConfig{
 			Host:     cfg.SMTP.Host,
 			Port:     cfg.SMTP.Port,
@@ -295,10 +306,10 @@ func New(cfg *config.Config) (*Server, error) {
 			From:     cfg.SMTP.From,
 			FromName: cfg.SMTP.FromName,
 		})
-		slog.Info("email sender configured", "host", cfg.SMTP.Host)
+		slog.Info("email sender configured", "provider", "smtp", "host", cfg.SMTP.Host)
 	} else {
 		emailSender = &email.NoOpSender{}
-		slog.Info("email sender: no-op (SMTP not configured)")
+		slog.Info("email sender: no-op (no provider configured)")
 	}
 	// Use Redis-backed token store for email verification tokens (survives restarts)
 	var verificationSvc *email.VerificationService
@@ -357,6 +368,10 @@ func New(cfg *config.Config) (*Server, error) {
 		Validator:    schema.NewValidator(),
 		Compliance:   compliance.NewChecker(),
 		Knowledge:    knowledge.NewGraph(),
+		HITLQueue:    mw.NewHITLQueue(redisClient, 5*time.Minute), // shared with agent via hitlAdapter below
+		PlanRateLimiter: mw.NewPlanAwareRateLimiter(redisClient),
+		UsageMetering: mw.NewUsageMeteringMiddleware(redisClient),
+		QuotaEnforcer:  mw.NewQuotaEnforcer(redisClient),
 		SkillEngine:  skillengine.NewEngine(),
 		Confidence:   confidence.NewEngine(),
 		AttackGraph:  attackgraph.NewEngine(),
@@ -385,6 +400,31 @@ func New(cfg *config.Config) (*Server, error) {
 		r = router.New(opts)
 	}
 	srv.router = r
+
+	// Wire HITL queue into agent so tools requiring approval block until human decides.
+	// Uses the SAME queue instance that was passed to the router via opts.HITLQueue.
+	agentExec.SetHITLQueue(&hitlAdapter{queue: opts.HITLQueue})
+	slog.Info("agent HITL queue wired", "timeout", "5m")
+
+	// Start background event purger (delete events older than 90 days, daily)
+	if db != nil {
+		eventCancel := db.StartEventPurger(context.Background(), 90, 24*time.Hour)
+		oldCleanup := srv.cleanup
+		srv.cleanup = func() {
+			eventCancel() // stop purger
+			if oldCleanup != nil {
+				oldCleanup() // stop telemetry
+			}
+		}
+
+		// Start session cleanup goroutine (expire sessions inactive > 30 min, check every 5 min)
+		sessCancel := sessionRepo.StartStaleSessionCleanup(context.Background(), 30*time.Minute, 5*time.Minute)
+		sessOldCleanup := srv.cleanup
+		srv.cleanup = func() {
+			sessCancel() // stop session cleanup
+			sessOldCleanup() // stop event purger + telemetry
+		}
+	}
 
 	// Start config hot reload watcher
 	hotReload := config.NewHotReloader(cfg)
@@ -447,6 +487,44 @@ func (s *Server) runMigrations() error {
 		migrationsDir = "migrations"
 	}
 	return database.Migrate(context.Background(), s.db.Pool, migrationsDir)
+}
+
+// hitlAdapter bridges middleware.HITLQueue to agent.HITLSubmitter.
+// It converts between the two HITLCheckpointEntry types to avoid import cycles.
+type hitlAdapter struct {
+	queue *mw.HITLQueue
+}
+
+func (h *hitlAdapter) Submit(ctx context.Context, entry *agent.HITLCheckpointEntry) (*agent.HITLCheckpointEntry, error) {
+	mwEntry := &mw.HITLCheckpointEntry{
+		ID:          entry.ID,
+		TaskID:      entry.TaskID,
+		UserID:      entry.UserID,
+		OrgID:       entry.OrgID,
+		StepIndex:   entry.StepIndex,
+		Description: entry.Description,
+		Tool:        entry.Tool,
+		Params:      entry.Params,
+		Options:     entry.Options,
+	}
+
+	result, err := h.queue.Submit(ctx, mwEntry)
+	if err != nil {
+		return nil, err
+	}
+
+	return &agent.HITLCheckpointEntry{
+		ID:          result.ID,
+		TaskID:      result.TaskID,
+		UserID:      result.UserID,
+		OrgID:       result.OrgID,
+		StepIndex:   result.StepIndex,
+		Description: result.Description,
+		Tool:        result.Tool,
+		Params:      result.Params,
+		Options:     result.Options,
+		Status:      result.Status,
+	}, nil
 }
 
 // memoryAdapter bridges memory.Manager to agent.MemoryStore.

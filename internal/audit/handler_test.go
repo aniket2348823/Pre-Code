@@ -103,3 +103,98 @@ func TestHandler_InvalidJSON(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+func TestEngine_NewWithNilTrail(t *testing.T) {
+	eng := NewEngine(nil)
+	if eng.GetTrail() == nil {
+		t.Error("NewEngine(nil) should create default trail")
+	}
+}
+
+func TestEngine_GetTrail(t *testing.T) {
+	store := NewMemoryStore()
+	eng := NewEngine(store)
+	if eng.GetTrail() != store {
+		t.Error("GetTrail should return the trail")
+	}
+}
+
+func TestEngine_TraceByActor(t *testing.T) {
+	store := NewMemoryStore()
+	eng := NewEngine(store)
+	store.Record("alice", "create", "doc-1", true, nil)
+	store.Record("bob", "create", "doc-2", true, nil)
+	resp := eng.Trace(nil, TraceRequest{Actor: "alice"})
+	if resp.Total != 2 {
+		t.Errorf("expected total 2, got %d", resp.Total)
+	}
+	if len(resp.Entries) != 1 {
+		t.Errorf("expected 1 entry for alice, got %d", len(resp.Entries))
+	}
+}
+
+func TestEngine_TraceByEntity(t *testing.T) {
+	store := NewMemoryStore()
+	eng := NewEngine(store)
+	store.Record("user1", "scan", "doc-1", true, nil)
+	store.Record("user1", "critique", "doc-1", true, nil)
+	resp := eng.Trace(nil, TraceRequest{Entity: "scan"})
+	if resp.Total != 2 {
+		t.Errorf("expected total 2, got %d", resp.Total)
+	}
+	if len(resp.Entries) != 1 {
+		t.Errorf("expected 1 entry for scan, got %d", len(resp.Entries))
+	}
+}
+
+func TestEngine_TraceDefaultLimit(t *testing.T) {
+	store := NewMemoryStore()
+	eng := NewEngine(store)
+	for i := 0; i < 100; i++ {
+		store.Record("user", "action", "res", true, nil)
+	}
+	resp := eng.Trace(nil, TraceRequest{})
+	if len(resp.Entries) > 50 {
+		t.Errorf("expected max 50 entries, got %d", len(resp.Entries))
+	}
+}
+
+func TestHandler_Trace_ByActor(t *testing.T) {
+	store := NewMemoryStore()
+	eng := NewEngine(store)
+	store.Record("admin", "delete", "user-123", true, nil)
+	handler := NewHTTPHandler(eng)
+	body, _ := json.Marshal(TraceRequest{Actor: "admin"})
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp TraceResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Total != 1 {
+		t.Errorf("expected 1 action, got %d", resp.Total)
+	}
+}
+
+func TestHandler_Trace_Limit(t *testing.T) {
+	store := NewMemoryStore()
+	eng := NewEngine(store)
+	for i := 0; i < 10; i++ {
+		store.Record("user", "action", "res", true, nil)
+	}
+	handler := NewHTTPHandler(eng)
+	body, _ := json.Marshal(TraceRequest{Limit: 3})
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp TraceResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Entries) > 3 {
+		t.Errorf("expected max 3 entries, got %d", len(resp.Entries))
+	}
+}

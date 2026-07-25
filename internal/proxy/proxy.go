@@ -411,9 +411,15 @@ type baseRequest struct {
 // 3. Routes through ModelRouter for smart routing + failover
 // 4. Optionally runs analysis on code blocks
 func (s *ProxyServer) handleProxyRequest(w http.ResponseWriter, r *http.Request, defaultFormat string) {
-	bodyBytes, err := io.ReadAll(r.Body)
+	// Limit request body to 10MB to prevent OOM on oversized requests.
+	const maxRequestBodySize = 10 << 20 // 10MB
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize+1))
 	if err != nil {
 		http.Error(w, `{"error":"failed to read request body"}`, http.StatusBadRequest)
+		return
+	}
+	if len(bodyBytes) > maxRequestBodySize {
+		http.Error(w, `{"error":"request body too large (max 10MB)"}`, http.StatusRequestEntityTooLarge)
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))

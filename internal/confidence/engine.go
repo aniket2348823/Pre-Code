@@ -44,6 +44,15 @@ func NewEngine() *Engine {
 
 // Score computes a calibrated confidence score from a set of evidence items.
 func (e *Engine) Score(evidence []Evidence) *Score {
+	// Guard against empty evidence (division-by-zero protection).
+	if len(evidence) == 0 {
+		return &Score{
+			Confidence: 0,
+			Grade:      "N/A",
+			Reason:     "No evidence collected",
+		}
+	}
+
 	s := &Score{Evidence: evidence}
 
 	for _, ev := range evidence {

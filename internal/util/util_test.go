@@ -2,44 +2,6 @@ package util
 
 import "testing"
 
-func TestItoa(t *testing.T) {
-	tests := []struct {
-		input int
-		want  string
-	}{
-		{0, "0"},
-		{1, "1"},
-		{42, "42"},
-		{100, "100"},
-		{999, "999"},
-		{12345, "12345"},
-	}
-	for _, tt := range tests {
-		if got := Itoa(tt.input); got != tt.want {
-			t.Errorf("Itoa(%d) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
-func TestJoin(t *testing.T) {
-	tests := []struct {
-		parts []string
-		sep   string
-		want  string
-	}{
-		{nil, ",", ""},
-		{[]string{}, ",", ""},
-		{[]string{"a"}, ",", "a"},
-		{[]string{"a", "b"}, ",", "a,b"},
-		{[]string{"a", "b", "c"}, " | ", "a | b | c"},
-	}
-	for _, tt := range tests {
-		if got := Join(tt.parts, tt.sep); got != tt.want {
-			t.Errorf("Join(%v, %q) = %q, want %q", tt.parts, tt.sep, got, tt.want)
-		}
-	}
-}
-
 // === ContainsWord tests ===
 
 func TestContainsWord_LongKeyword(t *testing.T) {

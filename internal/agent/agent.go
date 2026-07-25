@@ -30,6 +30,26 @@ type MemoryResult struct {
 // The caller (router) uses this to push SSE events to the client.
 type TokenCallback func(taskID string, chunk *llm.ChatChunk)
 
+// HITLSubmitter is the interface the agent uses to submit HITL checkpoints.
+// Satisfied by middleware.HITLQueue.
+type HITLSubmitter interface {
+	Submit(ctx context.Context, entry *HITLCheckpointEntry) (*HITLCheckpointEntry, error)
+}
+
+// HITLCheckpointEntry mirrors middleware.HITLCheckpointEntry for import cycle avoidance.
+type HITLCheckpointEntry struct {
+	ID          string                 `json:"id"`
+	TaskID      string                 `json:"task_id"`
+	UserID      string                 `json:"user_id"`
+	OrgID       string                 `json:"org_id"`
+	StepIndex   int                    `json:"step_index"`
+	Description string                 `json:"description"`
+	Tool        string                 `json:"tool"`
+	Params      map[string]interface{} `json:"params,omitempty"`
+	Options     []string               `json:"options"`
+	Status      string                 `json:"status"`
+}
+
 // Agent orchestrates task execution using LLM providers and tools.
 type Agent struct {
 	router        *llm.ModelRouter
@@ -38,6 +58,7 @@ type Agent struct {
 	maxIter       int
 	memory        MemoryStore
 	tokenCallback TokenCallback
+	hitlQueue     HITLSubmitter
 }
 
 // NewAgent creates a new agent with the given dependencies.
@@ -58,6 +79,13 @@ func (a *Agent) SetMemory(m MemoryStore) {
 // SetTokenCallback attaches a callback for streaming tokens during execution.
 func (a *Agent) SetTokenCallback(cb TokenCallback) {
 	a.tokenCallback = cb
+}
+
+// SetHITLQueue attaches a HITL queue for human-in-the-loop checkpoints.
+// When set, tools requiring HITL will block until a human decides.
+// When nil, HITL-required steps are auto-approved (development mode).
+func (a *Agent) SetHITLQueue(q HITLSubmitter) {
+	a.hitlQueue = q
 }
 
 // TaskResult represents the result of a completed task.
@@ -159,8 +187,17 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 				WaitingSince: time.Now(),
 			}
 			// Transition to waiting_hitl (fires hitl.required webhook)
-			if err := a.transition(task, EventHITLRequired); err == nil {
-				// Auto-approve for now; HITL UX will gate this later
+			if err := a.transition(task, EventHITLRequired); err != nil {
+				slog.Warn("failed to transition to waiting_hitl", "error", err, "task_id", task.ID)
+				continue
+			}
+
+			// If HITL queue is attached, block until human decides or timeout.
+			// If nil (dev mode), auto-approve immediately.
+			if a.hitlQueue != nil {
+				a.waitHITLDecision(ctx, task, i, step)
+			} else {
+				slog.Info("agent: HITL auto-approved (no queue attached)", "task_id", task.ID, "step", i)
 				a.transition(task, EventHITLApproved)
 			}
 		}
@@ -620,6 +657,46 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// waitHITLDecision submits a checkpoint to the HITL queue and blocks
+// until a human decides, the context is cancelled, or the queue timeout fires.
+func (a *Agent) waitHITLDecision(ctx context.Context, task *Task, stepIdx int, step PlanStep) {
+	entry := &HITLCheckpointEntry{
+		ID:          fmt.Sprintf("cp-%s-%d", task.ID, stepIdx),
+		TaskID:      task.ID,
+		UserID:      task.UserID,
+		OrgID:       task.ProjectID,
+		StepIndex:   stepIdx,
+		Description: fmt.Sprintf("Step %d requires human approval: %s", stepIdx, step.Description),
+		Tool:        step.Tool,
+		Params:      step.Params,
+		Options:     []string{"approve", "reject", "modify"},
+	}
+
+	slog.Info("agent: submitting HITL checkpoint", "task_id", task.ID, "step", stepIdx, "checkpoint_id", entry.ID)
+
+	result, err := a.hitlQueue.Submit(ctx, entry)
+	if err != nil {
+		slog.Warn("agent: HITL submit failed, auto-rejecting", "error", err, "task_id", task.ID)
+		a.transition(task, EventHITLRejected)
+		task.Error = fmt.Sprintf("HITL failed: %v", err)
+		return
+	}
+
+	switch result.Status {
+	case "approve":
+		slog.Info("agent: HITL approved", "task_id", task.ID, "step", stepIdx)
+		a.transition(task, EventHITLApproved)
+	case "reject":
+		slog.Info("agent: HITL rejected", "task_id", task.ID, "step", stepIdx)
+		a.transition(task, EventHITLRejected)
+		task.Error = "rejected by human"
+	default:
+		slog.Warn("agent: HITL unknown status, auto-rejecting", "status", result.Status, "task_id", task.ID)
+		a.transition(task, EventHITLRejected)
+		task.Error = fmt.Sprintf("unknown HITL status: %s", result.Status)
+	}
 }
 
 func (a *Agent) executeStep(ctx context.Context, task *Task, step PlanStep) StepResult {

@@ -119,7 +119,6 @@ func TestHTTPStatusMapping(t *testing.T) {
 }
 
 func TestPredefinedErrorCodes(t *testing.T) {
-	// Verify all ErrorCode constants are non-empty and map to valid HTTP statuses
 	codes := []ErrorCode{
 		ErrMissingAuth, ErrInvalidCredentials, ErrTokenExpired, ErrTokenInvalid,
 		ErrAccountLocked, ErrAccountDisabled, ErrInsufficientPerms, ErrEmailNotVerified,
@@ -149,7 +148,7 @@ func TestPredefinedErrorCodes(t *testing.T) {
 
 func TestCustomHTTPStatus(t *testing.T) {
 	err := New(ErrNotFound, "custom status")
-	err.Status = 418 // I'm a teapot
+	err.Status = 418
 	if err.HTTPStatus() != 418 {
 		t.Errorf("expected custom HTTP status 418, got %d", err.HTTPStatus())
 	}
@@ -162,5 +161,20 @@ func TestWithDetailsPreservesCodeAndMessage(t *testing.T) {
 	}
 	if err.Message != "db failed" {
 		t.Errorf("expected message 'db failed', got %q", err.Message)
+	}
+}
+
+func TestHTTPStatusZeroStatusFallsToMap(t *testing.T) {
+	err := New(ErrNotFound, "not found")
+	err.Status = 0
+	if err.HTTPStatus() != 404 {
+		t.Errorf("expected 404 from map lookup when Status=0, got %d", err.HTTPStatus())
+	}
+}
+
+func TestErrorCodeToStatusUnknownCode(t *testing.T) {
+	status := errorCodeToStatus(ErrorCode("UNKNOWN_999"))
+	if status != 500 {
+		t.Errorf("expected default 500 for unknown code, got %d", status)
 	}
 }

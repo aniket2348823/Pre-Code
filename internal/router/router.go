@@ -22,9 +22,10 @@ import (
 	"github.com/vigilagent/vigilagent/internal/slogger"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/internal/webhook"
-	"github.com/vigilagent/vigilagent/pkg/response"
+
 	"github.com/vigilagent/vigilagent/pkg/pagination"
 	"github.com/vigilagent/vigilagent/pkg/query"
+	"github.com/vigilagent/vigilagent/pkg/response"
 	"github.com/vigilagent/vigilagent/pkg/validation"
 )
 
@@ -154,6 +155,17 @@ func (r *Router) setupRoutes() {
 		protected.Use(r.authMiddleware)
 		protected.Use(r.apiKeyRateLimitMiddleware)
 		protected.Use(limitBodySize)
+
+		// Plan-based rate limiting + usage metering + quota enforcement
+		if r.planRateLimiter != nil {
+			protected.Use(r.planRateLimiter.Middleware(r.orgPlanExtractor))
+		}
+		if r.usageMetering != nil {
+			protected.Use(r.usageMetering.Middleware(r.orgPlanExtractor))
+		}
+		if r.quotaEnforcer != nil {
+			protected.Use(r.quotaEnforcer.Middleware(r.orgPlanExtractor))
+		}
 
 		// CSRF protection on all state-changing endpoints
 		if r.csrf != nil {
@@ -311,6 +323,13 @@ func (r *Router) setupRoutes() {
 				admin.Get("/admin/users", r.adminListUsersHandler)
 				admin.Put("/admin/users/{userID}/role", r.adminUpdateUserRoleHandler)
 				admin.Delete("/admin/users/{userID}", r.adminDeleteUserHandler)
+			}
+
+			// HITL queue endpoints
+			if r.hitlQueue != nil {
+				protected.With(mw.RequireScope("tasks:read")).Get("/hitl/pending", r.listHITLCheckpointsHandler)
+				protected.With(mw.RequireScope("tasks:write")).Post("/hitl/decide", r.decideHITLHandler)
+				protected.With(mw.RequireScope("tasks:read")).Get("/hitl/status", r.hitlStatusHandler)
 			}
 
 			protected.Get("/ws", r.handleWebSocket)
@@ -1297,6 +1316,8 @@ func (r *Router) createSessionHandler(w http.ResponseWriter, req *http.Request) 
 		response.JSON(w, apiErr.HTTPStatus(), apiErr)
 		return
 	}
+	// Track active sessions gauge for Grafana dashboard.
+	telemetry.ActiveSessions.WithLabelValues(agent.ProjectID).Inc()
 	if r.webhookEngine != nil {
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
 			Type: "session.created",
@@ -1382,11 +1403,16 @@ func (r *Router) updateSessionHandler(w http.ResponseWriter, req *http.Request) 
 			response.JSON(w, apiErr.HTTPStatus(), apiErr)
 			return
 		}
+		telemetry.ActiveSessions.WithLabelValues(session.ProjectID).Dec()
 	} else {
 		if err := r.sessions.Update(req.Context(), sessionID, input.Status); err != nil {
 			apiErr := apperrors.New(apperrors.ErrDBError, "failed to update session")
 			response.JSON(w, apiErr.HTTPStatus(), apiErr)
 			return
+		}
+		// Decrement active sessions gauge on terminal states.
+		if input.Status == "completed" || input.Status == "failed" {
+			telemetry.ActiveSessions.WithLabelValues(session.ProjectID).Dec()
 		}
 	}
 	if r.webhookEngine != nil {

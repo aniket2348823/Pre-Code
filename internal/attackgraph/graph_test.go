@@ -1,7 +1,11 @@
 package attackgraph
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -90,6 +94,9 @@ func TestEngine_InferEntity(t *testing.T) {
 		{"Authentication service", "auth"},
 		{"User management", "user"},
 		{"REST API endpoints", "api"},
+		{"Database connection pool", "database"},
+		{"Login page redesign", "auth"},
+		{"db migration script", "database"},
 		{"General application", "general"},
 	}
 
@@ -176,5 +183,183 @@ func TestEngine_Metadata(t *testing.T) {
 	}
 	if resp.Metadata["entity"] == "" {
 		t.Error("metadata should include entity")
+	}
+}
+
+func TestGenericPath_Direct(t *testing.T) {
+	result := genericPath(FindingsRequest{Findings: nil})
+	if result != nil {
+		t.Error("nil findings should return nil")
+	}
+}
+
+func TestGenericPath_WithData(t *testing.T) {
+	result := genericPath(FindingsRequest{
+		Findings: []FindingInput{{Title: "XSS vulnerability", Severity: "high"}},
+	})
+	if result == nil {
+		t.Fatal("expected generic path")
+	}
+	if result.ID != "generic-exploitation" {
+		t.Errorf("expected generic ID, got %s", result.ID)
+	}
+	if len(result.Steps) != 3 {
+		t.Errorf("expected 3 steps, got %d", len(result.Steps))
+	}
+}
+
+func TestSummarize_Empty(t *testing.T) {
+	engine := NewEngine()
+	s := engine.summarize(nil, "api")
+	if s != "No attack paths identified" {
+		t.Errorf("expected no attack paths, got %q", s)
+	}
+}
+
+func TestMatchesRule_EmptyRule(t *testing.T) {
+	r := graphRule{}
+	f := FindingInput{Title: "test"}
+	if !matchesRule(r, "anything", f) {
+		t.Error("empty rule should match everything")
+	}
+}
+
+func TestMatchesRule_EntityMismatch(t *testing.T) {
+	r := graphRule{entity: "payment"}
+	f := FindingInput{Title: "test"}
+	if matchesRule(r, "auth", f) {
+		t.Error("entity mismatch should not match")
+	}
+}
+
+func TestMatchesRule_FindingMismatch(t *testing.T) {
+	r := graphRule{finding: "sql injection"}
+	f := FindingInput{Title: "xss vulnerability"}
+	if matchesRule(r, "payment", f) {
+		t.Error("finding mismatch should not match")
+	}
+}
+
+func TestBuildPath(t *testing.T) {
+	r := graphRule{
+		pathName: "Test Path",
+		impact:   "high",
+		severity: "critical",
+		steps:    []AttackStep{{Index: 1, Action: "step1"}},
+	}
+	f := FindingInput{Title: "finding1"}
+	path := buildPath(r, f)
+	if path.Name != "Test Path" {
+		t.Errorf("expected Test Path, got %s", path.Name)
+	}
+	if path.ID != "test-path" {
+		t.Errorf("expected test-path, got %s", path.ID)
+	}
+}
+
+func TestHandler_EmptyBody(t *testing.T) {
+	handler := NewHTTPHandler(NewEngine())
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("{}")))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestHandler_MultipleFindings(t *testing.T) {
+	handler := NewHTTPHandler(NewEngine())
+	body, _ := json.Marshal(FindingsRequest{
+		Description: "Payment API",
+		Findings: []FindingInput{
+			{Title: "SQL Injection in payment", Severity: "critical"},
+			{Title: "Hardcoded secret in payment", Severity: "high"},
+		},
+		Entity: "payment",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp GraphResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Paths) < 1 {
+		t.Error("expected at least 1 path")
+	}
+}
+
+func TestHandler_BrokenAuth_InferEntity(t *testing.T) {
+	handler := NewHTTPHandler(NewEngine())
+	body, _ := json.Marshal(FindingsRequest{
+		Description: "Login page with broken auth",
+		Findings: []FindingInput{
+			{Title: "Broken authentication", Severity: "critical"},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+	var resp GraphResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if len(resp.Paths) != 1 {
+		t.Errorf("expected 1 path for broken auth, got %d", len(resp.Paths))
+	}
+}
+
+func TestEngine_CredentialLeak(t *testing.T) {
+	engine := NewEngine()
+	ctx := context.Background()
+	req := FindingsRequest{
+		Description: "Auth system",
+		Findings: []FindingInput{
+			{Title: "Credential leak in logs", Severity: "high"},
+		},
+		Entity: "auth",
+	}
+	resp := engine.Generate(ctx, req)
+	if len(resp.Paths) != 1 {
+		t.Errorf("expected 1 path, got %d", len(resp.Paths))
+	}
+}
+
+func TestEngine_APIRateLimit(t *testing.T) {
+	engine := NewEngine()
+	ctx := context.Background()
+	req := FindingsRequest{
+		Description: "API gateway",
+		Findings: []FindingInput{
+			{Title: "Missing rate limit on login", Severity: "high"},
+		},
+		Entity: "api",
+	}
+	resp := engine.Generate(ctx, req)
+	if len(resp.Paths) != 1 {
+		t.Errorf("expected 1 path, got %d", len(resp.Paths))
+	}
+}
+
+func TestEngine_DuplicatePathDedup(t *testing.T) {
+	engine := NewEngine()
+	ctx := context.Background()
+	req := FindingsRequest{
+		Description: "Payment system",
+		Findings: []FindingInput{
+			{Title: "SQL Injection in payment", Severity: "critical"},
+			{Title: "SQL Injection in checkout", Severity: "critical"},
+		},
+		Entity: "payment",
+	}
+	resp := engine.Generate(ctx, req)
+	seen := map[string]bool{}
+	for _, p := range resp.Paths {
+		if seen[p.ID] {
+			t.Errorf("duplicate path ID: %s", p.ID)
+		}
+		seen[p.ID] = true
 	}
 }
