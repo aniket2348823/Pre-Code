@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { VigilAgentClient, ReviewResult } from './client';
+import { VigilAgentClient } from './client';
 
 export class VigilAgentChatParticipant {
     private client: VigilAgentClient;
@@ -60,7 +60,7 @@ export class VigilAgentChatParticipant {
     private async handleScan(
         action: { code?: string; language?: string; filename?: string },
         stream: vscode.ChatResponseStream,
-        token: vscode.CancellationToken
+        _token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> {
         // Check if API keys are configured
         if (!(await this.client.isConfigured())) {
@@ -98,7 +98,7 @@ export class VigilAgentChatParticipant {
     private async handleVerify(
         action: { code?: string; language?: string; filename?: string },
         stream: vscode.ChatResponseStream,
-        token: vscode.CancellationToken
+        _token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> {
         // Check if API keys are configured
         if (!(await this.client.isConfigured())) {
@@ -135,7 +135,7 @@ export class VigilAgentChatParticipant {
     private async handleGeneral(
         prompt: string,
         stream: vscode.ChatResponseStream,
-        token: vscode.CancellationToken
+        _token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> {
         const editor = vscode.window.activeTextEditor;
         

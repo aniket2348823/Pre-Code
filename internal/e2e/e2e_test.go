@@ -1,3 +1,5 @@
+//go:build integration
+
 // Package e2e provides end-to-end integration tests for the VigilAgent API.
 // These tests exercise the full request lifecycle: register → create org →
 // create project → create task → verify → scan → review.

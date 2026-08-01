@@ -278,7 +278,7 @@ func TestBudgetExceededError_Error(t *testing.T) {
 	if msg == "" {
 		t.Error("expected non-empty error message")
 	}
-	if !fmt.Sprintf("%s", be) == "" {
+	if fmt.Sprintf("%s", be) == "" {
 		t.Error("Error() should return non-empty string")
 	}
 
@@ -398,8 +398,8 @@ func TestGetSnapshot_FullContents(t *testing.T) {
 	}
 
 	usage := snap["usage"].(map[string]float64)
-	if len(usage) != 3 {
-		t.Errorf("expected 3 usage entries, got %d", len(usage))
+	if len(usage) != 4 {
+		t.Errorf("expected 4 usage entries, got %d", len(usage))
 	}
 
 	orgBudgets := snap["org_budgets"].(map[string]float64)

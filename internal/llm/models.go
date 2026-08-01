@@ -84,12 +84,18 @@ func FindModel(modelID string) *ModelCatalogEntry {
 
 func ProviderByKeyPrefix(key string) *ProviderInfo {
 	ensureProviderCatalog()
+	var best *ProviderInfo
+	bestLen := 0
 	for _, cat := range providerCatalog {
 		if len(cat.Provider.KeyPrefix) > 0 && hasPrefix(key, cat.Provider.KeyPrefix) {
-			return &cat.Provider
+			if len(cat.Provider.KeyPrefix) > bestLen {
+				bestLen = len(cat.Provider.KeyPrefix)
+				info := cat.Provider
+				best = &info
+			}
 		}
 	}
-	return nil
+	return best
 }
 
 func GetFullCatalog() []*ProviderCatalog {

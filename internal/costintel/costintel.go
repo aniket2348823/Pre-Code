@@ -271,11 +271,17 @@ func (e *Engine) ForecastCost(days int) *CostForecast {
 		dc.count++
 	}
 
-	dailyCosts := make([]float64, 0, len(dailyMap))
-	for _, dc := range dailyMap {
-		dailyCosts = append(dailyCosts, dc.cost)
+	// Sort dates chronologically so linear regression respects time order.
+	dateKeys := make([]string, 0, len(dailyMap))
+	for k := range dailyMap {
+		dateKeys = append(dateKeys, k)
 	}
-	sort.Float64s(dailyCosts)
+	sort.Strings(dateKeys)
+
+	dailyCosts := make([]float64, 0, len(dateKeys))
+	for _, k := range dateKeys {
+		dailyCosts = append(dailyCosts, dailyMap[k].cost)
+	}
 
 	// Simple linear trend
 	n := float64(len(dailyCosts))

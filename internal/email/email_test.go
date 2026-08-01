@@ -1181,6 +1181,7 @@ func TestRedisTokenStore_VerificationService_Integration(t *testing.T) {
 
 	client := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 	defer client.Close()
+	ctx := context.Background()
 	store := NewRedisTokenStore(client, time.Minute)
 	sender := &NoOpSender{}
 	vs := NewVerificationServiceWithRedis(sender, store)

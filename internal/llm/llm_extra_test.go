@@ -928,7 +928,7 @@ func TestOpenAI_Stream_ErrorMidStream(t *testing.T) {
 			},
 		}
 		b, _ := json.Marshal(ev)
-		w.Write(b)
+		fmt.Fprintf(w, "data: %s\n\n", b)
 		flusher.Flush()
 		// Close connection to trigger error
 		hj, ok := w.(http.Hijacker)

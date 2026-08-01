@@ -205,7 +205,7 @@ async function configureProviderWizard(context: vscode.ExtensionContext): Promis
         .filter(m => !m.deprecated)
         .map(m => {
             const caps = m.capabilities.length > 0 ? m.capabilities.join(', ') : 'basic';
-            const cost = `$${m.input_cost_per_1M.toFixed(2)} / $${m.output_cost_per_1M.toFixed(2)} per 1M tokens`;
+            const cost = `$${m.input_cost_per_1m.toFixed(2)} / $${m.output_cost_per_1m.toFixed(2)} per 1M tokens`;
             const ctx = formatContextWindow(m.context_window);
             return {
                 label: m.name,

@@ -140,11 +140,7 @@ func (h *HealthMonitor) RecordSuccess(name string, latency time.Duration) {
 	}
 
 	health.ConsecutiveFails = 0
-	if health.ErrorRate-0.05 > 0 {
-		health.ErrorRate -= 0.05
-	} else {
-		health.ErrorRate = 0
-	}
+	health.ErrorRate = 0
 	health.LastChecked = time.Now()
 
 	// Maintain a ring buffer of the last 100 latencies for P50 computation

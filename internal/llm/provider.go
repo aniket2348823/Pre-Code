@@ -474,9 +474,29 @@ func (r *ModelRouter) ExecuteWithFailover(ctx context.Context, task *Task) (*Cha
 	attempts := []FallbackOption{{Provider: decision.Provider, Model: decision.Model, EstCost: decision.EstCost}}
 	attempts = append(attempts, decision.Fallbacks...)
 
+	tried := make(map[string]bool, len(attempts))
 	var lastErr error
 	for _, a := range attempts {
+		tried[a.Provider] = true
 		resp, err := r.attempt(ctx, task, a)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+	}
+
+	// Fallback: try any healthy registered providers not already attempted.
+	r.mu.RLock()
+	var remaining []string
+	for name := range r.providers {
+		if !tried[name] {
+			remaining = append(remaining, name)
+		}
+	}
+	r.mu.RUnlock()
+
+	for _, name := range remaining {
+		resp, err := r.attempt(ctx, task, FallbackOption{Provider: name})
 		if err == nil {
 			return resp, nil
 		}

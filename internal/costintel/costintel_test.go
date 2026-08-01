@@ -590,8 +590,8 @@ func TestSetBudget_DefaultAlertAt(t *testing.T) {
 		LimitUSD: 100.0,
 	})
 
-	b, ok := e.CheckBudget("b1")
-	if !ok {
+	b, _ := e.CheckBudget("b1")
+	if b == nil {
 		t.Fatal("expected budget to exist")
 	}
 	if b.AlertAt != 0.8 {
@@ -941,7 +941,7 @@ func TestTotalCost_MultipleRecords(t *testing.T) {
 	e.RecordCost(CostRecord{ID: "r1", CostUSD: 0.1})
 	e.RecordCost(CostRecord{ID: "r2", CostUSD: 0.2})
 	e.RecordCost(CostRecord{ID: "r3", CostUSD: 0.3})
-	if e.TotalCost() != 0.6 {
+	if math.Abs(e.TotalCost()-0.6) > 1e-9 {
 		t.Errorf("expected 0.6, got %f", e.TotalCost())
 	}
 }
