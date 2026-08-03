@@ -3,8 +3,11 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -15,9 +18,41 @@ type ProviderConfig struct {
 	APIKey  string
 }
 
+// validateTargetURL parses the URL, resolves its host, and rejects
+// loopback / private / unspecified addresses (SSRF guard).
+func validateTargetURL(rawURL string) error {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("unsupported URL scheme: %s", parsedURL.Scheme)
+	}
+	host := parsedURL.Hostname()
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return fmt.Errorf("failed to resolve host: %s", host)
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("disallowed target IP: %s", ip)
+		}
+		if ip.IsPrivate() {
+			return fmt.Errorf("disallowed target IP: %s", ip)
+		}
+	}
+	return nil
+}
+
 // RouteRequest determines the provider from the model name prefix.
 // Used as fallback when no BYOK header is provided.
 func RouteRequest(model string, cfg *Config) *ProviderConfig {
+	if model == "mock" || model == "test" || strings.HasPrefix(model, "mock") {
+		return &ProviderConfig{Name: "mock", BaseURL: "http://localhost:8080", APIKey: "mock-key"}
+	}
+	if cfg.OpenRouterKey != "" && (strings.Contains(model, "/") || strings.HasSuffix(model, ":free")) {
+		return &ProviderConfig{Name: "openrouter", BaseURL: "https://openrouter.ai/api", APIKey: cfg.OpenRouterKey}
+	}
 	switch {
 	case strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o1-") || strings.HasPrefix(model, "o3-") || strings.HasPrefix(model, "o4-") || strings.HasPrefix(model, "gpt-4.5"):
 		return &ProviderConfig{Name: "openai", BaseURL: "https://api.openai.com", APIKey: cfg.OpenAIKey}
@@ -25,6 +60,8 @@ func RouteRequest(model string, cfg *Config) *ProviderConfig {
 		return &ProviderConfig{Name: "anthropic", BaseURL: "https://api.anthropic.com", APIKey: cfg.AnthropicKey}
 	case strings.HasPrefix(model, "gemini-"):
 		return &ProviderConfig{Name: "gemini", BaseURL: "https://generativelanguage.googleapis.com", APIKey: cfg.GeminiKey}
+	case strings.HasSuffix(model, ":free") || (cfg.OpenRouterKey != "" && strings.Contains(model, "/")):
+		return &ProviderConfig{Name: "openrouter", BaseURL: "https://openrouter.ai/api", APIKey: cfg.OpenRouterKey}
 	case strings.HasPrefix(model, "kimi-") || strings.HasPrefix(model, "deepseek-") || strings.HasPrefix(model, "nvidia/") || strings.HasPrefix(model, "meta/") || strings.HasPrefix(model, "mistralai/") || strings.HasPrefix(model, "moonshotai/") || strings.HasPrefix(model, "qwen/"):
 		return &ProviderConfig{Name: "nvidia", BaseURL: "https://build.nvidia.com", APIKey: cfg.NVIDIAKey}
 	case strings.HasPrefix(model, "llama-") || strings.HasPrefix(model, "mixtral-") || strings.HasPrefix(model, "gemma"):
@@ -43,10 +80,9 @@ func RouteRequest(model string, cfg *Config) *ProviderConfig {
 
 // forwardToProvider sends the request to the real LLM provider and returns the raw response.
 func forwardToProvider(ctx context.Context, client *http.Client, provider *ProviderConfig, requestBody []byte, path string) ([]byte, error) {
-	// Map path: /v1/chat/completions -> provider-specific path
-	url := provider.BaseURL + path
+	rawURL := provider.BaseURL + path
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", rawURL, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +90,7 @@ func forwardToProvider(ctx context.Context, client *http.Client, provider *Provi
 
 	// Set auth headers based on provider
 	switch provider.Name {
-	case "openai", "nvidia", "groq", "mistral", "openrouter":
+	case "openai", "nvidia", "groq", "mistral", "openrouter", "deepseek":
 		req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	case "anthropic":
 		req.Header.Set("x-api-key", provider.APIKey)
@@ -71,5 +107,5 @@ func forwardToProvider(ctx context.Context, client *http.Client, provider *Provi
 	}
 	defer resp.Body.Close()
 
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB limit
 }

@@ -107,10 +107,15 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 			}
 		}()
 		bgCtx := context.Background()
+		var orgID string
+		if proj, err := r.projects.FindByID(bgCtx, task.ProjectID); err == nil {
+			orgID = proj.OrgID
+		}
 		agentTask := &agent.Task{
 			ID:            task.ID,
 			UserID:        task.UserID,
 			ProjectID:     task.ProjectID,
+			OrgID:         orgID,
 			Title:         task.Prompt,
 			Description:   task.Prompt,
 			MaxIterations: task.MaxIterations,

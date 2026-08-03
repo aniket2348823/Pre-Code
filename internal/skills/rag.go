@@ -221,8 +221,13 @@ func (r *RAGEngine) vectorSearch(ctx context.Context, embedding pgvector.Vector,
 	args := []interface{}{embedding}
 	argIdx := 2
 
-	if query.Language != "" {
+	if query.Category != "" {
 		where += fmt.Sprintf(" AND s.category = $%d", argIdx)
+		args = append(args, query.Category)
+		argIdx++
+	}
+	if query.Language != "" {
+		where += fmt.Sprintf(" AND s.language = $%d", argIdx)
 		args = append(args, query.Language)
 		argIdx++
 	}
@@ -278,8 +283,13 @@ func (r *RAGEngine) bm25Search(ctx context.Context, query string, sq SearchQuery
 	args := []interface{}{tsQuery}
 	argIdx := 2
 
-	if sq.Language != "" {
+	if sq.Category != "" {
 		where += fmt.Sprintf(" AND category = $%d", argIdx)
+		args = append(args, sq.Category)
+		argIdx++
+	}
+	if sq.Language != "" {
+		where += fmt.Sprintf(" AND language = $%d", argIdx)
 		args = append(args, sq.Language)
 		argIdx++
 	}

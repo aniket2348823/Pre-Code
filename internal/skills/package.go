@@ -17,6 +17,11 @@ import (
 	"time"
 )
 
+const (
+	maxExtractSize     = 100 << 20 // 100 MB per file
+	maxTotalExtractSize = 500 << 20 // 500 MB total
+)
+
 // SkillPackage represents a distributable skill package.
 type SkillPackage struct {
 	Manifest  *Manifest `json:"manifest"`
@@ -124,6 +129,7 @@ func ExtractPackage(data []byte, destDir string) (*Manifest, error) {
 
 	tr := tar.NewReader(gr)
 	var manifest *Manifest
+	var totalBytes int64
 
 	for {
 		header, err := tr.Next()
@@ -150,15 +156,25 @@ func ExtractPackage(data []byte, destDir string) (*Manifest, error) {
 				return nil, err
 			}
 
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			mode := os.FileMode(header.Mode) & 0755 &^ (os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
 				return nil, err
 			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+			n, err := io.Copy(f, io.LimitReader(tr, maxExtractSize+1))
+			f.Close()
+			if err != nil {
 				return nil, err
 			}
-			f.Close()
+			if n > maxExtractSize {
+				os.Remove(target)
+				return nil, fmt.Errorf("extraction exceeds %d byte limit per file", maxExtractSize)
+			}
+
+			totalBytes += n
+			if totalBytes > maxTotalExtractSize {
+				return nil, fmt.Errorf("total extraction exceeds %d byte limit", maxTotalExtractSize)
+			}
 
 			// Parse manifest
 			if name == "manifest.json" {

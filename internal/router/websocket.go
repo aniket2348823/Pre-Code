@@ -1,7 +1,6 @@
 package router
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -47,7 +46,7 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 	// Return a simple message directing clients to the SSE endpoint.
 	response.JSON(w, http.StatusOK, map[string]interface{}{
 		"message": "VigilAgent uses SSE for real-time streaming, not WebSocket.",
-		"sse_endpoint": fmt.Sprintf("/api/v1/tasks/{taskID}/stream"),
+		"sse_endpoint": "/api/v1/tasks/{taskID}/stream",
 		"usage": "GET /api/v1/tasks/{taskID}/stream with Authorization: Bearer <token>",
 		"events": []string{"task_update", "task_planning", "task_executing", "task_completed", "task_failed", "hitl_decision", "heartbeat"},
 		"timestamp": time.Now().UTC().Format(time.RFC3339),

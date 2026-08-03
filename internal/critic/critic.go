@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vigilagent/vigilagent/internal/llm"
@@ -89,7 +88,6 @@ func DefaultConfig() *Config {
 type Pipeline struct {
 	router *llm.ModelRouter
 	config *Config
-	mu     sync.RWMutex
 }
 
 // NewPipeline creates a critic pipeline with the given router and config.

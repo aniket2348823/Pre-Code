@@ -154,6 +154,7 @@ type Task struct {
 	Messages             []Message
 	Complexity           Complexity
 	RequiredCapabilities []string
+	TargetModel          string
 }
 
 // RoutingDecision represents the result of model routing.
@@ -372,7 +373,11 @@ func (r *ModelRouter) rankCandidates(task *Task, healthy []string, complexity Co
 	estOutput := r.config.DefaultOutputTokens
 
 	var candidates []RoutingCandidate
-	for _, model := range r.getModelsForComplexity(complexity) {
+	modelsToConsider := r.getModelsForComplexity(complexity)
+	if task.TargetModel != "" {
+		modelsToConsider = append([]string{task.TargetModel}, modelsToConsider...)
+	}
+	for _, model := range modelsToConsider {
 		info, ok := prices[model]
 		if !ok {
 			continue

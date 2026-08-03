@@ -117,7 +117,10 @@ func (e *Engine) MatchPattern(code string, language string) []MatchResult {
 func (e *Engine) GetPatternsByCategory(category string) []*Pattern {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.categoryIndex[category]
+	src := e.categoryIndex[category]
+	out := make([]*Pattern, len(src))
+	copy(out, src)
+	return out
 }
 
 // GetAllPatterns returns all patterns sorted by usage count.

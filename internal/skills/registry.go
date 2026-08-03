@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -74,6 +75,7 @@ type UserSkill struct {
 
 // Registry manages skills in the marketplace.
 type Registry struct {
+	mu     sync.RWMutex
 	skills map[string]*Skill
 }
 
@@ -86,17 +88,23 @@ func NewRegistry() *Registry {
 
 // Register adds a skill to the registry.
 func (r *Registry) Register(skill *Skill) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.skills[skill.ID] = skill
 }
 
 // Get retrieves a skill by ID.
 func (r *Registry) Get(id string) (*Skill, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	skill, ok := r.skills[id]
 	return skill, ok
 }
 
 // List returns all published skills sorted by install count descending.
 func (r *Registry) List(category string, limit int) []*Skill {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var result []*Skill
 	for _, skill := range r.skills {
 		if !skill.IsPublished {
@@ -118,6 +126,8 @@ func (r *Registry) List(category string, limit int) []*Skill {
 
 // Search finds skills by text query.
 func (r *Registry) Search(query string, limit int) []*Skill {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var result []*Skill
 	queryLower := strings.ToLower(query)
 	for _, skill := range r.skills {

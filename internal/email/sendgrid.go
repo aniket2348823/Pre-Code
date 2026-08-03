@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -54,20 +55,23 @@ func NewSendGridSender(cfg SendGridConfig) *SendGridSender {
 	}
 }
 
+func maskAPIKey(key string) string {
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "****" + key[len(key)-4:]
+}
+
 // Send implements the Sender interface.
 // The VerificationService constructs the full Message (with correct token URLs)
 // before calling this method.
 // Supports multipart: sends both plain text and HTML when both are provided.
 func (s *SendGridSender) Send(ctx context.Context, msg *Message) error {
-	to := ""
-	if len(msg.To) > 0 {
-		to = msg.To[0]
-	}
-	return s.sendWithRetry(ctx, to, msg.Subject, msg.Body, msg.HTMLBody, "")
+	return s.sendWithRetry(ctx, msg.To, msg.Subject, msg.Body, msg.HTMLBody, "")
 }
 
 // sendWithRetry sends an email with retry logic.
-func (s *SendGridSender) sendWithRetry(ctx context.Context, to, subject, body, htmlBody string, templateName string) error {
+func (s *SendGridSender) sendWithRetry(ctx context.Context, to []string, subject, body, htmlBody string, templateName string) error {
 	var lastErr error
 	for attempt := 0; attempt < s.cfg.MaxRetries; attempt++ {
 		if err := s.send(ctx, to, subject, body, htmlBody, templateName); err != nil {
@@ -91,7 +95,7 @@ func (s *SendGridSender) sendWithRetry(ctx context.Context, to, subject, body, h
 
 // send sends a single email via SendGrid API.
 // Supports multipart: sends both plain text and HTML when htmlBody is provided.
-func (s *SendGridSender) send(ctx context.Context, to, subject, body, htmlBody string, templateName string) error {
+func (s *SendGridSender) send(ctx context.Context, to []string, subject, body, htmlBody string, templateName string) error {
 	// Build content array — plain text first, then HTML if provided.
 	content := []map[string]string{
 		{
@@ -106,13 +110,16 @@ func (s *SendGridSender) send(ctx context.Context, to, subject, body, htmlBody s
 		})
 	}
 
+	toAddresses := make([]map[string]string, len(to))
+	for i, addr := range to {
+		toAddresses[i] = map[string]string{"email": addr}
+	}
+
 	// Build SendGrid v3 mail send payload
 	payload := map[string]interface{}{
 		"personalizations": []map[string]interface{}{
 			{
-				"to": []map[string]string{
-					{"email": to},
-				},
+				"to":      toAddresses,
 				"subject": subject,
 			},
 		},
@@ -149,6 +156,6 @@ func (s *SendGridSender) send(ctx context.Context, to, subject, body, htmlBody s
 
 	// Read error response for better diagnostics
 	respBody, _ := io.ReadAll(resp.Body)
-	return fmt.Errorf("sendgrid API error (status %d): %s", resp.StatusCode, string(respBody))
+	return fmt.Errorf("sendgrid API error (status %d): %s", resp.StatusCode, strings.ReplaceAll(string(respBody), s.cfg.APIKey, maskAPIKey(s.cfg.APIKey)))
 }
 

@@ -55,9 +55,11 @@ type AgentRepositoryInterface interface {
 type SessionRepositoryInterface interface {
 	Create(ctx context.Context, session *Session) error
 	FindByID(ctx context.Context, id string) (*Session, error)
+	ListByUser(ctx context.Context, userID string) ([]Session, error)
 	ListByAgent(ctx context.Context, agentID string) ([]Session, error)
 	Update(ctx context.Context, id, status string) error
 	EndSession(ctx context.Context, id string) error
+	InvalidateSession(ctx context.Context, id, userID string) error
 }
 
 // EventRepositoryInterface defines the interface for event data access.

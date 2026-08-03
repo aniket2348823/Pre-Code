@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,7 +34,7 @@ type Endpoint struct {
 	ID        string    `json:"id"`
 	UserID    string    `json:"user_id"`
 	URL       string    `json:"url"`
-	Secret    string    `json:"secret,omitempty"`
+	Secret    string    `json:"-"`
 	Events    []string  `json:"events"`
 	Active    bool      `json:"active"`
 	CreatedAt time.Time `json:"created_at"`
@@ -59,6 +60,7 @@ type Engine struct {
 	cache       []Endpoint
 	cacheExpiry time.Time
 	validator   *SSRFValidator
+	mu          sync.RWMutex
 }
 
 // NewEngine creates a DB-backed webhook engine.
@@ -75,6 +77,9 @@ func NewEngine(pool *pgxpool.Pool) *Engine {
 
 // Register inserts a new webhook endpoint into the database.
 func (e *Engine) Register(ctx context.Context, ep *Endpoint) error {
+	if err := e.ValidateEndpoint(ctx, ep.URL); err != nil {
+		return fmt.Errorf("SSRF validation failed: %w", err)
+	}
 	query := `
 		INSERT INTO webhook_endpoints (user_id, url, secret, events, is_active)
 		VALUES ($1, $2, $3, $4, $5)
@@ -180,19 +185,30 @@ func (e *Engine) ListAllEndpoints(ctx context.Context) ([]Endpoint, error) {
 // cachedEndpoints returns endpoints from a 30-second in-memory cache to avoid
 // hitting the DB on every Dispatch call.
 func (e *Engine) cachedEndpoints(ctx context.Context) ([]Endpoint, error) {
+	e.mu.RLock()
 	if time.Now().Before(e.cacheExpiry) && e.cache != nil {
-		return e.cache, nil
+		cached := e.cache
+		e.mu.RUnlock()
+		return cached, nil
 	}
+	e.mu.RUnlock()
+
 	endpoints, err := e.ListAllEndpoints(ctx)
-	if err != nil && e.cache != nil {
-		slog.Warn("webhook: using stale endpoint cache", "error", err)
-		return e.cache, nil
-	}
 	if err != nil {
+		e.mu.RLock()
+		stale := e.cache
+		e.mu.RUnlock()
+		if stale != nil {
+			slog.Warn("webhook: using stale endpoint cache", "error", err)
+			return stale, nil
+		}
 		return nil, err
 	}
+
+	e.mu.Lock()
 	e.cache = endpoints
 	e.cacheExpiry = time.Now().Add(30 * time.Second)
+	e.mu.Unlock()
 	return endpoints, nil
 }
 
@@ -224,6 +240,11 @@ func (e *Engine) Dispatch(ctx context.Context, event Event) {
 
 // deliver sends a single webhook with retries and records the result in DB.
 func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCount int) {
+	if err := e.ValidateEndpoint(ctx, ep.URL); err != nil {
+		slog.Error("webhook: SSRF validation failed at delivery", "error", err, "endpoint_id", ep.ID)
+		return
+	}
+
 	payload, err := json.Marshal(event)
 	if err != nil {
 		slog.Error("webhook: failed to marshal event", "error", err, "endpoint_id", ep.ID)

@@ -25,6 +25,7 @@ type Limiter struct {
 	maxTokens  float64
 	refillRate float64
 	buckets    map[string]*windowBucket
+	stopCleanup chan struct{}
 }
 
 // windowBucket tracks requests for a specific key in a window.
@@ -36,14 +37,17 @@ type windowBucket struct {
 
 // NewLimiter creates a rate limiter.
 func NewLimiter(algorithm Algorithm, limit int, window time.Duration) *Limiter {
-	return &Limiter{
-		algorithm:  algorithm,
-		limit:      limit,
-		window:     window,
-		maxTokens:  float64(limit),
-		refillRate: float64(limit) / window.Seconds(),
-		buckets:    make(map[string]*windowBucket),
+	l := &Limiter{
+		algorithm:   algorithm,
+		limit:       limit,
+		window:      window,
+		maxTokens:   float64(limit),
+		refillRate:  float64(limit) / window.Seconds(),
+		buckets:     make(map[string]*windowBucket),
+		stopCleanup: make(chan struct{}),
 	}
+	go l.cleanup()
+	return l
 }
 
 // Allow checks if a request is allowed under the rate limit.
@@ -152,11 +156,38 @@ func (l *Limiter) Stats() map[string]interface{} {
 	}
 }
 
+// cleanup removes stale buckets periodically.
+func (l *Limiter) cleanup() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-l.stopCleanup:
+			return
+		case <-ticker.C:
+			l.mu.Lock()
+			now := time.Now()
+			for k, b := range l.buckets {
+				// Remove buckets that haven't been accessed in 1 hour
+				if now.Sub(b.lastRefill) > 1*time.Hour {
+					delete(l.buckets, k)
+				}
+			}
+			l.mu.Unlock()
+		}
+	}
+}
+
 // Reset clears all rate limit state.
 func (l *Limiter) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.buckets = make(map[string]*windowBucket)
+}
+
+// Stop stops the background cleanup goroutine.
+func (l *Limiter) Stop() {
+	close(l.stopCleanup)
 }
 
 // ResetKey clears rate limit state for a specific key.

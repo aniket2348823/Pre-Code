@@ -137,10 +137,13 @@ func TestValidatePrefix(t *testing.T) {
 	})
 }
 
-func TestGenerateKey_LongPrefixBcryptError(t *testing.T) {
+func TestGenerateKey_LongPrefixNoBcryptError(t *testing.T) {
 	svc := NewAPIKeyService(strings.Repeat("a", 9))
-	_, _, _, err := svc.GenerateKey()
-	if err == nil {
-		t.Fatal("expected error for key exceeding bcrypt password length limit")
+	plaintext, hashed, _, err := svc.GenerateKey()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !svc.VerifyKey(plaintext, hashed) {
+		t.Fatal("key with long prefix should verify after SHA-256 pre-hashing")
 	}
 }

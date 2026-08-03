@@ -5,9 +5,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vigilagent/vigilagent/internal/llm"
@@ -44,7 +45,7 @@ func (s *ProxyServer) handleStreaming(
 	// Stream through ModelRouter with smart failover
 	streamResult, err := modelRouter.StreamWithFailover(r.Context(), task)
 	if err != nil {
-		log.Printf("ModelRouter streaming failed: %v, falling back to direct forward", err)
+		slog.Warn("model router streaming failed, falling back", "error", err)
 		s.handleStreamingDirect(w, r, requestBody, defaultFormat)
 		return
 	}
@@ -69,7 +70,7 @@ func (s *ProxyServer) handleStreaming(
 	for chunk := range streamResult.Ch {
 		if chunk.Content != "" {
 			if fullContent.Len()+len(chunk.Content) > maxStreamContent {
-				log.Printf("streaming: content limit reached (%d bytes), stopping accumulation", maxStreamContent)
+				slog.Info("streaming content limit reached", "bytes", maxStreamContent)
 				break
 			}
 			fullContent.WriteString(chunk.Content)
@@ -98,23 +99,53 @@ func (s *ProxyServer) handleStreaming(
 		}
 	}
 
-	// Run analysis on accumulated content
+	// Run dual-engine analysis on accumulated content
 	analysisMode := r.Header.Get("X-VigilAgent-Mode")
+	llmKey := r.Header.Get("X-LLM-Key")
 	if analysisMode != "passthrough" {
 		content := fullContent.String()
 		blocks := ExtractCodeBlocks(content)
 
 		if len(blocks) > 0 {
-			var results []*AnalysisResult
-			for _, block := range blocks {
-				res, err := AnalyzeCode(r.Context(), s.client, s.cfg.BackendURL, s.cfg.APIKey, block.Code, block.Language)
-				if err == nil {
-					results = append(results, res)
-				}
-			}
+			// Run dual-engine analysis on ALL code blocks in parallel
+			var allFindings []Finding
+			var mu sync.Mutex
+			var wg sync.WaitGroup
 
-			summary := FormatAnalysisSummary(results)
-			if summary != "" {
+			for _, block := range blocks {
+				wg.Add(1)
+				go func(b CodeBlock) {
+					defer wg.Done()
+					result := AnalyzeWithDualEngine(
+						r.Context(),
+						modelRouter,
+						s.cfg.BackendURL,
+						s.cfg.APIKey,
+						llmKey,
+						b.Code,
+						b.Language,
+					)
+					if result != nil && len(result.Findings) > 0 {
+						mu.Lock()
+						allFindings = append(allFindings, result.Findings...)
+						mu.Unlock()
+					}
+				}(block)
+			}
+			wg.Wait()
+
+			// Build summary from merged findings
+			if len(allFindings) > 0 {
+				uniqueFindings := DeduplicateFindings(allFindings)
+				score, grade := CalculateScore(uniqueFindings)
+				corroborated := 0
+				for _, f := range uniqueFindings {
+					if strings.Contains(f.RuleID, "+llm") {
+						corroborated++
+					}
+				}
+				summary := BuildSummary(uniqueFindings, score, grade, corroborated)
+
 				// Inject summary as a final SSE chunk
 				summaryChunk := map[string]interface{}{
 					"id":      fmt.Sprintf("chatcmpl-vigil-analysis-%d", time.Now().UnixNano()),
@@ -143,8 +174,7 @@ func (s *ProxyServer) handleStreaming(
 	flusher.Flush()
 
 	latency := time.Since(start)
-	log.Printf("Streaming complete: model=%s provider=%s latency=%s content_len=%d blocks=%d",
-		streamResult.Model, streamResult.Provider, latency.Round(time.Millisecond), fullContent.Len(), len(ExtractCodeBlocks(fullContent.String())))
+	slog.Info("streaming complete", "model", streamResult.Model, "provider", streamResult.Provider, "latency", latency.Round(time.Millisecond), "content_len", fullContent.Len(), "blocks", len(ExtractCodeBlocks(fullContent.String())))
 }
 
 // parseMessages extracts messages from the request body.
@@ -181,7 +211,7 @@ func (s *ProxyServer) handleStreamingDirect(
 		Model string `json:"model"`
 	}
 	if err := json.Unmarshal(requestBody, &req); err != nil {
-		log.Printf("streaming direct: failed to parse model from body: %v", err)
+		slog.Warn("streaming: failed to parse model", "error", err)
 	}
 	if llmModel != "" {
 		req.Model = llmModel
@@ -193,7 +223,11 @@ func (s *ProxyServer) handleStreamingDirect(
 		return
 	}
 
-	url := provider.BaseURL + r.URL.Path
+	rawURL := provider.BaseURL + r.URL.Path
+	if err := validateTargetURL(rawURL); err != nil {
+		http.Error(w, `{"error":"SSRF protection: " + err.Error()}`, http.StatusForbidden)
+		return
+	}
 	// Re-marshal with potential model override
 	fwdBody := requestBody
 	if llmModel != "" {
@@ -204,7 +238,7 @@ func (s *ProxyServer) handleStreamingDirect(
 		}
 	}
 
-	reqHTTP, err := http.NewRequestWithContext(r.Context(), "POST", url, bytes.NewReader(fwdBody))
+	reqHTTP, err := http.NewRequestWithContext(r.Context(), "POST", rawURL, bytes.NewReader(fwdBody))
 	if err != nil {
 		http.Error(w, `{"error":"failed to create request"}`, http.StatusInternalServerError)
 		return
@@ -227,7 +261,8 @@ func (s *ProxyServer) handleStreamingDirect(
 
 	resp, err := s.client.Do(reqHTTP)
 	if err != nil {
-		http.Error(w, `{"error":"failed to forward stream: `+err.Error()+`"}`, http.StatusBadGateway)
+		errJSON, _ := json.Marshal(map[string]string{"error": "failed to forward stream: " + err.Error()})
+		http.Error(w, string(errJSON), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -243,7 +278,8 @@ func (s *ProxyServer) handleStreamingDirect(
 	}
 
 	reader := bufio.NewReader(resp.Body)
-	var fullContent string
+	var fullContent strings.Builder
+	const maxStreamContent = 10 << 20
 
 	// Read with a deadline to detect hanging providers
 	for {
@@ -266,7 +302,7 @@ func (s *ProxyServer) handleStreamingDirect(
 				}
 				if err := json.Unmarshal([]byte(data), &oResp); err == nil {
 					if len(oResp.Choices) > 0 {
-						fullContent += oResp.Choices[0].Delta.Content
+						fullContent.WriteString(oResp.Choices[0].Delta.Content)
 					}
 				}
 			} else if defaultFormat == "anthropic" {
@@ -278,49 +314,88 @@ func (s *ProxyServer) handleStreamingDirect(
 				}
 				if err := json.Unmarshal([]byte(data), &aResp); err == nil {
 					if aResp.Type == "content_block_delta" {
-						fullContent += aResp.Delta.Text
+						fullContent.WriteString(aResp.Delta.Text)
 					}
 				}
 			}
 		}
+		if fullContent.Len() > maxStreamContent {
+			slog.Info("streaming content limit reached", "bytes", maxStreamContent)
+			break
+		}
 		if _, err := w.Write([]byte(line)); err != nil {
-			log.Printf("streaming direct: client disconnected: %v", err)
+			slog.Info("streaming: client disconnected", "error", err)
 			return
 		}
 		flusher.Flush()
 	}
 
-	// Post-stream analysis
+	// Post-stream dual-engine analysis
 	analysisMode := r.Header.Get("X-VigilAgent-Mode")
 	if analysisMode != "passthrough" {
-		blocks := ExtractCodeBlocks(fullContent)
-		var results []*AnalysisResult
-		for _, block := range blocks {
-			res, err := AnalyzeCode(r.Context(), s.client, s.cfg.BackendURL, s.cfg.APIKey, block.Code, block.Language)
-			if err == nil {
-				results = append(results, res)
-			}
-		}
+		content := fullContent.String()
+		blocks := ExtractCodeBlocks(content)
 
-		summary := FormatAnalysisSummary(results)
-		if summary != "" {
-			if defaultFormat == "openai" {
-				summaryChunk := map[string]interface{}{
-					"choices": []map[string]interface{}{
-						{"delta": map[string]interface{}{"content": "\n\n" + summary, "role": "assistant"}},
-					},
-				}
-				chunkBytes, _ := json.Marshal(summaryChunk)
-				fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
-			} else if defaultFormat == "anthropic" {
-				summaryChunk := map[string]interface{}{
-					"type":  "content_block_delta",
-					"delta": map[string]interface{}{"type": "text_delta", "text": "\n\n" + summary},
-				}
-				chunkBytes, _ := json.Marshal(summaryChunk)
-				fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
+		if len(blocks) > 0 {
+			// Run dual-engine analysis on ALL code blocks in parallel
+			var allFindings []Finding
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+
+			// Build a modelRouter for LLM engine
+			modelRouter := s.buildRouter(llmKey, "")
+
+			for _, block := range blocks {
+				wg.Add(1)
+				go func(b CodeBlock) {
+					defer wg.Done()
+					result := AnalyzeWithDualEngine(
+						r.Context(),
+						modelRouter,
+						s.cfg.BackendURL,
+						s.cfg.APIKey,
+						llmKey,
+						b.Code,
+						b.Language,
+					)
+					if result != nil && len(result.Findings) > 0 {
+						mu.Lock()
+						allFindings = append(allFindings, result.Findings...)
+						mu.Unlock()
+					}
+				}(block)
 			}
-			flusher.Flush()
+			wg.Wait()
+
+			if len(allFindings) > 0 {
+				uniqueFindings := DeduplicateFindings(allFindings)
+				score, grade := CalculateScore(uniqueFindings)
+				corroborated := 0
+				for _, f := range uniqueFindings {
+					if strings.Contains(f.RuleID, "+llm") {
+						corroborated++
+					}
+				}
+				summary := BuildSummary(uniqueFindings, score, grade, corroborated)
+
+				if defaultFormat == "openai" {
+					summaryChunk := map[string]interface{}{
+						"choices": []map[string]interface{}{
+							{"delta": map[string]interface{}{"content": "\n\n" + summary, "role": "assistant"}},
+						},
+					}
+					chunkBytes, _ := json.Marshal(summaryChunk)
+					fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
+				} else if defaultFormat == "anthropic" {
+					summaryChunk := map[string]interface{}{
+						"type":  "content_block_delta",
+						"delta": map[string]interface{}{"type": "text_delta", "text": "\n\n" + summary},
+					}
+					chunkBytes, _ := json.Marshal(summaryChunk)
+					fmt.Fprintf(w, "data: %s\n\n", chunkBytes)
+				}
+				flusher.Flush()
+			}
 		}
 	}
 

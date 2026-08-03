@@ -59,6 +59,47 @@ export interface ScanResult {
     metrics?: Record<string, unknown>;
 }
 
+export interface DualEngineResult {
+    [key: string]: unknown;
+    findings: DualEngineFinding[];
+    score: number;
+    grade: string;
+    engine_stats: {
+        deterministic: {
+            findings_count: number;
+            latency_ms: number;
+            engine_errors?: string[];
+        };
+        llm: {
+            findings_count: number;
+            latency_ms: number;
+            model: string;
+            cost: number;
+            error?: string;
+        };
+        total_latency_ms: number;
+    };
+    summary: string;
+    metadata: {
+        code_length: number;
+        language: string;
+        analyzed_at: string;
+        corroborated_findings: number;
+    };
+}
+
+export interface DualEngineFinding {
+    rule_id: string;
+    engine: string;
+    severity: string;
+    category: string;
+    message: string;
+    fix?: string;
+    line?: number;
+    confidence: number;
+    snippet?: string;
+}
+
 export class VigilAgentClient {
     private backendUrl: string;
     private extensionContext: vscode.ExtensionContext | undefined;
@@ -191,6 +232,13 @@ export class VigilAgentClient {
             code,
             language,
             filename,
+        });
+    }
+
+    async dualEngine(code: string, language: string): Promise<DualEngineResult> {
+        return this.request<DualEngineResult>('/v1/deep-analyze', {
+            code,
+            language,
         });
     }
 

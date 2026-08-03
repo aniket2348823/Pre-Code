@@ -6,11 +6,12 @@
 package skillengine
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
-
-	"strconv"
 )
 
 // Skill represents a validated security pattern extracted from findings.
@@ -82,7 +83,7 @@ func (e *Engine) ExtractFromFinding(f Finding) (*Skill, bool) {
 
 	// Create new skill
 	skill := &Skill{
-		ID:           generateSkillID(trigger),
+		ID:           generateSkillID(f),
 		Name:         f.Message,
 		Trigger:      trigger,
 		Fix:          f.Fix,
@@ -207,15 +208,9 @@ func normalizeTrigger(msg string) string {
 	return string(out)
 }
 
-// generateSkillID creates a deterministic skill ID from a trigger.
-func generateSkillID(trigger string) string {
-	// Simple hash-like ID from trigger
-	h := 0
-	for i := 0; i < len(trigger); i++ {
-		h = h*31 + int(trigger[i])
-	}
-	if h < 0 {
-		h = -h
-	}
-	return "skill-" + strconv.Itoa(h)
+// generateSkillID creates a deterministic skill ID from a finding's content.
+func generateSkillID(f Finding) string {
+	content := f.Message + "|" + f.Fix + "|" + f.Filename + "|" + strconv.Itoa(f.Line)
+	h := sha256.Sum256([]byte(content))
+	return "skill-" + hex.EncodeToString(h[:16])
 }

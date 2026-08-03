@@ -23,6 +23,7 @@ type idempotencyEntry struct {
 	body       []byte
 	header     http.Header
 	createdAt  time.Time
+	processing bool
 }
 
 // NewIdempotencyMiddleware creates a new idempotency middleware with the given TTL.
@@ -39,57 +40,111 @@ func NewIdempotencyMiddleware(ttl time.Duration) *IdempotencyMiddleware {
 // This is the form required by chi's .With() method.
 func (m *IdempotencyMiddleware) AsMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only apply to POST requests
-		if r.Method != http.MethodPost {
-			next.ServeHTTP(w, r)
-			return
-		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Only apply to POST requests
+			if r.Method != http.MethodPost {
+				next.ServeHTTP(w, r)
+				return
+			}
 
-		key := r.Header.Get("Idempotency-Key")
-		if key == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
+			key := r.Header.Get("Idempotency-Key")
+			if key == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
 
-		// Hash the key for consistent storage
-		hash := sha256.Sum256([]byte(key))
-		cacheKey := hex.EncodeToString(hash[:])
+			// Hash the key for consistent storage
+			hash := sha256.Sum256([]byte(key))
+			cacheKey := hex.EncodeToString(hash[:])
 
-		// Check cache
-		m.mu.RLock()
-		entry, found := m.cache[cacheKey]
-		m.mu.RUnlock()
+			// Check cache under write lock to prevent TOCTOU race
+			m.mu.Lock()
+			entry, found := m.cache[cacheKey]
+			if found && time.Since(entry.createdAt) < m.ttl {
+				if entry.processing {
+					// Another request is processing - wait for it
+					m.mu.Unlock()
+					m.waitForCompletion(cacheKey, w)
+					return
+				}
+				// Return cached response
+				for k, v := range entry.header {
+					for _, vv := range v {
+						w.Header().Add(k, vv)
+					}
+				}
+				w.Header().Set("Idempotency-Replayed", "true")
+				w.WriteHeader(entry.statusCode)
+				w.Write(entry.body)
+				m.mu.Unlock()
+				return
+			}
 
-		if found && time.Since(entry.createdAt) < m.ttl {
-			// Return cached response
-			for k, v := range entry.header {
-				for _, vv := range v {
-					w.Header().Add(k, vv)
+			// Reserve this key for processing
+			if len(m.cache) >= maxCacheEntries {
+				// Evict oldest (simple strategy)
+				var oldestKey string
+				var oldestTime time.Time
+				for k, v := range m.cache {
+					if oldestKey == "" || v.createdAt.Before(oldestTime) {
+						oldestKey = k
+						oldestTime = v.createdAt
+					}
+				}
+				if oldestKey != "" {
+					delete(m.cache, oldestKey)
 				}
 			}
-			w.Header().Set("Idempotency-Replayed", "true")
-			w.WriteHeader(entry.statusCode)
-			w.Write(entry.body)
-			return
-		}
+			m.cache[cacheKey] = &idempotencyEntry{
+				processing: true,
+				createdAt:  time.Now(),
+			}
+			m.mu.Unlock()
 
-		// Capture response
-		rec := &idempotencyRecorder{ResponseWriter: w, statusCode: http.StatusOK}
-		next.ServeHTTP(rec, r)
+			// Capture response
+			rec := &idempotencyRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+			next.ServeHTTP(rec, r)
 
-		// Cache the response (respect max size)
-		m.mu.Lock()
-		if len(m.cache) < maxCacheEntries {
+			// Cache the response (respect max size)
+			m.mu.Lock()
 			m.cache[cacheKey] = &idempotencyEntry{
 				statusCode: rec.statusCode,
 				body:       rec.body,
 				header:     rec.Header().Clone(),
 				createdAt:  time.Now(),
+				processing: false,
 			}
-		}
 			m.mu.Unlock()
 		})
+	}
+}
+
+func (m *IdempotencyMiddleware) waitForCompletion(cacheKey string, w http.ResponseWriter) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			m.mu.RLock()
+			entry, ok := m.cache[cacheKey]
+			if ok && !entry.processing && time.Since(entry.createdAt) < m.ttl {
+				for k, v := range entry.header {
+					for _, vv := range v {
+						w.Header().Add(k, vv)
+					}
+				}
+				w.Header().Set("Idempotency-Replayed", "true")
+				w.WriteHeader(entry.statusCode)
+				w.Write(entry.body)
+				m.mu.RUnlock()
+				return
+			}
+			m.mu.RUnlock()
+		case <-timeout:
+			// Timeout - treat as cache miss and let the request proceed
+			return
+		}
 	}
 }
 

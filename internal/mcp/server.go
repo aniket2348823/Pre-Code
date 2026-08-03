@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -199,6 +200,24 @@ func (s *Server) buildMCPServer() *server.MCPServer {
 		s.handleProcess,
 	)
 
+	// Tool 6: vigil_dual_engine — Parallel dual-engine analysis (deterministic + LLM)
+	srv.AddTool(
+		mcp.NewTool("vigil_dual_engine",
+			mcp.WithDescription("Run VigilAgent's parallel dual-engine analysis on code. BOTH engines run simultaneously: deterministic (Semgrep, builtin rules) + LLM (GPT-4o-mini semantic analysis). Findings are merged with corroboration scoring — issues found by both engines get HIGH confidence. Returns grade, score, and detailed findings."),
+			mcp.WithString("code",
+				mcp.Required(),
+				mcp.Description("The source code to analyze with dual-engine"),
+			),
+			mcp.WithString("language",
+				mcp.Description("Programming language: go, python, javascript, typescript, rust, java"),
+			),
+			mcp.WithString("api_key",
+				mcp.Description("Your LLM provider API key (e.g. sk-...). When provided, the backend uses your key for the LLM engine instead of its own configured keys."),
+			),
+		),
+		s.handleDualEngine,
+	)
+
 	return srv
 }
 
@@ -373,6 +392,36 @@ func (s *Server) handleProcess(ctx context.Context, req mcp.CallToolRequest) (*m
 	return mcp.NewToolResultText(string(pretty)), nil
 }
 
+// handleDualEngine runs the parallel dual-engine analysis (deterministic + LLM).
+func (s *Server) handleDualEngine(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 60s for dual-engine analysis (LLM pass can be slow).
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	code, _ := req.RequireString("code")
+	if code == "" {
+		return mcp.NewToolResultError("code is required"), nil
+	}
+	language := req.GetString("language", "go")
+	apiKey := s.resolveLLMKey(req.GetString("api_key", ""))
+
+	payload := map[string]interface{}{
+		"code":     code,
+		"language": language,
+	}
+
+	resp, err := s.callBackendWithKey(ctx, "/v1/deep-analyze", payload, apiKey)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return mcp.NewToolResultError("VigilAgent dual-engine analysis timed out (60s limit)"), nil
+		}
+		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent dual-engine analysis failed: %v", err)), nil
+	}
+
+	summary := formatDualEngineSummary(resp)
+	return mcp.NewToolResultText(summary), nil
+}
+
 // resolveLLMKey returns the tool-level api_key if provided, otherwise falls
 // back to the env-var LLM key set at server startup (VIGILAGENT_LLM_KEY).
 func (s *Server) resolveLLMKey(toolKey string) string {
@@ -514,11 +563,81 @@ func formatConfidenceSummary(result map[string]interface{}) string {
 	return out
 }
 
-func getStringArg(args interface{}, key string) string {
-	if m, ok := args.(map[string]interface{}); ok {
-		if v, ok := m[key].(string); ok {
-			return v
-		}
+// formatDualEngineSummary formats the dual-engine analysis result for MCP output.
+func formatDualEngineSummary(resp interface{}) string {
+	result, ok := resp.(map[string]interface{})
+	if !ok {
+		return fmt.Sprintf("%v", resp)
 	}
-	return ""
+
+	var out string
+
+	// Extract result object
+	var dualResult map[string]interface{}
+	if r, ok := result["result"].(map[string]interface{}); ok {
+		dualResult = r
+	} else {
+		dualResult = result
+	}
+
+	// Header with grade and score
+	if grade, ok := dualResult["grade"].(string); ok {
+		score := dualResult["score"]
+		out += fmt.Sprintf("🛡️ VigilAgent Dual-Engine Analysis: Grade %s (%v%%)\n\n", grade, score)
+	}
+
+	// Engine stats
+	if stats, ok := dualResult["engine_stats"].(map[string]interface{}); ok {
+		out += "## Engine Statistics\n\n"
+		if det, ok := stats["deterministic"].(map[string]interface{}); ok {
+			out += fmt.Sprintf("- **Deterministic:** %v findings in %v\n", det["findings_count"], det["latency_ms"])
+		}
+		if llm, ok := stats["llm"].(map[string]interface{}); ok {
+			out += fmt.Sprintf("- **LLM Engine:** %v findings in %v (model: %v)\n", llm["findings_count"], llm["latency_ms"], llm["model"])
+		}
+		if total, ok := stats["total_latency_ms"].(float64); ok {
+			out += fmt.Sprintf("- **Total Latency:** %.0fms\n", total)
+		}
+		out += "\n"
+	}
+
+	// Findings
+	if findings, ok := dualResult["findings"].([]interface{}); ok && len(findings) > 0 {
+		out += fmt.Sprintf("## Findings (%d)\n\n", len(findings))
+		for i, f := range findings {
+			finding, _ := f.(map[string]interface{})
+			severity := finding["severity"]
+			message := finding["message"]
+			engine := finding["engine"]
+			fix := finding["fix"]
+			corroborated := ""
+			if ruleID, ok := finding["rule_id"].(string); ok && len(ruleID) > 0 && ruleID[len(ruleID)-4:] == "+llm" {
+				corroborated = " ✓ corroborated"
+			}
+			icon := "❓"
+			switch severity {
+			case "critical":
+				icon = "🔴"
+			case "high":
+				icon = "🟠"
+			case "medium":
+				icon = "🟡"
+			case "low":
+				icon = "🟢"
+			case "info":
+				icon = "ℹ️"
+			}
+			out += fmt.Sprintf("%d. %s **[%v]** (%s)%s\n   %v\n", i+1, icon, strings.ToUpper(fmt.Sprintf("%v", severity)), engine, corroborated, message)
+			if fix != nil && fmt.Sprintf("%v", fix) != "" {
+				out += fmt.Sprintf("   💡 Fix: %v\n", fix)
+			}
+		}
+	} else {
+		out += "✅ No issues found. Code looks clean!\n"
+	}
+
+	out += "\n---\nPowered by VigilAgent Dual-Engine Analysis"
+	return out
 }
+
+

@@ -31,6 +31,8 @@ type Span struct {
 	Attrs     map[string]string `json:"attrs,omitempty"`
 }
 
+const maxSpans = 10000
+
 // Tracer collects spans for distributed tracing.
 type Tracer struct {
 	mu    sync.RWMutex
@@ -72,6 +74,9 @@ func (t *Tracer) EndSpan(span *Span) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.spans = append(t.spans, *span)
+	if len(t.spans) > maxSpans {
+		t.spans = t.spans[len(t.spans)-maxSpans:]
+	}
 
 	slog.Debug("span completed",
 		"trace_id", span.TraceID,

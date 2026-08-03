@@ -56,6 +56,8 @@ type TaskTypeStats struct {
 	BestModel     string  `json:"best_model"` // model with highest accept rate
 }
 
+const maxOutcomes = 10000
+
 // Engine tracks outcomes and computes learning metrics.
 type Engine struct {
 	mu      sync.RWMutex
@@ -84,6 +86,9 @@ func (e *Engine) RecordOutcome(ctx context.Context, o Outcome) {
 	}
 
 	e.outcomes = append(e.outcomes, o)
+	if len(e.outcomes) > maxOutcomes {
+		e.outcomes = e.outcomes[len(e.outcomes)-maxOutcomes:]
+	}
 
 	// Update model stats
 	ms, ok := e.models[o.Model]

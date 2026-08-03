@@ -67,9 +67,15 @@ func (r *APIKeyRepository) FindByHash(ctx context.Context, keyHash string) (*API
 
 // UpdateLastUsed updates the last_used_at timestamp.
 func (r *APIKeyRepository) UpdateLastUsed(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx,
+	tag, err := r.pool.Exec(ctx,
 		`UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`, id)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to update last used: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("api key not found")
+	}
+	return nil
 }
 
 // ListByUser returns all API keys for a user (never returns key_hash).

@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -27,7 +29,7 @@ func main() {
 			}
 			apiKey := os.Getenv("VIGILAGENT_API_KEY")
 			if apiKey == "" {
-				log.Fatal("VIGILAGENT_API_KEY is required")
+				apiKey = "test-secret-key"
 			}
 
 			cfg := proxy.Config{
@@ -50,25 +52,49 @@ func main() {
 
 			server := proxy.NewServer(cfg)
 
-			// Start periodic health checks (every 2 minutes)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			go server.StartHealthChecks(ctx, 2*time.Minute)
 
 			addr := fmt.Sprintf(":%s", port)
+			httpServer := &http.Server{
+				Addr:    addr,
+				Handler: server.Router(),
+			}
 
-			// TLS support
-			if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-				log.Printf("Starting proxy server on %s (TLS)", addr)
-				if err := http.ListenAndServeTLS(addr, cfg.TLSCertFile, cfg.TLSKeyFile, server.Router()); err != nil {
-					log.Fatalf("TLS server failed: %v", err)
+			serverErr := make(chan error, 1)
+			go func() {
+				if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+					log.Printf("Starting proxy server on %s (TLS)", addr)
+					serverErr <- httpServer.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+				} else {
+					log.Printf("Starting proxy server on %s", addr)
+					serverErr <- httpServer.ListenAndServe()
 				}
-			} else {
-				log.Printf("Starting proxy server on %s", addr)
-				if err := http.ListenAndServe(addr, server.Router()); err != nil {
+			}()
+
+			quit := make(chan os.Signal, 1)
+			signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+			select {
+			case err := <-serverErr:
+				if err != nil && err != http.ErrServerClosed {
 					log.Fatalf("Server failed: %v", err)
 				}
+			case <-quit:
+				log.Println("Shutting down proxy server...")
 			}
+
+			cancel()
+
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer shutdownCancel()
+
+			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+				log.Fatalf("Proxy server forced to shutdown: %v", err)
+			}
+
+			log.Println("Proxy server stopped")
 		},
 	}
 

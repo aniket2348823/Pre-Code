@@ -29,6 +29,7 @@ type cachedResponse struct {
 	body       []byte
 	headers    http.Header
 	createdAt  time.Time
+	processing bool // true while request is being processed
 }
 
 // Store holds cached idempotent responses.
@@ -133,26 +134,84 @@ func (s *Store) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check for cached response
-		if cached := s.Get(key); cached != nil {
-			for k, vals := range cached.headers {
+		// Try to reserve or get cached response
+		s.mu.Lock()
+		entry, ok := s.entries[key]
+		if ok && time.Since(entry.createdAt) <= s.config.MaxAge {
+			if entry.processing {
+				// Another request is processing - wait for it
+				s.mu.Unlock()
+				s.waitForCompletion(key, w)
+				return
+			}
+			// Return cached response
+			for k, vals := range entry.headers {
 				for _, v := range vals {
 					w.Header().Add(k, v)
 				}
 			}
 			w.Header().Set("Idempotent-Replayed", "true")
-			w.WriteHeader(cached.statusCode)
-			w.Write(cached.body)
+			w.WriteHeader(entry.statusCode)
+			w.Write(entry.body)
+			s.mu.Unlock()
 			return
 		}
 
-		// Wrap response writer to capture output
+		// Reserve this key for processing
+		if len(s.entries) >= s.config.MaxEntries {
+			s.evictOldest()
+		}
+		s.entries[key] = &cachedResponse{
+			processing: true,
+			createdAt:  time.Now(),
+		}
+		s.mu.Unlock()
+
+		// Process the request
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(rw, r)
 
-		// Cache the response
-		s.Set(key, rw.statusCode, rw.body, rw.Header().Clone())
+		// Store the actual response
+		s.mu.Lock()
+		s.entries[key] = &cachedResponse{
+			statusCode: rw.statusCode,
+			body:       rw.body,
+			headers:    rw.Header().Clone(),
+			createdAt:  time.Now(),
+			processing: false,
+		}
+		s.mu.Unlock()
 	})
+}
+
+// waitForCompletion waits for another request to complete processing.
+func (s *Store) waitForCompletion(key string, w http.ResponseWriter) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			s.mu.RLock()
+			entry, ok := s.entries[key]
+			if ok && !entry.processing && time.Since(entry.createdAt) <= s.config.MaxAge {
+				for k, vals := range entry.headers {
+					for _, v := range vals {
+						w.Header().Add(k, v)
+					}
+				}
+				w.Header().Set("Idempotent-Replayed", "true")
+				w.WriteHeader(entry.statusCode)
+				w.Write(entry.body)
+				s.mu.RUnlock()
+				return
+			}
+			s.mu.RUnlock()
+		case <-timeout:
+			// Timeout - treat as cache miss and let the request proceed
+			return
+		}
+	}
 }
 
 // MaxBodySize limits how much of the response body is captured for caching.

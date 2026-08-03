@@ -12,6 +12,8 @@ import (
 	"io"
 	"regexp"
 	"strings"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // SanitizeInput removes potentially dangerous content from user input.
@@ -102,11 +104,15 @@ func MaskSecret(secret string, visibleChars int) string {
 	return strings.Repeat("*", masked) + secret[masked:]
 }
 
-// EncryptAES encrypts data with AES-GCM using a passphrase.
+// EncryptAES encrypts data with AES-GCM using a passphrase and PBKDF2 key derivation.
 func EncryptAES(passphrase string, plaintext []byte) ([]byte, error) {
-	key := sha256.Sum256([]byte(passphrase))
+	salt := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+	key := pbkdf2.Key([]byte(passphrase), salt, 100000, 32, sha256.New)
 
-	block, err := aes.NewCipher(key[:])
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
@@ -121,14 +127,20 @@ func EncryptAES(passphrase string, plaintext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+	return append(salt, gcm.Seal(nonce, nonce, plaintext, nil)...), nil
 }
 
-// DecryptAES decrypts AES-GCM encrypted data.
+// DecryptAES decrypts AES-GCM encrypted data with PBKDF2 key derivation.
 func DecryptAES(passphrase string, ciphertext []byte) ([]byte, error) {
-	key := sha256.Sum256([]byte(passphrase))
+	if len(ciphertext) < 32 {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	salt := ciphertext[:32]
+	ciphertext = ciphertext[32:]
 
-	block, err := aes.NewCipher(key[:])
+	key := pbkdf2.Key([]byte(passphrase), salt, 100000, 32, sha256.New)
+
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}

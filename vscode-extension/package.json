@@ -1,7 +1,7 @@
 {
   "name": "vigilagent",
   "displayName": "VigilAgent — AI Code Verification",
-  "description": "Verify AI-generated code with VigilAgent's Shift-Zero pipeline. Security, architecture, compliance, and cost analysis in your chat.",
+  "description": "Verify AI-generated code with VigilAgent's dual-engine analysis. Parallel deterministic + LLM scanning with corroboration scoring.",
   "version": "0.0.1",
   "publisher": "vigilagent",
   "engines": {
@@ -46,6 +46,10 @@
       {
         "command": "vigilagent.verifySelection",
         "title": "VigilAgent: Verify Selected Code"
+      },
+      {
+        "command": "vigilagent.dualEngine",
+        "title": "VigilAgent: Dual-Engine Analysis"
       }
     ],
     "configuration": {

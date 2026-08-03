@@ -78,12 +78,17 @@ type CostAnomaly struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+const (
+	maxRecords  = 10000
+	maxAnomalies = 1000
+)
+
 // Engine provides cost intelligence operations.
 type Engine struct {
-	mu       sync.RWMutex
-	pricing  map[string]*ModelPricing // model -> pricing
-	records  []CostRecord
-	budgets  map[string]*Budget
+	mu        sync.RWMutex
+	pricing   map[string]*ModelPricing
+	records   []CostRecord
+	budgets   map[string]*Budget
 	anomalies []CostAnomaly
 }
 
@@ -152,6 +157,9 @@ func (e *Engine) RecordCost(r CostRecord) {
 		r.CreatedAt = time.Now()
 	}
 	e.records = append(e.records, r)
+	if len(e.records) > maxRecords {
+		e.records = e.records[len(e.records)-maxRecords:]
+	}
 
 	// Check budgets and auto-reset if period expired
 	now := time.Now()
@@ -218,6 +226,9 @@ func (e *Engine) detectAnomaly(r CostRecord) {
 			Severity:    severity,
 			CreatedAt:   r.CreatedAt,
 		})
+		if len(e.anomalies) > maxAnomalies {
+			e.anomalies = e.anomalies[len(e.anomalies)-maxAnomalies:]
+		}
 	}
 }
 

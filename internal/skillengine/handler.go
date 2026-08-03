@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -18,6 +19,13 @@ type ExtractRequest struct {
 // The eng parameter must be non-nil.
 func NewHTTPHandler(eng *Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.ClaimsFromContext(r.Context()); !ok {
+			response.Unauthorized(w, "missing authentication")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 		var req ExtractRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			response.Error(w, http.StatusBadRequest, "invalid JSON body")

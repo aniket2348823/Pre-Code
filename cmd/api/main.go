@@ -1,4 +1,3 @@
-// Command vigil-api starts the VigilAgent HTTP API server.
 package main
 
 import (
@@ -23,32 +22,27 @@ var (
 )
 
 func main() {
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
 
-	// Validate production environment fast-fail checks
 	if err := config.ValidateProductionEnv(); err != nil {
 		slog.Error("production validation failed", "error", err)
 		os.Exit(1)
 	}
 
-	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
 
-	// Validate production config defaults
 	if err := config.ValidateProduction(cfg); err != nil {
 		slog.Error("production config validation failed", "error", err)
 		os.Exit(1)
 	}
 
-	// Setup logger
 	setupLogger(cfg.Log.Level, cfg.Log.Format)
 
 	slog.Info("starting VigilAgent server",
@@ -58,14 +52,12 @@ func main() {
 		"environment", cfg.Server.Env,
 	)
 
-	// Initialize server
 	srv, err := server.New(cfg)
 	if err != nil {
 		slog.Error("failed to initialize server", "error", err)
 		os.Exit(1)
 	}
 
-	// Create HTTP server
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler:           srv.Router(),
@@ -73,36 +65,35 @@ func main() {
 		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
 		WriteTimeout:      cfg.Server.WriteTimeout,
 		IdleTimeout:       cfg.Server.IdleTimeout,
-		MaxHeaderBytes:    1 << 20, // 1MB
+		MaxHeaderBytes:    1 << 20,
 	}
 
-	// Start server in goroutine
+	serverErr := make(chan error, 1)
 	go func() {
 		slog.Info("server listening", "addr", httpServer.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server failed", "error", err)
-			os.Exit(1)
+			serverErr <- err
 		}
 	}()
 
-	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
 
-	slog.Info("shutting down server...")
+	select {
+	case err := <-serverErr:
+		slog.Error("server failed", "error", err)
+	case <-quit:
+		slog.Info("shutting down server...")
+	}
 
-	// Create shutdown context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Shutdown HTTP server
 	if err := httpServer.Shutdown(ctx); err != nil {
 		slog.Error("server forced to shutdown", "error", err)
 		os.Exit(1)
 	}
 
-	// Shutdown server (cleanup resources)
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("server cleanup failed", "error", err)
 		os.Exit(1)

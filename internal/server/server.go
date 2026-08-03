@@ -39,13 +39,15 @@ import (
 )
 
 type Server struct {
-	cfg       *config.Config
-	router    *router.Router
-	db        *database.Postgres
-	redis     *database.Redis
-	nats      *queue.NATS
-	cleanup   func()
-	hotReload *config.HotReloader
+	cfg          *config.Config
+	router       *router.Router
+	db           *database.Postgres
+	redis        *database.Redis
+	nats         *queue.NATS
+	cleanup      func()
+	hotReload    *config.HotReloader
+	shutdownCtx  context.Context
+	shutdownCancel context.CancelFunc
 }
 
 func New(cfg *config.Config) (*Server, error) {
@@ -53,7 +55,12 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	srv := &Server{cfg: cfg}
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	srv := &Server{
+		cfg:            cfg,
+		shutdownCtx:    shutdownCtx,
+		shutdownCancel: shutdownCancel,
+	}
 
 	isDev := cfg.Server.Env == "development" || cfg.Server.Env == "dev"
 	maxDBAttempts := 10
@@ -286,7 +293,7 @@ func New(cfg *config.Config) (*Server, error) {
 	agentExec.SetMemory(&memoryAdapter{mgr: memMgr})
 	slog.Info("agent memory wired", "layers", "working+episodic+semantic")
 
-	go modelRouter.StartHealthChecks(context.Background(), 2*time.Minute)
+	go modelRouter.StartHealthChecks(shutdownCtx, 2*time.Minute)
 
 	// Wire email service — prefer SendGrid over SMTP when configured.
 	var emailSender email.Sender
@@ -321,12 +328,12 @@ func New(cfg *config.Config) (*Server, error) {
 		verificationSvc = email.NewVerificationService(emailSender)
 		slog.Warn("email verification service: in-memory token store (tokens lost on restart)")
 	}
-	go verificationSvc.Cleanup(context.Background(), 1*time.Hour)
+	go verificationSvc.Cleanup(shutdownCtx, 1*time.Hour)
 
 	// Wire feature flags
 	featureFlagMgr := featureflags.NewManager(conn)
 	if conn != nil {
-		featureFlagMgr.StartRefresh(context.Background(), 5*time.Minute)
+		featureFlagMgr.StartRefresh(shutdownCtx, 5*time.Minute)
 		_ = featureflags.EnsureTable(context.Background(), conn)
 	} else {
 		slog.Warn("feature flags: skipping DB setup (no database connection)")
@@ -453,6 +460,9 @@ var version = "dev"
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	slog.Info("cleaning up server resources")
+	if s.shutdownCancel != nil {
+		s.shutdownCancel()
+	}
 	if s.router != nil {
 		s.router.Shutdown()
 	}

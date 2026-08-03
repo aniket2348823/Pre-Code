@@ -6,7 +6,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/vigilagent/vigilagent/internal/auth"
 )
+
+// injectAuth adds valid auth claims to the request context.
+func injectAuth(r *http.Request) *http.Request {
+	claims := &auth.Claims{
+		UserID: "test-user-123",
+		Email:  "test@example.com",
+		Role:   "user",
+	}
+	return r.WithContext(auth.ContextWithClaims(r.Context(), claims))
+}
 
 func TestHandler_Extract(t *testing.T) {
 	handler := NewHTTPHandler(NewEngine())
@@ -21,6 +33,7 @@ func TestHandler_Extract(t *testing.T) {
 		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req = injectAuth(req)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -44,11 +57,13 @@ func TestHandler_Extract_Duplicate(t *testing.T) {
 	})
 	// Extract once
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req = injectAuth(req)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	// Extract again with same message
 	req = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req = injectAuth(req)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -71,6 +86,7 @@ func TestHandler_RecordOutcome(t *testing.T) {
 		Outcome: "accepted",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req = injectAuth(req)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -89,11 +105,28 @@ func TestHandler_InvalidJSON(t *testing.T) {
 	handler := NewHTTPHandler(NewEngine())
 
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte("bad")))
+	req = injectAuth(req)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestHandler_NoAuth(t *testing.T) {
+	handler := NewHTTPHandler(NewEngine())
+
+	body, _ := json.Marshal(ExtractRequest{
+		Finding: Finding{Message: "test", Fix: "fix"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
 	}
 }

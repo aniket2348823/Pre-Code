@@ -14,7 +14,6 @@ import (
 type SSRFValidator struct {
 	allowedSchemes  []string
 	blockedHosts    []string
-	blockedRanges   []net.IPNet
 	privateRanges   []net.IPNet
 	client          *http.Client
 }
@@ -22,7 +21,7 @@ type SSRFValidator struct {
 // NewSSRFValidator creates a validator that blocks internal/private IPs.
 func NewSSRFValidator() *SSRFValidator {
 	v := &SSRFValidator{
-		allowedSchemes: []string{"https"}, // Only HTTPS for webhooks
+		allowedSchemes: []string{"https"},
 		blockedHosts:   []string{"localhost", "127.0.0.1", "0.0.0.0", "::1", "metadata.google.internal", "169.254.169.254"},
 		client: &http.Client{
 			Timeout: 5 * time.Second,
@@ -32,13 +31,13 @@ func NewSSRFValidator() *SSRFValidator {
 		},
 	}
 
-	// RFC 1918 + loopback + link-local
 	privateCIDRs := []string{
 		"10.0.0.0/8",
 		"172.16.0.0/12",
 		"192.168.0.0/16",
 		"127.0.0.0/8",
 		"169.254.0.0/16",
+		"0.0.0.0/8",
 		"::1/128",
 		"fc00::/7",
 		"fe80::/10",
@@ -53,14 +52,63 @@ func NewSSRFValidator() *SSRFValidator {
 	return v
 }
 
+func normalizeURL(rawURL string) (string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	rawURL = strings.ReplaceAll(rawURL, "\t", "")
+	rawURL = strings.ReplaceAll(rawURL, "\r", "")
+	rawURL = strings.ReplaceAll(rawURL, "\n", "")
+	rawURL = strings.ReplaceAll(rawURL, "\x00", "")
+	if rawURL == "" {
+		return "", fmt.Errorf("empty URL")
+	}
+	if strings.Contains(rawURL, "\\") {
+		return "", fmt.Errorf("URL contains invalid backslash")
+	}
+	return rawURL, nil
+}
+
+func normalizeIP(ip net.IP) net.IP {
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4
+	}
+	return ip
+}
+
+func (v *SSRFValidator) isBlockedHost(host string) error {
+	lower := strings.ToLower(host)
+	for _, blocked := range v.blockedHosts {
+		if lower == blocked {
+			return fmt.Errorf("host %q is blocked", host)
+		}
+	}
+	if ip := net.ParseIP(lower); ip != nil {
+		normalized := normalizeIP(ip)
+		for _, blocked := range v.blockedHosts {
+			if blockedIP := net.ParseIP(blocked); blockedIP != nil {
+				if normalized.Equal(normalizeIP(blockedIP)) {
+					return fmt.Errorf("IP %s is blocked", ip.String())
+				}
+			}
+		}
+		if v.isPrivateIP(ip) {
+			return fmt.Errorf("IP %s is in a private/reserved range", ip.String())
+		}
+	}
+	return nil
+}
+
 // ValidateURL checks if a URL is safe to fetch (not SSRF).
 func (v *SSRFValidator) ValidateURL(rawURL string) error {
-	parsed, err := url.Parse(rawURL)
+	clean, err := normalizeURL(rawURL)
+	if err != nil {
+		return err
+	}
+
+	parsed, err := url.Parse(clean)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
 
-	// Check scheme
 	scheme := strings.ToLower(parsed.Scheme)
 	allowed := false
 	for _, s := range v.allowedSchemes {
@@ -73,24 +121,31 @@ func (v *SSRFValidator) ValidateURL(rawURL string) error {
 		return fmt.Errorf("scheme %q not allowed (only HTTPS)", scheme)
 	}
 
-	// Check blocked hosts
-	host := strings.ToLower(parsed.Hostname())
-	for _, blocked := range v.blockedHosts {
-		if host == blocked {
-			return fmt.Errorf("host %q is blocked", host)
-		}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("URL has no host")
 	}
 
-	// Resolve and check for private IPs
+	if err := v.isBlockedHost(host); err != nil {
+		return err
+	}
+
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		// DNS resolution failed — might be intentional block
 		return fmt.Errorf("DNS resolution failed for %q: %w", host, err)
 	}
 
 	for _, ip := range ips {
 		if v.isPrivateIP(ip) {
 			return fmt.Errorf("IP %s is in a private/reserved range", ip.String())
+		}
+		normalized := normalizeIP(ip)
+		for _, blocked := range v.blockedHosts {
+			if blockedIP := net.ParseIP(blocked); blockedIP != nil {
+				if normalized.Equal(normalizeIP(blockedIP)) {
+					return fmt.Errorf("resolved IP %s is blocked", ip.String())
+				}
+			}
 		}
 	}
 
@@ -99,6 +154,7 @@ func (v *SSRFValidator) ValidateURL(rawURL string) error {
 
 // isPrivateIP checks if an IP is in a private/reserved range.
 func (v *SSRFValidator) isPrivateIP(ip net.IP) bool {
+	ip = normalizeIP(ip)
 	for _, network := range v.privateRanges {
 		if network.Contains(ip) {
 			return true

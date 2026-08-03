@@ -97,7 +97,7 @@ func (r *EventRepository) BatchCreate(ctx context.Context, events []Event) error
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(context.Background())
 
 	// Use ON CONFLICT DO NOTHING for idempotent batch inserts.
 	// Do NOT use RETURNING here — ON CONFLICT DO NOTHING returns zero rows,
@@ -126,7 +126,8 @@ func (r *EventRepository) GetCostByOrg(ctx context.Context, orgID string, from, 
 		SELECT COALESCE(SUM(e.cost_usd), 0), COUNT(*), COALESCE(AVG(e.cost_usd), 0)
 		FROM events e
 		JOIN sessions s ON e.session_id = s.id
-		WHERE s.project_id IN (SELECT id FROM projects WHERE org_id = $1)
+		JOIN projects p ON s.project_id = p.id
+		WHERE p.org_id = $1
 		AND e.created_at BETWEEN $2 AND $3
 	`
 	summary := &CostSummary{}
@@ -142,7 +143,8 @@ func (r *EventRepository) GetTokensByOrg(ctx context.Context, orgID string, from
 		SELECT COALESCE(SUM(e.tokens_used), 0), COUNT(*), COALESCE(AVG(e.tokens_used), 0)
 		FROM events e
 		JOIN sessions s ON e.session_id = s.id
-		WHERE s.project_id IN (SELECT id FROM projects WHERE org_id = $1)
+		JOIN projects p ON s.project_id = p.id
+		WHERE p.org_id = $1
 		AND e.created_at BETWEEN $2 AND $3
 	`
 	summary := &TokenSummary{}
@@ -156,13 +158,14 @@ func (r *EventRepository) GetTokensByOrg(ctx context.Context, orgID string, from
 func (r *EventRepository) GetSessionStatsByOrg(ctx context.Context, orgID string) (*SessionStats, error) {
 	query := `
 		SELECT
-			COUNT(*) as total_sessions,
-			COUNT(*) FILTER (WHERE s.status = 'active') as active_sessions,
+			COUNT(DISTINCT s.id) as total_sessions,
+			COUNT(DISTINCT s.id) FILTER (WHERE s.status = 'active') as active_sessions,
 			COALESCE(AVG(e.latency_ms), 0) as avg_latency,
-			(SELECT COUNT(*) FROM events ev JOIN sessions se ON ev.session_id = se.id
-			 WHERE se.project_id IN (SELECT id FROM projects WHERE org_id = $1)) as total_events
+			COUNT(DISTINCT e.id) as total_events
 		FROM sessions s
-		WHERE s.project_id IN (SELECT id FROM projects WHERE org_id = $1)
+		JOIN projects p ON s.project_id = p.id
+		LEFT JOIN events e ON e.session_id = s.id
+		WHERE p.org_id = $1
 	`
 	stats := &SessionStats{}
 	err := r.pool.QueryRow(ctx, query, orgID).Scan(
@@ -223,7 +226,8 @@ func (r *EventRepository) GetRecentActivity(ctx context.Context, orgID string, l
 		SELECT e.event_type, e.source, e.tokens_used, e.cost_usd, e.created_at
 		FROM events e
 		JOIN sessions s ON e.session_id = s.id
-		WHERE s.project_id IN (SELECT id FROM projects WHERE org_id = $1)
+		JOIN projects p ON s.project_id = p.id
+		WHERE p.org_id = $1
 		ORDER BY e.created_at DESC
 		LIMIT $2
 	`

@@ -64,7 +64,8 @@ func NewTaskWorker(natsConn *NATS, cfg WorkerConfig, handler TaskHandler) (*Task
 		Name:      cfg.Stream,
 		Subjects:  []string{cfg.Stream + ".>"},
 		Retention: jetstream.WorkQueuePolicy,
-		MaxMsgs:   -1,
+		MaxMsgs:   1_000_000,
+		MaxAge:    24 * time.Hour,
 		Storage:   jetstream.FileStorage,
 	})
 	if err != nil {
@@ -132,7 +133,7 @@ func (w *TaskWorker) Start(ctx context.Context) error {
 		}
 
 		for msg := range batch.Messages() {
-			w.processMessage(ctx, msg)
+			go w.processMessage(ctx, msg)
 		}
 	}
 }

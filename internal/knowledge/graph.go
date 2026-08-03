@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 )
 
 // encoding/json is imported at the top of the file
@@ -179,7 +180,6 @@ func (g *Graph) ensureTables(ctx context.Context) error {
 // AddNode adds a node to the graph and persists to DB if available.
 func (g *Graph) AddNode(n *Node) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	now := time.Now()
 	if n.CreatedAt.IsZero() {
 		n.CreatedAt = now
@@ -190,31 +190,54 @@ func (g *Graph) AddNode(n *Node) {
 		g.index[n.ID] = make(map[string]bool)
 	}
 
-	// Persist to DB
-	if g.pool != nil {
+	// Copy data for DB persistence
+	pool := g.pool
+	var attrsJSON string
+	if n.Attributes != nil {
+		b, _ := json.Marshal(n.Attributes)
+		attrsJSON = string(b)
+	} else {
+		attrsJSON = "{}"
+	}
+	var embedding interface{}
+	if len(n.Embedding) > 0 {
+		embedding = pgvector.NewVector(n.Embedding)
+	}
+	id := n.ID
+	nodeType := string(n.Type)
+	name := n.Name
+	projectID := n.ProjectID
+	createdAt := n.CreatedAt
+	updatedAt := n.UpdatedAt
+	g.mu.Unlock()
+
+	// Persist to DB (outside lock)
+	if pool != nil {
 		ctx := context.Background()
-		attrsJSON := "{}"
-		if n.Attributes != nil {
-			b, _ := json.Marshal(n.Attributes)
-			attrsJSON = string(b)
-		}
-		_, err := g.pool.Exec(ctx, `
-			INSERT INTO kg_nodes (id, type, name, project_id, attributes, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+		_, err := pool.Exec(ctx, `
+			INSERT INTO kg_nodes (id, type, name, project_id, attributes, embedding, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
 			ON CONFLICT (id) DO UPDATE SET
 				type = EXCLUDED.type, name = EXCLUDED.name, project_id = EXCLUDED.project_id,
-				attributes = EXCLUDED.attributes, updated_at = EXCLUDED.updated_at`,
-			n.ID, string(n.Type), n.Name, n.ProjectID, attrsJSON, n.CreatedAt, n.UpdatedAt)
+				attributes = EXCLUDED.attributes, embedding = EXCLUDED.embedding, updated_at = EXCLUDED.updated_at`,
+			id, nodeType, name, projectID, attrsJSON, embedding, createdAt, updatedAt)
 		if err != nil {
-			slog.Warn("knowledge graph: failed to persist node", "id", n.ID, "error", err)
+			slog.Warn("knowledge graph: failed to persist node", "id", id, "error", err)
 		}
 	}
+}
+
+func float32SliceToSQL(v []float32) string {
+	parts := make([]string, len(v))
+	for i, f := range v {
+		parts[i] = fmt.Sprintf("%g", f)
+	}
+	return strings.Join(parts, ",")
 }
 
 // AddEdge adds a directed edge between two existing nodes and persists to DB.
 func (g *Graph) AddEdge(e Edge) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now()
 	}
@@ -224,14 +247,24 @@ func (g *Graph) AddEdge(e Edge) {
 	}
 	g.index[e.From][e.To] = true
 
-	// Persist to DB
-	if g.pool != nil {
+	// Copy data for DB persistence
+	pool := g.pool
+	from := e.From
+	to := e.To
+	relation := e.Relation
+	confidence := e.Confidence
+	projectID := e.ProjectID
+	createdAt := e.CreatedAt
+	g.mu.Unlock()
+
+	// Persist to DB (outside lock)
+	if pool != nil {
 		ctx := context.Background()
-		_, err := g.pool.Exec(ctx,
+		_, err := pool.Exec(ctx,
 			"INSERT INTO kg_edges (from_node, to_node, relation, confidence, project_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-			e.From, e.To, e.Relation, e.Confidence, e.ProjectID, e.CreatedAt)
+			from, to, relation, confidence, projectID, createdAt)
 		if err != nil {
-			slog.Warn("knowledge graph: failed to persist edge", "from", e.From, "to", e.To, "error", err)
+			slog.Warn("knowledge graph: failed to persist edge", "from", from, "to", to, "error", err)
 		}
 	}
 }
@@ -331,10 +364,12 @@ func (g *Graph) ValidatePrompt(ctx context.Context, prompt string, code string, 
 	var warnings []ValidationWarning
 
 	g.mu.RLock()
-	defer g.mu.RUnlock()
+	rules := make([]ControlRule, len(g.controlRules))
+	copy(rules, g.controlRules)
+	g.mu.RUnlock()
 
 	// Check each control rule
-	for _, rule := range g.controlRules {
+	for _, rule := range rules {
 		if strings.Contains(lower, rule.Entity) {
 			for _, control := range rule.Controls {
 				// Check if the control is mentioned (with various separators)

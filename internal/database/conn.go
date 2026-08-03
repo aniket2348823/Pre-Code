@@ -85,7 +85,7 @@ func (c *Conn) Begin(ctx context.Context) (pgx.Tx, error) {
 		if _, err := tx.Exec(ctx, "SAVEPOINT "+name); err != nil {
 			return nil, err
 		}
-		return &savepointTx{Tx: tx, name: name, counter: 1}, nil
+		return &savepointTx{Tx: tx, name: name, counter: counter}, nil
 	}
 	return c.pool.Begin(ctx)
 }

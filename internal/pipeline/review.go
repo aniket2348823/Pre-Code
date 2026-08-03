@@ -205,7 +205,17 @@ func (szp *ShiftZeroPipeline) Run(ctx context.Context, req *ReviewRequest) (*Rev
 			Language:    language,
 			Filename:    filename,
 		}
-		szp.pipeline.Run(ctx, pipelineReq)
+		pipelineRep := szp.pipeline.Run(ctx, pipelineReq)
+		if !pipelineRep.Passed {
+			report.DeterministicFindings = append(report.DeterministicFindings, scanReport.Findings...)
+			for _, reason := range pipelineRep.Reasons {
+				report.DeterministicFindings = append(report.DeterministicFindings, scanner.Finding{
+					Severity: scanner.SeverityHigh,
+					Message:  reason,
+					Filename: filename,
+				})
+			}
+		}
 	}
 
 	// ════════════════════════════════════════════════════════════════
@@ -291,16 +301,16 @@ func (szp *ShiftZeroPipeline) Run(ctx context.Context, req *ReviewRequest) (*Rev
 			report.MainLLMResponse = fixedCode
 
 			// Re-scan the fixed code.
-			reScan := szp.engine.Run(ctx, scanner.Input{
+			scanReport = szp.engine.Run(ctx, scanner.Input{
 				Language: language,
 				Code:     fixedCode,
 				Filename: filename,
 			})
 
 			// Re-check with reviewers if issues remain.
-			if len(reScan.Findings) == 0 {
+			if len(scanReport.Findings) == 0 {
 				// All clear — update findings and break.
-				report.DeterministicFindings = reScan.Findings
+				report.DeterministicFindings = scanReport.Findings
 				report.Evidence = append(report.Evidence, confidence.Evidence{
 					Source:  "revalidation",
 					Verdict: "pass",
@@ -312,11 +322,11 @@ func (szp *ShiftZeroPipeline) Run(ctx context.Context, req *ReviewRequest) (*Rev
 			}
 
 			// Still has issues — update and continue.
-			report.DeterministicFindings = reScan.Findings
+			report.DeterministicFindings = scanReport.Findings
 			report.Evidence = append(report.Evidence, confidence.Evidence{
 				Source:  "revalidation",
 				Verdict: "fail",
-				Detail:  fmt.Sprintf("Retry %d: %d issues remain", retry+1, len(reScan.Findings)),
+				Detail:  fmt.Sprintf("Retry %d: %d issues remain", retry+1, len(scanReport.Findings)),
 				Weight:  0.9,
 			})
 			report.Confidence = szp.confidence.Score(report.Evidence)

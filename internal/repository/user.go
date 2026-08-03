@@ -92,15 +92,50 @@ func (r *UserRepository) FindByID(ctx context.Context, id string) (*User, error)
 // UpdateLastLogin updates the last_login_at timestamp.
 func (r *UserRepository) UpdateLastLogin(ctx context.Context, userID string) error {
 	query := `UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, userID)
-	return err
+	tag, err := r.pool.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update last login: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found")
+	}
+	return nil
 }
 
 // UpdateProfile updates user profile fields.
 func (r *UserRepository) UpdateProfile(ctx context.Context, userID, name, avatarURL string) error {
 	query := `UPDATE users SET name = $2, avatar_url = $3, updated_at = NOW() WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, userID, name, avatarURL)
-	return err
+	tag, err := r.pool.Exec(ctx, query, userID, name, avatarURL)
+	if err != nil {
+		return fmt.Errorf("failed to update profile: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found")
+	}
+	return nil
+}
+
+// UpdateProfilePartial updates only non-empty user profile fields.
+func (r *UserRepository) UpdateProfilePartial(ctx context.Context, userID, name, avatarURL string) error {
+	user, err := r.FindByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if name != "" {
+		user.Name = name
+	}
+	if avatarURL != "" {
+		user.AvatarURL = avatarURL
+	}
+	query := `UPDATE users SET name = $2, avatar_url = $3, updated_at = NOW() WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, query, userID, user.Name, user.AvatarURL)
+	if err != nil {
+		return fmt.Errorf("failed to update profile: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("user not found")
+	}
+	return nil
 }
 
 // UpdatePassword updates a user's password hash.

@@ -1,87 +1,65 @@
 package main
 
 import (
+	"crypto/md5"
+	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
-	"errors"
-	"io/ioutil"
+	"os/exec"
 )
 
-// UserHandler processes user requests without proper error handling
-func UserHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("id")
-	
-	// Issue: No validation of userID
-	data := fetchUserData(userID)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(data))
+// 1. Hardcoded Secret Vulnerability
+const AWSSecretKey = "AKIAIOSFODNN7EXAMPLE"
+const HardcodedJWTSecret = "super-secret-password-12345"
+
+type UserHandler struct {
+	db *sql.DB
 }
 
-// fetchUserData makes an HTTP request with no timeout or retry logic
-func fetchUserData(userID string) string {
-	resp, err := http.Get("https://api.example.com/users/" + userID)
+// 2. SQL Injection Vulnerability
+func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+
+	// Vulnerable: Direct string concatenation in SQL query
+	query := "SELECT id, email, role FROM users WHERE username = '" + username + "'"
+	rows, err := h.db.Query(query)
 	if err != nil {
-		// Issue: Silent error handling
-		return "{}"
+		http.Error(w, err.Error(), 500)
+		return
 	}
-	
-	// Issue: No defer resp.Body.Close()
-	body, _ := ioutil.ReadAll(resp.Body)
-	return string(body)
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		var email, role string
+		rows.Scan(&id, &email, &role)
+		fmt.Fprintf(w, "User: %d | %s | %s\n", id, email, role)
+	}
 }
 
-// ProcessConfig reads sensitive data without proper validation
-func ProcessConfig(configPath string) error {
-	// Issue: No path traversal prevention
-	data, err := ioutil.ReadFile(configPath)
+// 3. Command Injection Vulnerability
+func RunUserDiagnostic(w http.ResponseWriter, r *http.Request) {
+	targetHost := r.URL.Query().Get("host")
+
+	// Vulnerable: Unsanitized user input passed directly to shell command execution
+	cmd := exec.Command("sh", "-c", "ping -c 3 "+targetHost)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// Issue: Error shadowing previous error
-		err = errors.New("failed to read")
+		http.Error(w, "Command failed: "+string(out), 500)
+		return
 	}
-	
-	fmt.Println(string(data))
-	return nil
+	w.Write(out)
 }
 
-// ConcurrentOperation has race condition and goroutine leak risks
-func ConcurrentOperation(items []string) {
-	for _, item := range items {
-		// Issue: Unbounded goroutines, no WaitGroup, no channel cleanup
-		go func() {
-			result := processItem(item)
-			fmt.Println(result)
-		}()
-	}
+// 4. Weak Cryptography Vulnerability
+func HashUserPassword(password string) string {
+	// Vulnerable: Using MD5 for password hashing instead of Argon2 or bcrypt
+	hash := md5.Sum([]byte(password))
+	return fmt.Sprintf("%x", hash)
 }
 
-func processItem(item string) string {
-	return item
-}
-
-// DatabaseConnection lacks proper resource management
-func DatabaseConnection() {
-	db := ConnectDB()
-	// Issue: No defer db.Close()
-	data := db.Query("SELECT * FROM users")
-	fmt.Println(data)
-}
-
-// main entry point
 func main() {
-	http.HandleFunc("/user", UserHandler)
-	http.ListenAndServe(":8080", nil)
-}
-
-func ConnectDB() *DBConn {
-	return &DBConn{}
-}
-
-type DBConn struct{}
-
-func (d *DBConn) Query(sql string) string {
-	return "result"
-}
-
-func (d *DBConn) Close() error {
-	return nil
+	fmt.Println("Vulnerable sample app running...")
+	log.Fatal(http.ListenAndServe(":8081", nil))
 }

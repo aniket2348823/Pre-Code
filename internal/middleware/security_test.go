@@ -224,7 +224,7 @@ func TestCSRFProtect_SetsCookie(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	cfg := DefaultCSRFConfig()
 	m := CSRFProtect(cfg)
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
 	m(handler).ServeHTTP(rec, req)
 	cookies := rec.Result().Cookies()

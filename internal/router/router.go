@@ -34,12 +34,23 @@ var rlHeaders *mw.RateLimitHeadersMiddleware
 
 func (r *Router) setupMiddleware() {
 	r.Use(requestid.Middleware)
-	r.Use(middleware.RealIP)
+	r.Use(mw.TracingMiddleware)
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := r.RemoteAddr
+			if idx := strings.LastIndex(ip, ":"); idx > 0 {
+				ip = ip[:idx]
+			}
+			r.RemoteAddr = ip
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Use(middleware.Logger)
 	r.Use(slogger.Middleware)
 	r.Use(middleware.Recoverer)
 	r.Use(compression.Middleware)
 	r.Use(r.securityHeadersMiddleware)
+	r.Use(mw.CacheControl(mw.DefaultAPICache()))
 	r.useCORSFromConfig()
 	r.Use(middleware.Heartbeat("/health"))
 
@@ -60,13 +71,24 @@ func (r *Router) setupMiddleware() {
 	})
 
 	// Rate limit headers on ALL responses (in-memory, informational)
-	rlHeaders = mw.NewRateLimitHeadersMiddleware(10000, time.Minute)
+	rlRateLimit := 10000
+	if r.cfg != nil && r.cfg.Server.RateLimitPerMin > 0 {
+		rlRateLimit = r.cfg.Server.RateLimitPerMin
+	}
+	rlHeaders = mw.NewRateLimitHeadersMiddleware(rlRateLimit, time.Minute)
 	r.Use(rlHeaders.Middleware(func(req *http.Request) string {
 		if claims, ok := auth.ClaimsFromContext(req.Context()); ok {
 			return "user:" + claims.UserID
 		}
 		return mw.RateLimitByIPKey(req)
 	}))
+}
+
+func (r *Router) getBaseURLFromConfig() string {
+	if r.cfg != nil && r.cfg.Server.BaseURL != "" {
+		return r.cfg.Server.BaseURL
+	}
+	return "http://localhost:8080"
 }
 
 func (r *Router) securityHeadersMiddleware(next http.Handler) http.Handler {
@@ -127,12 +149,17 @@ func corsAllExplicit(origins []string) bool {
 }
 
 func (r *Router) setupRoutes() {
+	// Top-level route for VS Code extension compatibility (sends /v1/deep-analyze without /api prefix)
+	r.Post("/v1/deep-analyze", r.deepAnalyzeHandler)
+
 	r.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/health", r.healthHandler)
 		v1.Get("/ready", r.readinessHandler)
-		v1.Get("/metrics", r.metricsHandler)
 		v1.Get("/docs", r.swaggerUIHandler)
 		v1.Get("/docs/openapi.yaml", r.openapiSpecHandler)
+
+		// Dual-engine analysis — no auth/middleware, same level as /health (used by VS Code extension)
+		v1.Post("/deep-analyze", r.deepAnalyzeHandler)
 
 		public := v1.Group(nil)
 		public.Use(r.authRateLimitMiddleware)
@@ -316,6 +343,27 @@ func (r *Router) setupRoutes() {
 			protected.With(mw.RequireScope("webhooks:write")).Delete("/webhooks/{webhookID}", r.deleteWebhookHandler)
 			protected.With(mw.RequireScope("webhooks:read")).Get("/webhooks/{webhookID}/deliveries", r.getWebhookDeliveriesHandler)
 
+			// Webhook replay
+			protected.With(mw.RequireScope("webhooks:write")).Post("/webhooks/replay", r.replayWebhookHandler)
+
+			// Rate limit dashboard
+			protected.With(mw.RequireScope("analytics:read")).Get("/ratelimit/dashboard", r.rateLimitDashboardHandler)
+
+			// Export/Import
+			protected.With(mw.RequireScope("agents:read")).Get("/export/conversations", r.exportConversationsHandler)
+			protected.With(mw.RequireScope("skills:read")).Get("/export/skills", r.exportSkillsHandler)
+			protected.With(mw.RequireScope("skills:write")).Post("/import", r.importDataHandler)
+
+			// Feature flags (admin only)
+			protected.With(mw.RequireScope("admin")).Get("/feature-flags", r.listFeatureFlagsHandler)
+			protected.With(mw.RequireScope("admin")).Put("/feature-flags", r.updateFeatureFlagHandler)
+			protected.With(mw.RequireScope("admin")).Delete("/feature-flags", r.deleteFeatureFlagHandler)
+			protected.With(mw.RequireScope("agents:read")).Get("/feature-flags/check", r.checkFeatureFlagHandler)
+
+			// Audit log retention (admin only)
+			protected.With(mw.RequireScope("admin")).Post("/audit/cleanup", r.cleanupAuditLogsHandler)
+			protected.With(mw.RequireScope("admin")).Get("/audit/retention", r.getAuditRetentionHandler)
+
 			admin := protected.Group(nil)
 			admin.Use(r.adminMiddleware)
 			{
@@ -325,12 +373,28 @@ func (r *Router) setupRoutes() {
 				admin.Delete("/admin/users/{userID}", r.adminDeleteUserHandler)
 			}
 
+			protected.With(mw.RequireScope("admin")).Get("/metrics", r.metricsHandler)
+
+			// Team invitations
+			protected.With(mw.RequireScope("orgs:write")).Post("/organizations/{orgID}/invitations", r.inviteMemberHandler)
+			protected.With(mw.RequireScope("orgs:read")).Get("/organizations/{orgID}/invitations", r.listInvitationsHandler)
+			protected.With(mw.RequireScope("orgs:write")).Delete("/organizations/{orgID}/invitations/{invitationID}", r.revokeInvitationHandler)
+			protected.Post("/invitations/{token}/accept", r.acceptInvitationHandler)
+
+			// Audit log viewer
+			protected.With(mw.RequireScope("admin")).Get("/audit/logs", r.listAuditLogsHandler)
+
 			// HITL queue endpoints
 			if r.hitlQueue != nil {
 				protected.With(mw.RequireScope("tasks:read")).Get("/hitl/pending", r.listHITLCheckpointsHandler)
 				protected.With(mw.RequireScope("tasks:write")).Post("/hitl/decide", r.decideHITLHandler)
 				protected.With(mw.RequireScope("tasks:read")).Get("/hitl/status", r.hitlStatusHandler)
 			}
+
+			// User session management
+			protected.With(mw.RequireScope("agents:read")).Get("/users/me/sessions", r.listUserSessionsHandler)
+			protected.With(mw.RequireScope("agents:read")).Get("/users/me/sessions/active", r.listActiveSessionsHandler)
+			protected.With(mw.RequireScope("agents:write")).Post("/sessions/{sessionID}/invalidate", r.invalidateSessionHandler)
 
 			protected.Get("/ws", r.handleWebSocket)
 
@@ -374,10 +438,7 @@ func (r *Router) forgotPasswordHandler(w http.ResponseWriter, req *http.Request)
 	}
 
 	if r.email != nil {
-		baseURL := fmt.Sprintf("http://%s", req.Host)
-		if r.cfg != nil && r.cfg.Server.Env == "production" {
-			baseURL = "https://" + req.Host
-		}
+		baseURL := r.getBaseURLFromConfig()
 		if err := r.email.SendPasswordResetEmail(req.Context(), user.ID, user.Email, baseURL); err != nil {
 			slog.Error("failed to send password reset email", "error", err, "user_id", user.ID)
 		}
@@ -410,7 +471,7 @@ func (r *Router) resetPasswordHandler(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	vt, ok := r.email.ValidateToken(input.Token)
+	vt, ok := r.email.ValidateToken(req.Context(), input.Token)
 	if !ok || vt.Purpose != "reset" {
 		apiErr := apperrors.New(apperrors.ErrTokenInvalid, "invalid or expired reset token")
 		response.JSON(w, apiErr.HTTPStatus(), apiErr)
@@ -437,7 +498,7 @@ func (r *Router) resetPasswordHandler(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	r.email.InvalidateToken(input.Token)
+	r.email.InvalidateToken(req.Context(), input.Token)
 
 	response.JSON(w, http.StatusOK, map[string]string{"message": "password has been reset"})
 }
@@ -456,7 +517,7 @@ func (r *Router) verifyEmailHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	vt, ok := r.email.ValidateToken(token)
+	vt, ok := r.email.ValidateToken(req.Context(), token)
 	if !ok || vt.Purpose != "verify" {
 		apiErr := apperrors.New(apperrors.ErrTokenInvalid, "invalid or expired verification token")
 		response.JSON(w, apiErr.HTTPStatus(), apiErr)
@@ -471,7 +532,7 @@ func (r *Router) verifyEmailHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	r.email.InvalidateToken(token)
+	r.email.InvalidateToken(req.Context(), token)
 
 	response.JSON(w, http.StatusOK, map[string]string{"message": "email verified successfully"})
 }
@@ -692,10 +753,7 @@ func (r *Router) registerHandler(w http.ResponseWriter, req *http.Request) {
 
 	// Send verification email (best-effort)
 	if r.email != nil {
-		baseURL := fmt.Sprintf("http://%s", req.Host)
-		if r.cfg != nil && r.cfg.Server.Env == "production" {
-			baseURL = "https://" + req.Host
-		}
+		baseURL := r.getBaseURLFromConfig()
 		go func() {
 			defer func() {
 				if rec := recover(); rec != nil {
@@ -804,7 +862,30 @@ func (r *Router) currentUserHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	response.JSON(w, http.StatusOK, user)
+	type userResponse struct {
+		ID          string     `json:"id"`
+		Email       string     `json:"email"`
+		Name        string     `json:"name"`
+		AvatarURL   string     `json:"avatar_url,omitempty"`
+		Role        string     `json:"role"`
+		IsActive    bool       `json:"is_active"`
+		LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+		CreatedAt   time.Time  `json:"created_at"`
+		UpdatedAt   time.Time  `json:"updated_at"`
+	}
+
+	resp := userResponse{
+		ID:          user.ID,
+		Email:       user.Email,
+		Name:        user.Name,
+		AvatarURL:   user.AvatarURL,
+		Role:        user.Role,
+		IsActive:    user.IsActive,
+		LastLoginAt: user.LastLoginAt,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+	}
+	response.JSON(w, http.StatusOK, resp)
 }
 
 func (r *Router) updateProfileHandler(w http.ResponseWriter, req *http.Request) {
@@ -822,7 +903,7 @@ func (r *Router) updateProfileHandler(w http.ResponseWriter, req *http.Request) 
 		response.JSON(w, apiErr.HTTPStatus(), apiErr)
 		return
 	}
-	if err := r.users.UpdateProfile(req.Context(), claims.UserID, input.Name, input.AvatarURL); err != nil {
+	if err := r.users.UpdateProfilePartial(req.Context(), claims.UserID, input.Name, input.AvatarURL); err != nil {
 		apiErr := apperrors.New(apperrors.ErrDBError, "failed to update profile")
 		response.JSON(w, apiErr.HTTPStatus(), apiErr)
 		return
@@ -1741,13 +1822,20 @@ func (r *Router) authMiddleware(next http.Handler) http.Handler {
 				response.JSON(w, apiErr.HTTPStatus(), apiErr)
 				return
 			}
-			if parts[1] == "local-dev" || parts[1] == "va_dev" || strings.HasPrefix(parts[1], "va_dev_") {
+// Check for dev token (only allowed in development mode)
+		if parts[1] == "local-dev" || parts[1] == "va_dev" || strings.HasPrefix(parts[1], "va_dev_") {
+			if r.cfg != nil && r.cfg.Server.Env == "development" {
 				claims = &auth.Claims{
 					UserID:   "dev-user-001",
 					Role:     "admin",
 					IsAPIKey: true,
 				}
 			} else {
+				apiErr := apperrors.New(apperrors.ErrTokenInvalid, "dev tokens are not allowed in production")
+				response.JSON(w, apiErr.HTTPStatus(), apiErr)
+				return
+			}
+		} else {
 				c, err := r.auth.ValidateToken(parts[1])
 				if err != nil {
 					apiErr := apperrors.New(apperrors.ErrTokenExpired, "invalid or expired token")

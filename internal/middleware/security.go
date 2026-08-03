@@ -3,6 +3,7 @@ package middleware
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -109,7 +110,7 @@ func DefaultCSRFConfig() *CSRFConfig {
 func GenerateCSRFToken(length int) (string, error) {
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to generate CSRF token: %w", err)
 	}
 	return hex.EncodeToString(bytes), nil
 }
@@ -123,21 +124,31 @@ func CSRFProtect(cfg *CSRFConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			method := strings.ToUpper(r.Method)
+			isIgnored := false
 			for _, m := range cfg.IgnoreMethods {
 				if method == m {
-					next.ServeHTTP(w, r)
-					return
+					isIgnored = true
+					break
 				}
 			}
 
-			cookieToken, err := r.Cookie(cfg.CookieName)
-			if err != nil || cookieToken.Value == "" {
+			cookieToken, _ := r.Cookie(cfg.CookieName)
+			headerToken := r.Header.Get(cfg.HeaderName)
+
+			if isIgnored {
+				if cookieToken != nil && headerToken != "" {
+					if !compareTokens(cookieToken.Value, headerToken) {
+						http.Error(w, "CSRF token mismatch", http.StatusForbidden)
+						return
+					}
+				}
+
 				token, genErr := GenerateCSRFToken(cfg.TokenLength)
 				if genErr != nil {
 					http.Error(w, "failed to generate CSRF token", http.StatusInternalServerError)
 					return
 				}
-				cookieToken = &http.Cookie{
+				http.SetCookie(w, &http.Cookie{
 					Name:     cfg.CookieName,
 					Value:    token,
 					Path:     "/",
@@ -146,12 +157,17 @@ func CSRFProtect(cfg *CSRFConfig) func(http.Handler) http.Handler {
 					HttpOnly: cfg.CookieHTTPOnly,
 					MaxAge:   int(cfg.MaxAge.Seconds()),
 					SameSite: http.SameSiteLaxMode,
-				}
-				http.SetCookie(w, cookieToken)
+				})
 				w.Header().Set(cfg.HeaderName, token)
+				next.ServeHTTP(w, r)
+				return
 			}
 
-			headerToken := r.Header.Get(cfg.HeaderName)
+			if cookieToken == nil || cookieToken.Value == "" {
+				http.Error(w, "missing CSRF token cookie", http.StatusForbidden)
+				return
+			}
+
 			if headerToken == "" {
 				http.Error(w, "missing CSRF token header", http.StatusForbidden)
 				return

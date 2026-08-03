@@ -82,7 +82,7 @@ func (l *TieredRateLimiter) Middleware(keyFunc func(*http.Request) string, tierF
 
 			l.mu.Lock()
 			bucket, exists := l.buckets[key]
-			if !exists || bucket.tier != tier {
+			if !exists {
 				bucket = &tokenBucket{
 					minuteTokens: float64(tier.RequestsPerMinute),
 					hourTokens:   float64(tier.RequestsPerHour),
@@ -91,6 +91,14 @@ func (l *TieredRateLimiter) Middleware(keyFunc func(*http.Request) string, tierF
 					tier:         tier,
 				}
 				l.buckets[key] = bucket
+			} else if bucket.tier != tier {
+				bucket.mu.Lock()
+				bucket.tier = tier
+				bucket.minuteTokens = float64(tier.RequestsPerMinute)
+				bucket.hourTokens = float64(tier.RequestsPerHour)
+				bucket.dayTokens = float64(tier.RequestsPerDay)
+				bucket.lastRefill = time.Now()
+				bucket.mu.Unlock()
 			}
 			l.mu.Unlock()
 
@@ -98,8 +106,8 @@ func (l *TieredRateLimiter) Middleware(keyFunc func(*http.Request) string, tierF
 			bucket.refill(tier)
 			if bucket.minuteTokens <= 0 || bucket.hourTokens <= 0 || bucket.dayTokens <= 0 {
 				bucket.mu.Unlock()
-			w.Header().Set("X-RateLimit-Limit", strconv.Itoa(tier.RequestsPerMinute))
-			w.Header().Set("X-RateLimit-Remaining", "0")
+				w.Header().Set("X-RateLimit-Limit", strconv.Itoa(tier.RequestsPerMinute))
+				w.Header().Set("X-RateLimit-Remaining", "0")
 				w.Header().Set("Retry-After", "60")
 				w.Header().Set("X-RateLimit-Tier", tierName(tier))
 				http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)

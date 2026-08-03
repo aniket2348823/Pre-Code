@@ -248,11 +248,38 @@ func (p *PlanAwareRateLimiter) Middleware(orgPlanFn OrgPlanFunc) func(http.Handl
 			// 2. Check daily quota
 			if limits.RequestsPerDay > 0 {
 				dayKey := fmt.Sprintf("ratelimit:org:%s:day:%s", orgID, time.Now().Format("2006-01-02"))
-				count, _ := p.client.Incr(r.Context(), dayKey).Result()
-				if count == 1 {
-					p.client.Expire(r.Context(), dayKey, 25*time.Hour)
+				current, _ := p.client.Get(r.Context(), dayKey).Int64()
+				if int(current) >= limits.RequestsPerDay {
+					response.JSON(w, http.StatusTooManyRequests, map[string]interface{}{
+						"code":    "RATE_002",
+						"error":   "daily quota exceeded",
+						"plan":    plan,
+						"message": "Upgrade your plan for more daily requests",
+					})
+					return
 				}
-				if int(count) > limits.RequestsPerDay {
+				// Use Lua script for atomic check-and-increment to avoid race condition
+				// Only increment if the new count would not exceed the limit
+				luaScript := redis.NewScript(`
+					local current = redis.call('GET', KEYS[1])
+					if current == false then
+						current = 0
+					else
+						current = tonumber(current)
+					end
+					if current >= tonumber(ARGV[1]) then
+						return current
+					end
+					local newval = redis.call('INCR', KEYS[1])
+					if newval == 1 then
+						redis.call('EXPIRE', KEYS[1], ARGV[2])
+					end
+					return newval
+				`)
+				count, err := luaScript.Run(r.Context(), p.client, []string{dayKey}, limits.RequestsPerDay, int(25*time.Hour/time.Second)).Int64()
+				if err != nil {
+					slog.Warn("daily quota check failed, allowing request", "error", err)
+				} else if int(count) > limits.RequestsPerDay {
 					response.JSON(w, http.StatusTooManyRequests, map[string]interface{}{
 						"code":    "RATE_002",
 						"error":   "daily quota exceeded",

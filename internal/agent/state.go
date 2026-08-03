@@ -41,6 +41,7 @@ type Task struct {
 	ID                string                 `json:"id"`
 	UserID            string                 `json:"user_id"`
 	ProjectID         string                 `json:"project_id"`
+	OrgID             string                 `json:"org_id"`
 	Title             string                 `json:"title"`
 	Description       string                 `json:"description"`
 	State             TaskState              `json:"state"`
@@ -55,6 +56,7 @@ type Task struct {
 	Complexity        string                 `json:"complexity,omitempty"`
 	InputTokens       int                    `json:"input_tokens"`
 	OutputTokens      int                    `json:"output_tokens"`
+	ToolTokens        int                    `json:"tool_tokens"`
 	TotalTokens       int                    `json:"total_tokens"`
 	Cost              float64                `json:"cost"`
 	HITLRequired      bool                   `json:"hitl_required"`
@@ -165,17 +167,17 @@ func (sm *StateMachine) Transition(task *Task, event Event) error {
 	case StateExecuting:
 		switch event {
 		case EventStepComplete:
-			if task.CurrentStep >= task.Plan.TotalSteps-1 {
+			if task.Plan != nil && task.CurrentStep >= task.Plan.TotalSteps-1 {
 				task.State = StateReviewing
 			}
 			// Stay in executing for next step
 			return nil
 		case EventStepFailed:
-			task.RetryCount++
-			if task.RetryCount >= task.MaxRetries {
+			if task.RetryCount+1 >= task.MaxRetries {
 				task.State = StateFailed
 				return nil
 			}
+			task.RetryCount++
 			// Stay in executing for retry
 			return nil
 		case EventHITLRequired:

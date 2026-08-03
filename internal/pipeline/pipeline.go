@@ -77,6 +77,10 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) *Report {
 		Passed: true,
 	}
 
+	if ctx.Err() != nil {
+		return rep
+	}
+
 	// Layer 1: Schema Validation (if LLM output provided)
 	if len(req.Output) > 0 {
 		entity := "architecture" // default entity type
@@ -95,6 +99,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) *Report {
 	}
 
 	// Layer 2: Requirements Resolution
+	if ctx.Err() != nil {
+		return rep
+	}
 	reqRep := p.requirements.Resolve(req.Description, req.Declared)
 	rep.Requirements = reqRep
 	reqPassed := true
@@ -110,6 +117,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) *Report {
 	}
 
 	// Layer 3: Compliance Check
+	if ctx.Err() != nil {
+		return rep
+	}
 	compRep := p.compliance.Check(req.Description, req.Declared)
 	rep.Compliance = compRep
 	compPassed := true
@@ -127,6 +137,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) *Report {
 	}
 
 	// Layer 4: Static Analysis (if code provided and engine available)
+	if ctx.Err() != nil {
+		return rep
+	}
 	if req.Code != "" && p.engine != nil {
 		scanRep := p.engine.Run(ctx, scanner.Input{
 			Language: req.Language,

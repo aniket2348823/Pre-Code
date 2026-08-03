@@ -27,6 +27,9 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('vigilagent.verifySelection', async () => {
             await verifySelection(client);
+        }),
+        vscode.commands.registerCommand('vigilagent.dualEngine', async () => {
+            await dualEngineAnalysis(client);
         })
     );
 
@@ -314,6 +317,33 @@ async function verifySelection(client: VigilAgentClient): Promise<void> {
     }
 }
 
+async function dualEngineAnalysis(client: VigilAgentClient): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        vscode.window.showWarningMessage('No active editor found.');
+        return;
+    }
+
+    const code = editor.document.getText();
+    const filename = editor.document.fileName.split(/[/\\]/).pop() || 'unknown';
+    const language = editor.document.languageId;
+
+    vscode.window.showInformationMessage('VigilAgent: Running dual-engine analysis...');
+
+    try {
+        const result = await client.dualEngine(code, language);
+        const panel = vscode.window.createWebviewPanel(
+            'vigilagent-results',
+            'VigilAgent Dual-Engine Results',
+            vscode.ViewColumn.Beside,
+            {}
+        );
+        panel.webview.html = formatDualEngineWebview(result, filename);
+    } catch (err: any) {
+        vscode.window.showErrorMessage(`Dual-engine analysis failed: ${err.message}`);
+    }
+}
+
 function escapeHtml(text: string): string {
     if (!text) { return ''; }
     return text
@@ -322,6 +352,93 @@ function escapeHtml(text: string): string {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+function formatDualEngineWebview(result: Record<string, unknown>, filename: string): string {
+    const grade = (result.grade as string) || 'N/A';
+    const score = (result.score as number) || 0;
+    const stats = (result.engine_stats as Record<string, unknown>) || {};
+    const det = (stats.deterministic as Record<string, unknown>) || {};
+    const llm = (stats.llm as Record<string, unknown>) || {};
+    const findings = (result.findings as Record<string, unknown>[]) || [];
+    const corroborated = findings.filter((f: Record<string, unknown>) => (f.rule_id as string || '').endsWith('+llm')).length;
+
+    let findingsHtml = '';
+    if (findings.length > 0) {
+        findingsHtml = `<h2>Findings (${findings.length}`;
+        if (corroborated > 0) {
+            findingsHtml += ` | ${corroborated} corroborated`;
+        }
+        findingsHtml += ')</h2>';
+        for (const f of findings) {
+            const severity = (f.severity as string) || 'unknown';
+            const engine = (f.engine as string) || 'unknown';
+            const message = (f.message as string) || '';
+            const fix = f.fix ? `<br><em>Fix: ${escapeHtml(f.fix as string)}</em>` : '';
+            const corrobMark = (f.rule_id as string || '').endsWith('+llm') ? ' ✓' : '';
+            findingsHtml += `
+        <div class="finding ${escapeHtml(severity)}">
+            <strong>[${escapeHtml(severity.toUpperCase())}]</strong> (${escapeHtml(engine)})${corrobMark}
+            ${escapeHtml(message)}
+            ${fix}
+        </div>`;
+        }
+    } else {
+        findingsHtml = '<h2>✅ No issues found</h2><p>Code looks clean!</p>';
+    }
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: var(--vscode-font-family); padding: 20px; color: var(--vscode-foreground); }
+        h1 { color: var(--vscode-textLink-foreground); }
+        h2 { margin-top: 20px; }
+        .grade { font-size: 2em; font-weight: bold; }
+        .grade-a { color: #4ec9b0; }
+        .grade-b { color: #dcdcaa; }
+        .grade-c { color: #ce9178; }
+        .grade-d, .grade-f { color: #f44747; }
+        .stats { display: flex; gap: 20px; margin: 15px 0; }
+        .stat-box { padding: 10px; background: var(--vscode-editor-background); border-radius: 4px; flex: 1; }
+        .stat-label { font-size: 0.9em; color: var(--vscode-descriptionForeground); }
+        .stat-value { font-size: 1.2em; font-weight: bold; }
+        .finding { margin: 8px 0; padding: 10px; background: var(--vscode-editor-background); border-radius: 4px; }
+        .critical { border-left: 3px solid #f44747; }
+        .high { border-left: 3px solid #ce9178; }
+        .medium { border-left: 3px solid #dcdcaa; }
+        .low { border-left: 3px solid #4ec9b0; }
+        .info { border-left: 3px solid #808080; }
+    </style>
+</head>
+<body>
+    <h1>🛡️ Dual-Engine Analysis — ${escapeHtml(filename)}</h1>
+    <div class="grade grade-${grade.toLowerCase()}">Grade ${escapeHtml(grade)} — ${score}%</div>
+    
+    <div class="stats">
+        <div class="stat-box">
+            <div class="stat-label">Deterministic Engine</div>
+            <div class="stat-value">${det.findings_count || 0} findings</div>
+            <div class="stat-label">${det.latency_ms || 0}ms</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">LLM Engine</div>
+            <div class="stat-value">${llm.findings_count || 0} findings</div>
+            <div class="stat-label">${llm.latency_ms || 0}ms (${llm.model || 'unknown'})</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">Total Latency</div>
+            <div class="stat-value">${Number(stats.total_latency_ms || 0).toFixed(0)}ms</div>
+        </div>
+    </div>
+    
+    ${findingsHtml}
+    
+    <hr>
+    <p><em>Powered by VigilAgent Dual-Engine Analysis</em></p>
+</body>
+</html>`;
 }
 
 function formatResultsWebview(result: Record<string, unknown>, filename: string): string {

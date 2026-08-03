@@ -55,7 +55,14 @@ func (m *Manager) Get(ctx context.Context, name string) (*Flag, error) {
 	m.mu.RLock()
 	if flag, ok := m.cache[name]; ok && time.Since(m.lastFetch) < m.ttl {
 		m.mu.RUnlock()
-		return flag, nil
+		cp := *flag
+		if flag.Rules != nil {
+			cp.Rules = make(map[string]interface{}, len(flag.Rules))
+			for k, v := range flag.Rules {
+				cp.Rules[k] = v
+			}
+		}
+		return &cp, nil
 	}
 	m.mu.RUnlock()
 

@@ -39,10 +39,30 @@ type lockoutState struct {
 
 // NewAccountLockout creates a new in-memory account lockout manager.
 func NewAccountLockout(maxAttempts int, lockoutDuration time.Duration) *AccountLockout {
-	return &AccountLockout{
+	al := &AccountLockout{
 		attempts:        make(map[string]*lockoutState),
 		maxAttempts:     maxAttempts,
 		lockoutDuration: lockoutDuration,
+	}
+	go al.cleanupLoop()
+	return al
+}
+
+func (al *AccountLockout) cleanupLoop() {
+	ticker := time.NewTicker(al.lockoutDuration)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		al.mu.Lock()
+		now := time.Now()
+		for id, state := range al.attempts {
+			expired := !state.LockedUntil.IsZero() && now.After(state.LockedUntil.Add(al.lockoutDuration))
+			stale := state.LockedUntil.IsZero() && now.After(state.LastAttempt.Add(al.lockoutDuration))
+			if expired || stale {
+				delete(al.attempts, id)
+			}
+		}
+		al.mu.Unlock()
 	}
 }
 
@@ -107,25 +127,9 @@ func (al *AccountLockout) GetRemainingLockout(_ context.Context, identifier stri
 	return remaining
 }
 
-func (al *AccountLockout) Cleanup(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			al.mu.Lock()
-			now := time.Now()
-			for id, state := range al.attempts {
-				if !state.LockedUntil.IsZero() && now.After(state.LockedUntil.Add(al.lockoutDuration)) {
-					delete(al.attempts, id)
-				}
-			}
-			al.mu.Unlock()
-		}
-	}
+// Cleanup is kept for backward compatibility. Cleanup now runs automatically.
+func (al *AccountLockout) Cleanup(_ context.Context, _ time.Duration) {
+	// No-op: cleanup runs automatically in background goroutine
 }
 
 // --- Redis-Backed Implementation ---

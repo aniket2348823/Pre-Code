@@ -107,6 +107,21 @@ type SkillMetrics struct {
 	IssuesFixed  int           `json:"issues_fixed"`
 }
 
+// FileSecurityConfig restricts file operations to specified directories.
+// WARNING: Without configuring AllowedDirs, file tools can access ANY file
+// on the system including SSH keys, /etc/passwd, and application secrets.
+type FileSecurityConfig struct {
+	AllowedDirs []string `json:"allowed_dirs"`
+}
+
+// CommandSecurityConfig restricts which shell commands can be executed.
+// WARNING: Without configuring Blocklist or Allowlist, arbitrary commands
+// including destructive ones can be executed on the host system.
+type CommandSecurityConfig struct {
+	Blocklist []string `json:"blocklist"`
+	Allowlist []string `json:"allowlist"`
+}
+
 func init() {
 	// Ensure fmt is used
 	_ = fmt.Sprintf

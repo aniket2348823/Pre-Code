@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -44,6 +45,8 @@ func NewNATS(cfg *config.NATSConfig) (*NATS, error) {
 		Name:     cfg.Stream,
 		Subjects: []string{cfg.Stream + ".>"},
 		Storage:  jetstream.FileStorage,
+		MaxMsgs:  1_000_000,
+		MaxAge:   24 * time.Hour,
 	})
 	if err != nil {
 		nc.Close()

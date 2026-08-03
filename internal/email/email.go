@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"html/template"
 	"log/slog"
 	"net/smtp"
@@ -41,7 +42,6 @@ type SMTPConfig struct {
 type SMTPSender struct {
 	config SMTPConfig
 	auth   smtp.Auth
-	mu     sync.Mutex
 }
 
 // NewSMTPSender creates a new SMTP email sender.
@@ -68,7 +68,18 @@ func (s *SMTPSender) Send(ctx context.Context, msg *Message) error {
 	buf.WriteString(fmt.Sprintf("Subject: %s\r\n", msg.Subject))
 	buf.WriteString("MIME-Version: 1.0\r\n")
 
-	if msg.HTMLBody != "" {
+	if msg.HTMLBody != "" && msg.Body != "" {
+		boundary := generateBoundary()
+		buf.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary))
+		buf.WriteString("\r\n")
+		buf.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+		buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+		buf.WriteString(msg.Body)
+		buf.WriteString(fmt.Sprintf("\r\n--%s\r\n", boundary))
+		buf.WriteString("Content-Type: text/html; charset=UTF-8\r\n\r\n")
+		buf.WriteString(msg.HTMLBody)
+		buf.WriteString(fmt.Sprintf("\r\n--%s--\r\n", boundary))
+	} else if msg.HTMLBody != "" {
 		buf.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
 		buf.WriteString("\r\n")
 		buf.WriteString(msg.HTMLBody)
@@ -97,6 +108,12 @@ func joinAddrs(addrs []string) string {
 		result += a
 	}
 	return result
+}
+
+func generateBoundary() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // TokenGenerator generates cryptographically secure tokens.
@@ -151,7 +168,7 @@ func NewVerificationServiceWithRedis(sender Sender, redisStore *RedisTokenStore)
 }
 
 // GenerateVerificationToken creates and stores a verification token.
-func (vs *VerificationService) GenerateVerificationToken(userID, email, purpose string) (string, error) {
+func (vs *VerificationService) GenerateVerificationToken(ctx context.Context, userID, email, purpose string, expiry time.Duration) (string, error) {
 	token, err := vs.tokenGen.GenerateToken(32)
 	if err != nil {
 		return "", err
@@ -161,10 +178,10 @@ func (vs *VerificationService) GenerateVerificationToken(userID, email, purpose 
 		UserID:    userID,
 		Email:     email,
 		Token:     token,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(expiry),
 		Purpose:   purpose,
 	}
-	if err := vs.store.Store(context.Background(), vt); err != nil {
+	if err := vs.store.Store(ctx, vt); err != nil {
 		return "", fmt.Errorf("failed to store token: %w", err)
 	}
 
@@ -172,23 +189,24 @@ func (vs *VerificationService) GenerateVerificationToken(userID, email, purpose 
 }
 
 // ValidateToken checks if a token is valid and returns its data.
-func (vs *VerificationService) ValidateToken(token string) (*VerificationToken, bool) {
-	return vs.store.Get(context.Background(), token)
+func (vs *VerificationService) ValidateToken(ctx context.Context, token string) (*VerificationToken, bool) {
+	return vs.store.Get(ctx, token)
 }
 
 // InvalidateToken removes a token after use.
-func (vs *VerificationService) InvalidateToken(token string) {
-	_ = vs.store.Delete(context.Background(), token)
+func (vs *VerificationService) InvalidateToken(ctx context.Context, token string) {
+	_ = vs.store.Delete(ctx, token)
 }
 
 // SendVerificationEmail sends an email verification link.
 func (vs *VerificationService) SendVerificationEmail(ctx context.Context, userID, email, baseURL string) error {
-	token, err := vs.GenerateVerificationToken(userID, email, "verify")
+	token, err := vs.GenerateVerificationToken(ctx, userID, email, "verify", 24*time.Hour)
 	if err != nil {
 		return err
 	}
 
 	verifyURL := fmt.Sprintf("%s/verify?token=%s", baseURL, token)
+	escapedURL := html.EscapeString(verifyURL)
 
 	msg := &Message{
 		To:      []string{email},
@@ -200,7 +218,29 @@ func (vs *VerificationService) SendVerificationEmail(ctx context.Context, userID
 			<p><a href="%s" style="background:#4F46E5;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;">Verify Email</a></p>
 			<p>This link expires in 24 hours.</p>
 			<p>If you didn't create an account, please ignore this email.</p>
-		`, verifyURL),
+		`, escapedURL),
+	}
+
+	return vs.sender.Send(ctx, msg)
+}
+
+// SendInvitationEmail sends a team invitation email.
+func (vs *VerificationService) SendInvitationEmail(ctx context.Context, emailAddr, orgName, inviteURL string) error {
+	escapedOrgName := html.EscapeString(orgName)
+	escapedInviteURL := html.EscapeString(inviteURL)
+
+	msg := &Message{
+		To:      []string{emailAddr},
+		Subject: fmt.Sprintf("You're invited to %s on VigilAgent", orgName),
+		Body:    fmt.Sprintf("You've been invited to join %s on VigilAgent. Accept the invitation here: %s", orgName, inviteURL),
+		HTMLBody: fmt.Sprintf(`
+			<h2>Team Invitation</h2>
+			<p>You've been invited to join <strong>%s</strong> on VigilAgent.</p>
+			<p>Click the link below to accept the invitation:</p>
+			<p><a href="%s" style="background:#4F46E5;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;">Accept Invitation</a></p>
+			<p>This invitation expires in 7 days.</p>
+			<p>If you didn't expect this invitation, you can safely ignore this email.</p>
+		`, escapedOrgName, escapedInviteURL),
 	}
 
 	return vs.sender.Send(ctx, msg)
@@ -208,12 +248,13 @@ func (vs *VerificationService) SendVerificationEmail(ctx context.Context, userID
 
 // SendPasswordResetEmail sends a password reset link.
 func (vs *VerificationService) SendPasswordResetEmail(ctx context.Context, userID, email, baseURL string) error {
-	token, err := vs.GenerateVerificationToken(userID, email, "reset")
+	token, err := vs.GenerateVerificationToken(ctx, userID, email, "reset", time.Hour)
 	if err != nil {
 		return err
 	}
 
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, token)
+	escapedURL := html.EscapeString(resetURL)
 
 	msg := &Message{
 		To:      []string{email},
@@ -225,7 +266,7 @@ func (vs *VerificationService) SendPasswordResetEmail(ctx context.Context, userI
 			<p><a href="%s" style="background:#DC2626;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;">Reset Password</a></p>
 			<p>This link expires in 1 hour.</p>
 			<p>If you didn't request this, please ignore this email.</p>
-		`, resetURL),
+		`, escapedURL),
 	}
 
 	return vs.sender.Send(ctx, msg)

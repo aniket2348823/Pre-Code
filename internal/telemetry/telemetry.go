@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -18,16 +19,27 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
-var metricsHandler http.Handler
+var (
+	metricsHandler   http.Handler
+	metricsHandlerMu sync.RWMutex
+)
 
 // MetricsHandler returns the HTTP handler for Prometheus /metrics endpoint.
 // After Setup() runs, returns the OTLP-aware handler with exported metrics.
 // Before Setup() (e.g., in tests), returns a basic promhttp handler as fallback.
 func MetricsHandler() http.Handler {
-	if metricsHandler == nil && !setupDone.Load() {
-		metricsHandler = promhttp.Handler()
+	metricsHandlerMu.RLock()
+	h := metricsHandler
+	metricsHandlerMu.RUnlock()
+	if h != nil {
+		return h
 	}
-	return metricsHandler
+	if setupDone.Load() {
+		metricsHandlerMu.RLock()
+		defer metricsHandlerMu.RUnlock()
+		return metricsHandler
+	}
+	return promhttp.Handler()
 }
 
 // Pre-registered Prometheus metrics for Grafana dashboard panels.
@@ -154,7 +166,9 @@ func Setup(ctx context.Context, serviceName, serviceVersion string) (func(contex
 
 	// Assign the OTLP-aware promhttp handler (includes OTLP-exported metrics).
 	// MetricsHandler() returns this after Setup(); before Setup(), it falls back.
+	metricsHandlerMu.Lock()
 	metricsHandler = promhttp.Handler()
+	metricsHandlerMu.Unlock()
 	setupDone.Store(true)
 
 	// Setup trace provider

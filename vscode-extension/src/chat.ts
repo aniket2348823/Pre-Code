@@ -35,6 +35,8 @@ export class VigilAgentChatParticipant {
                 return this.handleScan(action, stream, token);
             case 'verify':
                 return this.handleVerify(action, stream, token);
+            case 'dualengine':
+                return this.handleDualEngine(action, stream, token);
             case 'help':
                 return this.handleHelp(stream);
             default:
@@ -50,6 +52,9 @@ export class VigilAgentChatParticipant {
         }
         if (lower.startsWith('verify ') || lower.startsWith('review ')) {
             return { type: 'verify' };
+        }
+        if (lower.startsWith('dual') || lower.startsWith('deep') || lower.startsWith('parallel')) {
+            return { type: 'dualengine' };
         }
         if (lower === 'help' || lower === '?') {
             return { type: 'help' };
@@ -132,6 +137,43 @@ export class VigilAgentChatParticipant {
         return {};
     }
 
+    private async handleDualEngine(
+        action: { code?: string; language?: string; filename?: string },
+        stream: vscode.ChatResponseStream,
+        _token: vscode.CancellationToken
+    ): Promise<vscode.ChatResult> {
+        // Check if API keys are configured
+        if (!(await this.client.isConfigured())) {
+            stream.markdown('⚠️ VigilAgent API key not configured.\n\nRun **VigilAgent: Configure API Keys** from the Command Palette to set up your keys.');
+            return {};
+        }
+
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            stream.markdown('⚠️ No active editor found. Open a file and try again.');
+            return {};
+        }
+
+        const code = editor.document.getText();
+        const filename = editor.document.fileName.split(/[/\\]/).pop() || 'unknown';
+        const language = editor.document.languageId;
+
+        stream.progress('🛡️ Running dual-engine analysis (deterministic + LLM in parallel)...');
+
+        try {
+            const result = await this.client.dualEngine(code, language);
+            this.formatDualEngineResult(result, stream, filename);
+        } catch (err: any) {
+            if (err.message?.includes('API key not configured')) {
+                stream.markdown('⚠️ VigilAgent API key not configured.\n\nRun **VigilAgent: Configure API Keys** from the Command Palette.');
+            } else {
+                stream.markdown(`❌ Dual-engine analysis failed: ${err.message}`);
+            }
+        }
+
+        return {};
+    }
+
     private async handleGeneral(
         prompt: string,
         stream: vscode.ChatResponseStream,
@@ -170,18 +212,84 @@ export class VigilAgentChatParticipant {
 
 | Command | Description |
 |---------|-------------|
-| \`scan\` | Run deterministic static analysis on the current file |
+| \`scan\` | Run deterministic static analysis (fast, free) |
 | \`verify\` | Run full Shift-Zero pipeline (deterministic + LLM reviewers) |
+| \`dual\` | Run parallel dual-engine analysis (deterministic + LLM in parallel) |
 | \`help\` | Show this help message |
 
 **Usage:**
 - Open a file in the editor
-- Type \`@vigilagent scan\` or \`@vigilagent verify\` in chat
+- Type \`@vigilagent scan\`, \`@vigilagent verify\`, or \`@vigilagent dual\` in chat
 - Or just type \`@vigilagent\` followed by your question about the code
+
+**Dual-Engine Analysis:**
+The \`dual\` command runs BOTH engines simultaneously:
+- 🔍 Deterministic Engine: Semgrep, builtin rules, regex (fast, free)
+- 🤖 LLM Engine: GPT-4o-mini analyzing for semantic issues (cheap)
+- Findings are merged with corroboration scoring
 
 **Configuration:**
 Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your API keys.
 `;
+    }
+
+    private formatDualEngineResult(result: Record<string, unknown>, stream: vscode.ChatResponseStream, filename: string): void {
+        stream.markdown(`## 🛡️ Dual-Engine Analysis — ${filename}\n\n`);
+
+        // Grade and score
+        const grade = (result.grade as string) || 'N/A';
+        const score = (result.score as number) || 0;
+        const gradeIcon = this.gradeIcon(grade);
+        stream.markdown(`${gradeIcon} **Grade:** ${grade} (${score}%)\n\n`);
+
+        // Engine stats
+        const stats = result.engine_stats as Record<string, unknown> | undefined;
+        if (stats) {
+            const det = stats.deterministic as Record<string, unknown> | undefined;
+            const llm = stats.llm as Record<string, unknown> | undefined;
+            const total = stats.total_latency_ms as number | undefined;
+
+            stream.markdown('### Engine Statistics\n\n');
+            if (det) {
+                stream.markdown(`- **Deterministic:** ${det.findings_count || 0} findings in ${det.latency_ms || 0}ms\n`);
+            }
+            if (llm) {
+                stream.markdown(`- **LLM Engine:** ${llm.findings_count || 0} findings in ${llm.latency_ms || 0}ms (${llm.model || 'unknown'})\n`);
+            }
+            if (total) {
+                stream.markdown(`- **Total Latency:** ${total.toFixed(0)}ms\n`);
+            }
+            stream.markdown('\n');
+        }
+
+        // Findings
+        const findings = result.findings as Record<string, unknown>[] | undefined;
+        if (findings && findings.length > 0) {
+            const corroborated = findings.filter(f => (f.rule_id as string || '').endsWith('+llm')).length;
+            stream.markdown(`### Findings (${findings.length}`);
+            if (corroborated > 0) {
+                stream.markdown(` | ${corroborated} corroborated`);
+            }
+            stream.markdown(')\n\n');
+
+            for (const f of findings) {
+                const severity = (f.severity as string) || 'unknown';
+                const engine = (f.engine as string) || 'unknown';
+                const message = (f.message as string) || '';
+                const fix = f.fix as string | undefined;
+                const icon = this.severityIcon(severity);
+                const corroboratedMark = (f.rule_id as string || '').endsWith('+llm') ? ' ✓' : '';
+                stream.markdown(`${icon} **[${severity.toUpperCase()}]** (${engine})${corroboratedMark}\n   ${message}\n`);
+                if (fix) {
+                    stream.markdown(`   💡 *Fix:* ${fix}\n`);
+                }
+                stream.markdown('\n');
+            }
+        } else {
+            stream.markdown('✅ No issues found. Code looks clean!\n');
+        }
+
+        stream.markdown('\n---\n*Powered by VigilAgent Dual-Engine Analysis*');
     }
 
     private formatScanResult(result: Record<string, unknown>, stream: vscode.ChatResponseStream, filename: string): void {

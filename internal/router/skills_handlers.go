@@ -27,8 +27,8 @@ func (r *Router) listSkillsHandler(w http.ResponseWriter, req *http.Request) {
 	category := req.URL.Query().Get("category")
 	sortBy := req.URL.Query().Get("sort_by")
 
-	// Fetch all matching skills
-	skills, _, err := r.skills.List(req.Context(), category, sortBy, 0, 100000)
+	pag := pagination.ParseRequest(req)
+	skills, total, err := r.skills.List(req.Context(), category, sortBy, 0, pag.Limit)
 	if err != nil {
 		response.InternalError(w, "failed to list skills")
 		return
@@ -38,43 +38,10 @@ func (r *Router) listSkillsHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	filter, sortVal := query.Parse(req)
-
-	// Support page-based query as fallback, cursor-based as primary
-	cursor := req.URL.Query().Get("cursor")
-	if cursor == "" && req.URL.Query().Get("page") != "" {
-		page, _ := strconv.Atoi(req.URL.Query().Get("page"))
-		pageSize, _ := strconv.Atoi(req.URL.Query().Get("page_size"))
-		if page < 1 {
-			page = 1
-		}
-		if pageSize < 1 || pageSize > 100 {
-			pageSize = 20
-		}
-
-		allProcessed, _ := query.ProcessList(skills, filter, sortVal, pagination.Params{Limit: 100000})
-
-		total := len(allProcessed)
-		offset := (page - 1) * pageSize
-		end := offset + pageSize
-		if offset > total {
-			offset = total
-		}
-		if end > total {
-			end = total
-		}
-		paginated := allProcessed[offset:end]
-
-		response.SuccessWithMeta(w, req, http.StatusOK, paginated, &response.Meta{
-			Total:   total,
-			Limit:   pageSize,
-			Offset:  offset,
-			HasMore: end < total,
-		})
-		return
-	}
-
-	pag := pagination.ParseRequest(req)
 	processed, meta := query.ProcessList(skills, filter, sortVal, pag)
+	if meta != nil {
+		meta.Total = total
+	}
 	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
@@ -150,14 +117,19 @@ func (r *Router) createSkillHandler(w http.ResponseWriter, req *http.Request) {
 
 // updateSkillHandler updates an existing skill.
 func (r *Router) updateSkillHandler(w http.ResponseWriter, req *http.Request) {
-	_, ok := auth.ClaimsFromContext(req.Context())
+	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
 		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	skillID := chi.URLParam(req, "skillID")
 	skill, err := r.skills.FindByID(req.Context(), skillID)
-	if err != nil {		response.NotFound(w, "skill not found")
+	if err != nil {
+		response.NotFound(w, "skill not found")
+		return
+	}
+	if skill.Author != claims.UserID {
+		response.Forbidden(w, "only the author can update a skill")
 		return
 	}
 	var input struct {
@@ -196,14 +168,19 @@ func (r *Router) updateSkillHandler(w http.ResponseWriter, req *http.Request) {
 
 // deleteSkillHandler deletes a skill.
 func (r *Router) deleteSkillHandler(w http.ResponseWriter, req *http.Request) {
-	_, ok := auth.ClaimsFromContext(req.Context())
+	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
 		response.Unauthorized(w, "missing authentication")
 		return
 	}
 	skillID := chi.URLParam(req, "skillID")
-	if _, err := r.skills.FindByID(req.Context(), skillID); err != nil {
+	skill, err := r.skills.FindByID(req.Context(), skillID)
+	if err != nil {
 		response.NotFound(w, "skill not found")
+		return
+	}
+	if skill.Author != claims.UserID {
+		response.Forbidden(w, "only the author can delete a skill")
 		return
 	}
 	if err := r.skills.Delete(req.Context(), skillID); err != nil {

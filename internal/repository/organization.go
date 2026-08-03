@@ -102,14 +102,26 @@ func (r *OrganizationRepository) Update(ctx context.Context, id, name, descripti
 		SET name = $2, description = $3, plan = $4, settings = $5, updated_at = NOW()
 		WHERE id = $1
 	`
-	_, err := r.pool.Exec(ctx, query, id, name, description, plan, settings)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id, name, description, plan, settings)
+	if err != nil {
+		return fmt.Errorf("failed to update organization: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("organization not found")
+	}
+	return nil
 }
 
 // Delete removes an organization by ID.
 func (r *OrganizationRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, id)
-	return err
+	tag, err := r.pool.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete organization: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("organization not found")
+	}
+	return nil
 }
 
 // ListByUser returns all organizations a user is a member of (owner or member).
@@ -139,6 +151,9 @@ func (r *OrganizationRepository) ListByUser(ctx context.Context, userID string) 
 		}
 		orgs = append(orgs, org)
 	}
+	if orgs == nil {
+		orgs = []Organization{}
+	}
 	return orgs, rows.Err()
 }
 
@@ -155,10 +170,16 @@ func (r *OrganizationRepository) AddMember(ctx context.Context, orgID, userID, r
 
 // RemoveMember removes a user from an organization.
 func (r *OrganizationRepository) RemoveMember(ctx context.Context, orgID, userID string) error {
-	_, err := r.pool.Exec(ctx,
+	tag, err := r.pool.Exec(ctx,
 		`DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2`,
-	orgID, userID)
-	return err
+		orgID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to remove member: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("member not found")
+	}
+	return nil
 }
 
 // IsMember checks if a user is a member (or owner) of an organization.

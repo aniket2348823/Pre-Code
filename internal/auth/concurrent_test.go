@@ -12,13 +12,13 @@ import (
 )
 
 func newTestJWT_Deep() *JWT {
-	return NewJWT(&config.AuthConfig{JWTSecret: "test-secret-key", JWTExpiration: 15 * time.Minute})
+	return NewJWT(&config.AuthConfig{JWTSecret: "test-secret-key-that-is-at-least-32-bytes!", JWTExpiration: 15 * time.Minute})
 }
 
 // --- JWT Edge Cases ---
 
 func TestJWT_ZeroExpiry(t *testing.T) {
-	j := &JWT{secret: []byte("s"), expiration: 0}
+	j := &JWT{secret: []byte("test-secret-key-that-is-at-least-32-bytes!"), expiration: 0}
 	tok, err := j.GenerateToken("u", "e@e.com", "user", "o")
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +31,7 @@ func TestJWT_ZeroExpiry(t *testing.T) {
 }
 
 func TestJWT_NegativeExpiry(t *testing.T) {
-	j := &JWT{secret: []byte("s"), expiration: -1 * time.Hour}
+	j := &JWT{secret: []byte("test-secret-key-that-is-at-least-32-bytes!"), expiration: -1 * time.Hour}
 	tok, err := j.GenerateToken("u", "e@e.com", "user", "o")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestJWT_NegativeExpiry(t *testing.T) {
 }
 
 func TestJWT_EmptySecret(t *testing.T) {
-	j := NewJWT(&config.AuthConfig{JWTSecret: "", JWTExpiration: 15 * time.Minute})
+	j := &JWT{secret: []byte(""), expiration: 15 * time.Minute}
 	_, err := j.GenerateToken("u", "e@e.com", "user", "o")
 	if err == nil {
 		t.Error("empty secret should fail token generation")

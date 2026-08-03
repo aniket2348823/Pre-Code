@@ -42,7 +42,7 @@ func (b *JWTBlacklist) IsRevoked(ctx context.Context, tokenStr string) bool {
 	}
 	if err != nil {
 		slog.Warn("blacklist: failed to check revocation", "error", err)
-		return false // fail open — don't block if Redis is down
+		return true
 	}
 	return val == "1"
 }
@@ -89,7 +89,7 @@ func (b *JWTBlacklist) Middleware(next http.Handler) http.Handler {
 // This is used on password change / account lockout.
 func (b *JWTBlacklist) RevokeAllForUser(ctx context.Context, userID string) error {
 	key := fmt.Sprintf("jwt:blacklist:user:%s", userID)
-	return b.rdb.Set(ctx, key, time.Now().Unix(), 24*time.Hour).Err()
+	return b.rdb.Set(ctx, key, time.Now().Unix(), 0).Err()
 }
 
 // IsUserRevoked checks if all tokens for a user have been revoked.
@@ -100,7 +100,7 @@ func (b *JWTBlacklist) IsUserRevoked(ctx context.Context, userID string) bool {
 		return false
 	}
 	if err != nil {
-		return false // fail open
+		return true
 	}
 	return true
 }

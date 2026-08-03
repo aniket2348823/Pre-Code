@@ -93,19 +93,34 @@ func (r *AlertRepository) ListByUser(ctx context.Context, userID string) ([]Aler
 		}
 		alerts = append(alerts, a)
 	}
+	if alerts == nil {
+		alerts = []Alert{}
+	}
 	return alerts, nil
 }
 
 // Update updates an alert.
 func (r *AlertRepository) Update(ctx context.Context, id, name, channel string, isActive bool) error {
 	query := `UPDATE alerts SET name=$2, channel=$3, is_active=$4, updated_at=NOW() WHERE id=$1`
-	_, err := r.pool.Exec(ctx, query, id, name, channel, isActive)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id, name, channel, isActive)
+	if err != nil {
+		return fmt.Errorf("failed to update alert: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("alert not found")
+	}
+	return nil
 }
 
 // Delete removes an alert.
 func (r *AlertRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM alerts WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, id)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete alert: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("alert not found")
+	}
+	return nil
 }

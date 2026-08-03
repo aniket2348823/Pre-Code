@@ -152,28 +152,49 @@ func (r *SkillRepository) List(ctx context.Context, category, sortBy string, off
 		}
 		skills = append(skills, s)
 	}
+	if skills == nil {
+		skills = []Skill{}
+	}
 	return skills, total, nil
 }
 
 // Update updates a skill's fields.
 func (r *SkillRepository) Update(ctx context.Context, id, name, description, version, category string) error {
 	query := `UPDATE skills SET name=$2, description=$3, version=$4, category=$5, updated_at=NOW() WHERE id=$1`
-	_, err := r.pool.Exec(ctx, query, id, name, description, version, category)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id, name, description, version, category)
+	if err != nil {
+		return fmt.Errorf("failed to update skill: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("skill not found")
+	}
+	return nil
 }
 
 // Delete removes a skill by ID.
 func (r *SkillRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM skills WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, id)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete skill: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("skill not found")
+	}
+	return nil
 }
 
 // IncrementDownloads increments the download counter.
 func (r *SkillRepository) IncrementDownloads(ctx context.Context, id string) error {
 	query := `UPDATE skills SET downloads = downloads + 1, updated_at = NOW() WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, id)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to increment downloads: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("skill not found")
+	}
+	return nil
 }
 
 // AddRating adds a rating to a skill.

@@ -7,8 +7,10 @@ import (
 )
 
 func TestMetricsHandler_BeforeSetup(t *testing.T) {
-	// Reset global to nil to test fallback path
+	metricsHandlerMu.Lock()
 	metricsHandler = nil
+	metricsHandlerMu.Unlock()
+	setupDone.Store(false)
 	h := MetricsHandler()
 	if h == nil {
 		t.Fatal("expected non-nil handler")
@@ -16,7 +18,10 @@ func TestMetricsHandler_BeforeSetup(t *testing.T) {
 }
 
 func TestMetricsHandler_AfterSetup(t *testing.T) {
+	metricsHandlerMu.Lock()
 	metricsHandler = nil
+	metricsHandlerMu.Unlock()
+	setupDone.Store(false)
 	ctx := context.Background()
 	cleanup, err := Setup(ctx, "test-service", "0.0.1")
 	if err != nil {
@@ -37,7 +42,6 @@ func TestSetup_Cleanup(t *testing.T) {
 		t.Fatalf("Setup failed: %v", err)
 	}
 
-	// Cleanup should not error
 	if err := cleanup(context.Background()); err != nil {
 		t.Errorf("cleanup returned error: %v", err)
 	}
@@ -51,7 +55,6 @@ func TestSetup_DuplicateCalls(t *testing.T) {
 	}
 	defer cleanup1(context.Background())
 
-	// Second Setup should also work (replaces providers)
 	cleanup2, err := Setup(ctx, "test-service", "0.0.2")
 	if err != nil {
 		t.Fatalf("second Setup failed: %v", err)

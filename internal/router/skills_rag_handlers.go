@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
@@ -17,11 +19,37 @@ import (
 type RAGHandlers struct {
 	rag       *skills.RAGEngine
 	skillRepo *repository.SkillRepository
+	publishMu sync.Mutex
+	publishTS map[string][]time.Time
 }
 
 // NewRAGHandlers creates new RAG HTTP handlers.
 func NewRAGHandlers(rag *skills.RAGEngine, skillRepo *repository.SkillRepository) *RAGHandlers {
-	return &RAGHandlers{rag: rag, skillRepo: skillRepo}
+	return &RAGHandlers{
+		rag:       rag,
+		skillRepo: skillRepo,
+		publishTS: make(map[string][]time.Time),
+	}
+}
+
+func (h *RAGHandlers) allowPublish(userID string) bool {
+	h.publishMu.Lock()
+	defer h.publishMu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-time.Minute)
+	timestamps := h.publishTS[userID]
+	valid := timestamps[:0]
+	for _, ts := range timestamps {
+		if ts.After(cutoff) {
+			valid = append(valid, ts)
+		}
+	}
+	if len(valid) >= 5 {
+		h.publishTS[userID] = valid
+		return false
+	}
+	h.publishTS[userID] = append(valid, now)
+	return true
 }
 
 // SearchHandler performs hybrid RAG search across skills.
@@ -67,7 +95,7 @@ func (h *RAGHandlers) SearchHandler(w http.ResponseWriter, req *http.Request) {
 
 	result, err := h.rag.HybridSearch(req.Context(), query)
 	if err != nil {
-		response.InternalError(w, "search failed: "+err.Error())
+		response.InternalError(w, "search failed")
 		return
 	}
 
@@ -89,7 +117,7 @@ func (h *RAGHandlers) SuggestHandler(w http.ResponseWriter, req *http.Request) {
 
 	suggestions, err := h.rag.SuggestSkills(req.Context(), partial, limit)
 	if err != nil {
-		response.InternalError(w, "suggestion failed: "+err.Error())
+		response.InternalError(w, "suggestion failed")
 		return
 	}
 
@@ -112,7 +140,7 @@ func (h *RAGHandlers) TrendingHandler(w http.ResponseWriter, req *http.Request) 
 
 	skillsList, err := h.rag.GetTrending(req.Context(), limit)
 	if err != nil {
-		response.InternalError(w, "failed to get trending skills: "+err.Error())
+		response.InternalError(w, "failed to get trending skills")
 		return
 	}
 
@@ -134,7 +162,7 @@ func (h *RAGHandlers) CategoriesHandler(w http.ResponseWriter, req *http.Request
 
 	categories, err := h.rag.GetByCategory(req.Context())
 	if err != nil {
-		response.InternalError(w, "failed to get categories: "+err.Error())
+		response.InternalError(w, "failed to get categories")
 		return
 	}
 
@@ -155,6 +183,12 @@ func (h *RAGHandlers) PublishHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if !h.allowPublish(claims.UserID) {
+		w.Header().Set("Retry-After", "60")
+		response.Error(w, http.StatusTooManyRequests, "rate limit exceeded")
+		return
+	}
+
 	skillID := chi.URLParam(req, "skillID")
 	skill, err := h.skillRepo.FindByID(req.Context(), skillID)
 	if err != nil {
@@ -172,7 +206,7 @@ func (h *RAGHandlers) PublishHandler(w http.ResponseWriter, req *http.Request) {
 	req.Body = http.MaxBytesReader(w, req.Body, 10<<20)
 
 	if err := req.ParseMultipartForm(10 << 20); err != nil {
-		response.BadRequest(w, "failed to parse upload: "+err.Error())
+		response.BadRequest(w, "failed to parse upload")
 		return
 	}
 
@@ -191,7 +225,7 @@ func (h *RAGHandlers) PublishHandler(w http.ResponseWriter, req *http.Request) {
 	// Read package data
 	packageData, err := io.ReadAll(io.LimitReader(file, 10<<20))
 	if err != nil {
-		response.BadRequest(w, "failed to read package: "+err.Error())
+		response.BadRequest(w, "failed to read package")
 		return
 	}
 
@@ -199,7 +233,7 @@ func (h *RAGHandlers) PublishHandler(w http.ResponseWriter, req *http.Request) {
 	scanner := skills.NewSkillScanner()
 	result, err := scanner.ScanPackage(req.Context(), packageData)
 	if err != nil {
-		response.BadRequest(w, "package scan failed: "+err.Error())
+		response.BadRequest(w, "package scan failed")
 		return
 	}
 
@@ -211,7 +245,7 @@ func (h *RAGHandlers) PublishHandler(w http.ResponseWriter, req *http.Request) {
 	// Mark as published and update
 	err = h.skillRepo.Update(req.Context(), skillID, skill.Name, skill.Description, skill.Version, skill.Category)
 	if err != nil {
-		response.InternalError(w, "failed to update skill: "+err.Error())
+		response.InternalError(w, "failed to update skill")
 		return
 	}
 
@@ -280,7 +314,7 @@ func (h *RAGHandlers) ReindexHandler(w http.ResponseWriter, req *http.Request) {
 
 	count, err := h.rag.ReindexAll(req.Context())
 	if err != nil {
-		response.InternalError(w, "reindex failed: "+err.Error())
+		response.InternalError(w, "reindex failed")
 		return
 	}
 

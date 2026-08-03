@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/vigilagent/vigilagent/internal/llm"
 	"github.com/vigilagent/vigilagent/internal/tools"
@@ -186,16 +187,26 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 				Options:      []string{"approve", "reject", "modify"},
 				WaitingSince: time.Now(),
 			}
-			// Transition to waiting_hitl (fires hitl.required webhook)
 			if err := a.transition(task, EventHITLRequired); err != nil {
 				slog.Warn("failed to transition to waiting_hitl", "error", err, "task_id", task.ID)
 				continue
 			}
 
-			// If HITL queue is attached, block until human decides or timeout.
-			// If nil (dev mode), auto-approve immediately.
 			if a.hitlQueue != nil {
-				a.waitHITLDecision(ctx, task, i, step)
+				approved := a.waitHITLDecision(ctx, task, i, step)
+				if !approved {
+					slog.Info("agent: HITL rejected, stopping task", "task_id", task.ID, "step", i)
+					a.transition(task, EventStepFailed)
+					return &TaskResult{
+						TaskID:     task.ID,
+						Status:     string(task.State),
+						Result:     task.Error,
+						Steps:      len(task.Steps),
+						Cost:       task.Cost,
+						Duration:   time.Since(start),
+						TokensUsed: task.TotalTokens,
+					}, fmt.Errorf("step %d rejected by human: %s", i, task.Error)
+				}
 			} else {
 				slog.Info("agent: HITL auto-approved (no queue attached)", "task_id", task.ID, "step", i)
 				a.transition(task, EventHITLApproved)
@@ -208,8 +219,7 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 		stepResult := a.executeStep(ctx, task, step)
 		task.Steps = append(task.Steps, stepResult)
 
-		// Track tokens and cost
-		task.InputTokens += stepResult.TokensUsed
+		task.ToolTokens += stepResult.TokensUsed
 		task.Cost += stepResult.Cost
 
 		// Check token budget
@@ -263,9 +273,9 @@ func (a *Agent) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error
 	// Phase 3: Final review using LLM
 	a.transition(task, EventReviewPassed)
 
-	result := a.buildResult(task.ID, conversationHistory)
+	result := a.buildResult(ctx, task.ID, conversationHistory)
 	task.Result = result
-	task.TotalTokens = task.InputTokens + task.OutputTokens
+	task.TotalTokens = task.InputTokens + task.OutputTokens + task.ToolTokens
 	duration := time.Since(start)
 
 	// Phase 4: Store memory of completed task
@@ -387,8 +397,7 @@ func (a *Agent) planTask(ctx context.Context, task *Task, memoryContext string) 
 			}
 		}
 
-		// Estimate output tokens from accumulated content (~4 chars/token)
-		outputTokens := content.Len() / 4
+		outputTokens := estimateTokens(content.String())
 		task.InputTokens += result.EstInput
 		task.OutputTokens += outputTokens
 
@@ -525,8 +534,7 @@ func (a *Agent) reflectOnFailure(ctx context.Context, history []llm.Message, tas
 			}
 		}
 
-		// Estimate output tokens from accumulated content
-		outputTokens := content.Len() / 4
+		outputTokens := estimateTokens(content.String())
 		task.InputTokens += result.EstInput
 		task.OutputTokens += outputTokens
 
@@ -541,6 +549,10 @@ func (a *Agent) reflectOnFailure(ctx context.Context, history []llm.Message, tas
 	if err != nil {
 		return nil, err
 	}
+
+	task.InputTokens += response.InputTokens
+	task.OutputTokens += response.OutputTokens
+	task.Cost += response.Cost
 
 	return a.parsePlanFromResponse(response.Content)
 }
@@ -562,7 +574,7 @@ func (a *Agent) filterValidSteps(steps []PlanStep) []PlanStep {
 }// buildResult uses the LLM to synthesize a final result from all step outputs.
 // When a tokenCallback is attached, it streams the response in real-time,
 // pushing each chunk to SSE subscribers as it arrives.
-func (a *Agent) buildResult(taskID string, history []llm.Message) string {
+func (a *Agent) buildResult(ctx context.Context, taskID string, history []llm.Message) string {
 	// Collect all step outputs
 	var outputs []string
 	var lastOutput string
@@ -578,7 +590,7 @@ func (a *Agent) buildResult(taskID string, history []llm.Message) string {
 	}
 
 	// Ask the LLM to synthesize a final summary with a timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	summaryMsgs := []llm.Message{
@@ -606,8 +618,7 @@ func (a *Agent) buildResult(taskID string, history []llm.Message) string {
 			}
 		}
 
-		// Log streaming cost attribution for observability
-		outputTokens := content.Len() / 4
+		outputTokens := estimateTokens(content.String())
 		slog.Debug("streaming buildResult completed",
 			"task_id", taskID,
 			"model", result.Model,
@@ -659,14 +670,33 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// estimateTokens estimates token count by counting words and multiplying by 1.3.
+func estimateTokens(s string) int {
+	words := 0
+	inWord := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			inWord = false
+		} else if !inWord {
+			inWord = true
+			words++
+		}
+	}
+	if words == 0 {
+		return 0
+	}
+	return int(float64(words) * 1.3)
+}
+
 // waitHITLDecision submits a checkpoint to the HITL queue and blocks
 // until a human decides, the context is cancelled, or the queue timeout fires.
-func (a *Agent) waitHITLDecision(ctx context.Context, task *Task, stepIdx int, step PlanStep) {
+// Returns true if approved, false if rejected or error.
+func (a *Agent) waitHITLDecision(ctx context.Context, task *Task, stepIdx int, step PlanStep) bool {
 	entry := &HITLCheckpointEntry{
 		ID:          fmt.Sprintf("cp-%s-%d", task.ID, stepIdx),
 		TaskID:      task.ID,
 		UserID:      task.UserID,
-		OrgID:       task.ProjectID,
+		OrgID:       task.OrgID,
 		StepIndex:   stepIdx,
 		Description: fmt.Sprintf("Step %d requires human approval: %s", stepIdx, step.Description),
 		Tool:        step.Tool,
@@ -681,21 +711,24 @@ func (a *Agent) waitHITLDecision(ctx context.Context, task *Task, stepIdx int, s
 		slog.Warn("agent: HITL submit failed, auto-rejecting", "error", err, "task_id", task.ID)
 		a.transition(task, EventHITLRejected)
 		task.Error = fmt.Sprintf("HITL failed: %v", err)
-		return
+		return false
 	}
 
 	switch result.Status {
 	case "approve":
 		slog.Info("agent: HITL approved", "task_id", task.ID, "step", stepIdx)
 		a.transition(task, EventHITLApproved)
+		return true
 	case "reject":
 		slog.Info("agent: HITL rejected", "task_id", task.ID, "step", stepIdx)
 		a.transition(task, EventHITLRejected)
 		task.Error = "rejected by human"
+		return false
 	default:
 		slog.Warn("agent: HITL unknown status, auto-rejecting", "status", result.Status, "task_id", task.ID)
 		a.transition(task, EventHITLRejected)
 		task.Error = fmt.Sprintf("unknown HITL status: %s", result.Status)
+		return false
 	}
 }
 
@@ -731,6 +764,7 @@ func (a *Agent) executeStep(ctx context.Context, task *Task, step PlanStep) Step
 		Status:      "completed",
 		Result:      result.Output,
 		DurationMs:  time.Since(start).Milliseconds(),
+		TokensUsed:  estimateTokens(result.Output),
 		Cost:        result.Cost,
 		StartedAt:   start,
 		CompletedAt: &completedAt,

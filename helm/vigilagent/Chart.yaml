@@ -1,0 +1,17 @@
+apiVersion: v2
+name: vigilagent
+description: VigilAgent - AI Agent Management Platform
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - ai
+  - agent
+  - monitoring
+  - vigilagent
+maintainers:
+  - name: VigilAgent Team
+    email: team@vigilagent.com
+home: https://vigilagent.com
+sources:
+  - https://github.com/vigilagent/vigilagent

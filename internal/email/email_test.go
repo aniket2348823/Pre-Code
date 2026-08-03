@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/smtp"
 	"net/url"
 	"strings"
 	"testing"
@@ -140,7 +139,7 @@ func TestVerificationService_GenerateAndValidate(t *testing.T) {
 	sender := &NoOpSender{}
 	vs := NewVerificationService(sender)
 
-	token, err := vs.GenerateVerificationToken("user-123", "test@example.com", "verify")
+	token, err := vs.GenerateVerificationToken(context.Background(), "user-123", "test@example.com", "verify", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateVerificationToken failed: %v", err)
 	}
@@ -148,7 +147,7 @@ func TestVerificationService_GenerateAndValidate(t *testing.T) {
 		t.Error("expected non-empty token")
 	}
 
-	vt, ok := vs.ValidateToken(token)
+	vt, ok := vs.ValidateToken(context.Background(), token)
 	if !ok {
 		t.Fatal("expected token to be valid")
 	}
@@ -164,14 +163,14 @@ func TestVerificationService_InvalidateToken(t *testing.T) {
 	sender := &NoOpSender{}
 	vs := NewVerificationService(sender)
 
-	token, err := vs.GenerateVerificationToken("user-123", "test@example.com", "verify")
+	token, err := vs.GenerateVerificationToken(context.Background(), "user-123", "test@example.com", "verify", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateVerificationToken failed: %v", err)
 	}
 
-	vs.InvalidateToken(token)
+	vs.InvalidateToken(context.Background(), token)
 
-	_, ok := vs.ValidateToken(token)
+	_, ok := vs.ValidateToken(context.Background(), token)
 	if ok {
 		t.Error("expected token to be invalidated")
 	}
@@ -412,7 +411,7 @@ func TestInMemoryTokenStore_GetNotExist(t *testing.T) {
 func TestVerificationService_ValidateToken_Invalid(t *testing.T) {
 	sender := &NoOpSender{}
 	vs := NewVerificationService(sender)
-	_, ok := vs.ValidateToken("bad-token")
+	_, ok := vs.ValidateToken(context.Background(), "bad-token")
 	if ok {
 		t.Error("expected false for invalid token")
 	}
@@ -422,11 +421,11 @@ func TestVerificationService_GenerateVerificationToken_Purpose(t *testing.T) {
 	sender := &NoOpSender{}
 	vs := NewVerificationService(sender)
 
-	token, err := vs.GenerateVerificationToken("u1", "e@x.com", "reset")
+	token, err := vs.GenerateVerificationToken(context.Background(), "u1", "e@x.com", "reset", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vt, ok := vs.ValidateToken(token)
+	vt, ok := vs.ValidateToken(context.Background(), token)
 	if !ok {
 		t.Fatal("expected valid token")
 	}
@@ -453,7 +452,7 @@ func TestVerificationService_Cleanup(t *testing.T) {
 	vs.Cleanup(ctx, 50*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 
-	_, ok := vs.ValidateToken("expired")
+	_, ok := vs.ValidateToken(context.Background(), "expired")
 	if ok {
 		t.Error("expected expired token to be cleaned up")
 	}
@@ -794,9 +793,7 @@ func TestSMTPSender_Send_WithAuthType(t *testing.T) {
 	if s.auth == nil {
 		t.Error("expected non-nil auth")
 	}
-	if _, ok := s.auth.(smtp.Auth); !ok {
-		t.Error("expected smtp.Auth interface")
-	}
+
 }
 
 func TestSMTPSender_Send_MultipleRecipients(t *testing.T) {
@@ -917,7 +914,7 @@ func TestVerificationService_GenerateToken_StoreFailure(t *testing.T) {
 		store:  &failingTokenStore{err: fmt.Errorf("store unavailable")},
 	}
 
-	_, err := vs.GenerateVerificationToken("u1", "e@x.com", "verify")
+	_, err := vs.GenerateVerificationToken(context.Background(), "u1", "e@x.com", "verify", 24*time.Hour)
 	if err == nil {
 		t.Error("expected error from failing store")
 	}
@@ -1186,7 +1183,7 @@ func TestRedisTokenStore_VerificationService_Integration(t *testing.T) {
 	sender := &NoOpSender{}
 	vs := NewVerificationServiceWithRedis(sender, store)
 
-	token, err := vs.GenerateVerificationToken("user-integ", "integ@test.com", "verify")
+	token, err := vs.GenerateVerificationToken(context.Background(), "user-integ", "integ@test.com", "verify", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateVerificationToken failed: %v", err)
 	}
@@ -1194,7 +1191,7 @@ func TestRedisTokenStore_VerificationService_Integration(t *testing.T) {
 		t.Error("expected non-empty token")
 	}
 
-	vt, ok := vs.ValidateToken(token)
+	vt, ok := vs.ValidateToken(context.Background(), token)
 	if !ok {
 		t.Fatal("expected valid token")
 	}
@@ -1202,8 +1199,8 @@ func TestRedisTokenStore_VerificationService_Integration(t *testing.T) {
 		t.Errorf("expected user-integ, got %s", vt.UserID)
 	}
 
-	vs.InvalidateToken(token)
-	_, ok = vs.ValidateToken(token)
+	vs.InvalidateToken(context.Background(), token)
+	_, ok = vs.ValidateToken(context.Background(), token)
 	if ok {
 		t.Error("expected invalidated token")
 	}

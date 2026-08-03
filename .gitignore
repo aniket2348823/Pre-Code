@@ -47,7 +47,8 @@ logs/
 # Air (hot reload)
 tmp/
 
-# Migrations (local development)
-migrations/*.sql
-!migrations/*.up.sql
-!migrations/*.down.sql
+# Temporary test files
+nul
+$coverFile
+coverage
+

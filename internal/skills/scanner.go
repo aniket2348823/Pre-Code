@@ -134,7 +134,7 @@ func (s *SkillScanner) scanFileContent(filename string, data []byte, result *Sca
 				result.Issues = append(result.Issues, ScanIssue{
 					Severity: severity,
 					Category: "security_pattern",
-					Message:  fmt.Sprintf("Potentially dangerous pattern detected"),
+					Message:  "Potentially dangerous pattern detected",
 					File:     filename,
 					Line:     lineNum + 1,
 					Fix:      "Review and remove or sandbox the flagged code",

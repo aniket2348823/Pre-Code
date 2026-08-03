@@ -1,0 +1,202 @@
+# VigilAgent Helm Chart Values
+
+# -- Number of replicas
+replicaCount: 3
+
+image:
+  repository: ghcr.io/vigilagent/vigilagent
+  pullPolicy: Always
+  tag: "latest"
+
+# -- Image pull secrets
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Service account configuration
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# -- Pod annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/api/v1/metrics"
+
+# -- Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# -- Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  metricsPort: 9090
+
+# -- Ingress configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+  hosts:
+    - host: api.vigilagent.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: vigilagent-tls
+      hosts:
+        - api.vigilagent.com
+
+# -- Resource limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+# -- Autoscaling configuration
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# -- Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# -- Probes configuration
+livenessProbe:
+  httpGet:
+    path: /api/v1/health
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/v1/ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /api/v1/health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 30
+
+# -- Node selector
+nodeSelector: {}
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity rules
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - vigilagent
+          topologyKey: kubernetes.io/hostname
+
+# -- Environment variables
+env:
+  - name: VIGILAGENT_SERVER_PORT
+    value: "8080"
+  - name: VIGILAGENT_SERVER_ENV
+    value: "production"
+  - name: VIGILAGENT_NATS_HOST
+    value: "nats://nats:4222"
+
+# -- Secrets from external secret store
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    name: vault-backend
+    kind: SecretStoreRef
+  data:
+    - secretKey: db-host
+      remoteRef:
+        key: vigilagent/database/host
+    - secretKey: db-password
+      remoteRef:
+        key: vigilagent/database/password
+    - secretKey: redis-host
+      remoteRef:
+        key: vigilagent/redis/host
+    - secretKey: jwt-secret
+      remoteRef:
+        key: vigilagent/auth/jwt-secret
+    - secretKey: openai-key
+      remoteRef:
+        key: vigilagent/llm/openai-key
+
+# -- Network policies
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to: []
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+        - port: 4222
+          protocol: TCP
+
+# -- Monitoring
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    path: /api/v1/metrics
+  grafana:
+    enabled: true
+    dashboards:
+      enabled: true

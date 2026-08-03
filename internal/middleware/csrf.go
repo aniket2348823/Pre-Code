@@ -60,6 +60,10 @@ func (m *CSRFMiddleware) Middleware(next http.Handler) http.Handler {
 
 		// Always set CSRF cookie on state-changing requests
 		token := m.getOrCreateToken(r)
+		if token == "" {
+			http.Error(w, `{"error":"failed to generate CSRF token"}`, http.StatusInternalServerError)
+			return
+		}
 		http.SetCookie(w, &http.Cookie{
 			Name:     m.cookieName,
 			Value:    token,
@@ -92,6 +96,10 @@ func (m *CSRFMiddleware) Middleware(next http.Handler) http.Handler {
 // SetToken sets a CSRF token on the response for SPA clients.
 func (m *CSRFMiddleware) SetToken(w http.ResponseWriter, r *http.Request) {
 	token := m.getOrCreateToken(r)
+	if token == "" {
+		http.Error(w, `{"error":"failed to generate CSRF token"}`, http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     m.cookieName,
 		Value:    token,
@@ -112,7 +120,6 @@ func (m *CSRFMiddleware) getOrCreateToken(r *http.Request) string {
 	// Generate new random token
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		slog.Error("CSRF: failed to generate token", "error", err)
 		return ""
 	}
 	token := hex.EncodeToString(b)

@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vigilagent/vigilagent/internal/util"
@@ -81,7 +80,6 @@ func DefaultConfig() *Config {
 // Builder assembles workspace context into enhanced prompts.
 type Builder struct {
 	config *Config
-	mu     sync.RWMutex
 }
 
 // NewBuilder creates a context builder with the given config.

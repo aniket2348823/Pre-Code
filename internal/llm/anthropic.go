@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -66,10 +67,7 @@ type anthropicMessage struct {
 type anthropicResponse struct {
 	ID         string `json:"id"`
 	Role       string `json:"role"`
-	Content    []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
+	Content    []anthropicContentBlock `json:"content"`
 	Model      string `json:"model"`
 	StopReason string `json:"stop_reason"`
 	Usage      struct {
@@ -78,11 +76,26 @@ type anthropicResponse struct {
 	} `json:"usage"`
 }
 
+type anthropicContentBlock struct {
+	Type  string `json:"type"`
+	Text  string `json:"text,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Input map[string]interface{} `json:"input,omitempty"`
+}
+
 type anthropicStreamEvent struct {
 	Type  string `json:"type"`
-	Delta struct {
-		Text string `json:"text"`
-	} `json:"delta"`
+	Delta anthropicStreamDelta `json:"delta"`
+}
+
+type anthropicStreamDelta struct {
+	Type  string `json:"type"`
+	Text  string `json:"text,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Input map[string]interface{} `json:"input,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
 }
 
 func (a *AnthropicAdapter) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
@@ -145,9 +158,21 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 	latency := time.Since(start)
 
 	content := ""
+	var toolCalls []ToolCall
 	for _, c := range anthropResp.Content {
 		if c.Type == "text" {
 			content += c.Text
+		}
+		if c.Type == "tool_use" {
+			args := c.Input
+			if args == nil {
+				args = make(map[string]interface{})
+			}
+			toolCalls = append(toolCalls, ToolCall{
+				ID:        c.ID,
+				Name:      c.Name,
+				Arguments: args,
+			})
 		}
 	}
 
@@ -155,6 +180,7 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 
 	return &ChatResponse{
 		Content:      content,
+		ToolCalls:    toolCalls,
 		InputTokens:  anthropResp.Usage.InputTokens,
 		OutputTokens: anthropResp.Usage.OutputTokens,
 		Cost:         cost,
@@ -211,24 +237,59 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 		defer close(ch)
 		defer resp.Body.Close()
 
-		decoder := json.NewDecoder(resp.Body)
-		for {
-			var event anthropicStreamEvent
-			if err := decoder.Decode(&event); err != nil {
-				ch <- &ChatChunk{Finish: true}
-				return
+		scanner := bufio.NewScanner(resp.Body)
+		var eventType string
+		var dataBuffer strings.Builder
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				if dataBuffer.Len() > 0 && eventType != "" {
+					processAnthropicEvent(eventType, dataBuffer.String(), ch)
+					dataBuffer.Reset()
+					eventType = ""
+				}
+				continue
 			}
-			if event.Type == "content_block_delta" && event.Delta.Text != "" {
-				ch <- &ChatChunk{Content: event.Delta.Text}
-			}
-			if event.Type == "message_stop" {
-				ch <- &ChatChunk{Finish: true}
-				return
+			if strings.HasPrefix(line, "event: ") {
+				eventType = strings.TrimPrefix(line, "event: ")
+			} else if strings.HasPrefix(line, "data: ") {
+				data := strings.TrimPrefix(line, "data: ")
+				dataBuffer.WriteString(data)
 			}
 		}
+		if dataBuffer.Len() > 0 && eventType != "" {
+			processAnthropicEvent(eventType, dataBuffer.String(), ch)
+		}
+		ch <- &ChatChunk{Finish: true}
 	}()
 
 	return ch, nil
+}
+
+func processAnthropicEvent(eventType, data string, ch chan<- *ChatChunk) {
+	var event anthropicStreamEvent
+	if err := json.Unmarshal([]byte(data), &event); err != nil {
+		return
+	}
+	switch eventType {
+	case "content_block_delta":
+		if event.Delta.Text != "" {
+			ch <- &ChatChunk{Content: event.Delta.Text}
+		}
+		if event.Delta.PartialJSON != "" {
+			// Tool call streaming - accumulate partial JSON
+			ch <- &ChatChunk{Content: event.Delta.PartialJSON}
+		}
+	case "message_stop":
+		ch <- &ChatChunk{Finish: true}
+	case "content_block_start":
+		if event.Delta.Type == "tool_use" {
+			// Tool call started - could emit a chunk with tool call info
+			// For now, we'll handle the delta events
+		}
+	case "content_block_stop":
+		// Tool call completed
+	}
 }
 
 func calculateAnthropicCost(model string, inputTokens, outputTokens int) float64 {

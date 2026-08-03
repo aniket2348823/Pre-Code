@@ -111,7 +111,7 @@ func extractAPIKey(r *http.Request) string {
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
 			token := parts[1]
-			if !strings.Contains(token, ".") && strings.Contains(token, "_") {
+			if strings.HasPrefix(token, "va_") {
 				return token
 			}
 		}

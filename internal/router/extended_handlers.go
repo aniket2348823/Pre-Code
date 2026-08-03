@@ -195,10 +195,16 @@ func (r *Router) executeTaskBackground(task *repository.Task, userID string) {
 		return
 	}
 
+	bgCtx := context.Background()
+	var orgID string
+	if proj, err := r.projects.FindByID(bgCtx, task.ProjectID); err == nil {
+		orgID = proj.OrgID
+	}
 	agentTask := &agent.Task{
 		ID:            task.ID,
 		UserID:        task.UserID,
 		ProjectID:     task.ProjectID,
+		OrgID:         orgID,
 		Title:         task.Prompt,
 		Description:   task.Prompt,
 		MaxIterations: task.MaxIterations,
@@ -208,9 +214,8 @@ func (r *Router) executeTaskBackground(task *repository.Task, userID string) {
 		Tags:          []string{},
 	}
 
-	bgCtx := context.Background()
-	result, err := r.agentExec.ExecuteTask(bgCtx, agentTask)
-	if err != nil {
+	result, execErr := r.agentExec.ExecuteTask(bgCtx, agentTask)
+	if execErr != nil {
 		if updateErr := r.tasks.UpdateStatus(context.Background(), task.ID, "failed"); updateErr != nil {
 			slog.Error("failed to update task status to failed", "error", updateErr, "task_id", task.ID)
 		}

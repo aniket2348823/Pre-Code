@@ -817,7 +817,7 @@ func TestReflectOnFailure_Streaming_Error(t *testing.T) {
 
 func TestBuildResult_NoOutputs(t *testing.T) {
 	a := &Agent{}
-	r := a.buildResult("t1", []llm.Message{{Role: "system", Content: "hi"}})
+	r := 	a.buildResult(context.Background(), "t1", []llm.Message{{Role: "system", Content: "hi"}})
 	if r != "Task completed with no observable output." {
 		t.Errorf("unexpected: %s", r)
 	}
@@ -833,7 +833,7 @@ func TestBuildResult_NonStreaming_Success(t *testing.T) {
 	history := []llm.Message{
 		{Role: "user", Content: "Step result: {\"output\":\"done\"}"},
 	}
-	r := a.buildResult("t1", history)
+	r := 	a.buildResult(context.Background(), "t1", history)
 	if r != "Summary of work done" {
 		t.Errorf("result = %s", r)
 	}
@@ -849,7 +849,7 @@ func TestBuildResult_NonStreaming_LLMError(t *testing.T) {
 	history := []llm.Message{
 		{Role: "user", Content: "Step result: {\"output\":\"data\"}"},
 	}
-	r := a.buildResult("t1", history)
+	r := 	a.buildResult(context.Background(), "t1", history)
 	if !strings.Contains(r, "1 steps") {
 		t.Errorf("expected fallback: %s", r)
 	}
@@ -872,7 +872,7 @@ func TestBuildResult_Streaming_Success(t *testing.T) {
 	history := []llm.Message{
 		{Role: "user", Content: "Step result: {\"output\":\"data\"}"},
 	}
-	r := a.buildResult("t1", history)
+	r := 	a.buildResult(context.Background(), "t1", history)
 	if r != "streamed summary" {
 		t.Errorf("result = %s", r)
 	}
@@ -889,7 +889,7 @@ func TestBuildResult_Streaming_NilResult(t *testing.T) {
 	history := []llm.Message{
 		{Role: "user", Content: "Step result: {\"output\":\"data\"}"},
 	}
-	r := a.buildResult("t1", history)
+	r := 	a.buildResult(context.Background(), "t1", history)
 	if !strings.Contains(r, "1 steps") {
 		t.Errorf("expected fallback: %s", r)
 	}
@@ -1815,7 +1815,7 @@ func TestBuildResult_BuildsConversationCorrectly(t *testing.T) {
 		{Role: "assistant", Content: "I executed step 0"},
 		{Role: "user", Content: "Step result: {\"tool\":\"read\",\"status\":\"ok\",\"output\":\"data\"}"},
 	}
-	r := a.buildResult("t1", history)
+	r := 	a.buildResult(context.Background(), "t1", history)
 	if r != "verified" {
 		t.Errorf("result = %s", r)
 	}
@@ -1908,7 +1908,7 @@ func TestBuildResult_MultipleStepOutputs(t *testing.T) {
 		{Role: "user", Content: "Step result: o2"},
 		{Role: "user", Content: "Step result: o3"},
 	}
-	r := a.buildResult("t1", history)
+	r := 	a.buildResult(context.Background(), "t1", history)
 	if r != "processed all steps" {
 		t.Errorf("result = %s", r)
 	}

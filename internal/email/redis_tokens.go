@@ -36,7 +36,17 @@ func (r *RedisTokenStore) Store(ctx context.Context, vt *VerificationToken) erro
 	if err != nil {
 		return fmt.Errorf("failed to marshal token: %w", err)
 	}
-	return r.client.Set(ctx, r.key(vt.Token), data, r.tokenTTL).Err()
+	ttl := r.tokenTTL
+	if !vt.ExpiresAt.IsZero() {
+		remaining := time.Until(vt.ExpiresAt)
+		if remaining <= 0 {
+			return nil
+		}
+		if remaining < ttl {
+			ttl = remaining
+		}
+	}
+	return r.client.Set(ctx, r.key(vt.Token), data, ttl).Err()
 }
 
 // Get retrieves a token from Redis. Returns nil if not found or expired.

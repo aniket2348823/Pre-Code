@@ -71,14 +71,26 @@ func (r *AgentRepository) Update(ctx context.Context, id, name, description, sta
 		SET name = $2, description = $3, status = $4, config = $5, updated_at = NOW()
 		WHERE id = $1
 	`
-	_, err := r.pool.Exec(ctx, query, id, name, description, status, config)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id, name, description, status, config)
+	if err != nil {
+		return fmt.Errorf("failed to update agent: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("agent not found")
+	}
+	return nil
 }
 
 // Delete removes an agent by ID.
 func (r *AgentRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id)
-	return err
+	tag, err := r.pool.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete agent: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("agent not found")
+	}
+	return nil
 }
 
 // ListByProject returns all agents for a project.
@@ -105,6 +117,9 @@ func (r *AgentRepository) ListByProject(ctx context.Context, projectID string) (
 			return nil, fmt.Errorf("failed to scan agent: %w", err)
 		}
 		agents = append(agents, a)
+	}
+	if agents == nil {
+		agents = []Agent{}
 	}
 	return agents, rows.Err()
 }

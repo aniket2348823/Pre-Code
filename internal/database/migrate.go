@@ -38,12 +38,13 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 		slog.Warn("failed to set lock_timeout, migrations may hang on concurrent startup", "error", err)
 	}
 
-	// Acquire advisory lock to prevent race conditions during concurrent cluster rollouts
+	// Acquire advisory lock to prevent race conditions during concurrent cluster rollouts.
+	// Use context.Background() so the lock is not released if the request context is cancelled.
 	const migrationLockID int64 = 847291102
-	if _, err := pool.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+	if _, err := pool.Exec(context.Background(), "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
 		return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
 	}
-	defer pool.Exec(ctx, "SELECT pg_advisory_unlock($1)", migrationLockID)
+	defer pool.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", migrationLockID)
 
 	rows, err := pool.Query(ctx, "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname")
 	if err == nil {
@@ -57,16 +58,14 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 		rows.Close()
 	}
 
-	// Ensure the schema_migrations table exists and sync version history
+	// Ensure the schema_migrations table exists
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version BIGINT PRIMARY KEY,
 			applied_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 		);
-		DELETE FROM schema_migrations WHERE version > 1;
-		INSERT INTO schema_migrations (version) VALUES (1) ON CONFLICT DO NOTHING;
 	`); err != nil {
-		return fmt.Errorf("failed to create/sync schema_migrations table: %w", err)
+		return fmt.Errorf("failed to create schema_migrations table: %w", err)
 	}
 
 	for _, file := range matches {

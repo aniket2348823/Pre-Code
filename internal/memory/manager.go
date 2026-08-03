@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -16,9 +18,10 @@ type Manager struct {
 	episodic   *EpisodicStore
 	semantic   *SemanticStore
 	procedural *ProceduralStore
-	working    *WorkingMemory
+	working    atomic.Pointer[WorkingMemory]
 	embedder   Embedder
 	pool       *database.Conn
+	mu         sync.RWMutex
 }
 
 // NewManager creates a new memory manager with all layers.
@@ -60,31 +63,24 @@ func NewManagerWithEmbedder(pool *database.Conn, embedder Embedder) *Manager {
 		episodic:   NewEpisodicStore(pool),
 		semantic:   NewSemanticStore(pool),
 		procedural: NewProceduralStore(),
-		working:    NewWorkingMemory(30 * time.Minute),
 		embedder:   embedder,
 		pool:       pool,
 	}
 }
 
-// embed converts text into a vector using the configured embedder. On any
-// failure (or when using the NoOpEmbedder) it returns a zero vector of the
-// embedder's dimension so callers can still run a degraded, non-semantic query
-// instead of failing outright.
-func (m *Manager) embed(ctx context.Context, text string) pgvector.Vector {
-	dims := m.embedder.Dimensions()
-	vec, err := m.embedder.Embed(ctx, text)
-	if err != nil || len(vec) != dims {
-		return pgvector.NewVector(make([]float32, dims))
-	}
-	return pgvector.NewVector(vec)
+func (m *Manager) initWorkingMemory() {
+	m.working.Store(NewWorkingMemory(30 * time.Minute))
 }
+
+
 
 // Recall performs cascading memory recall: working -> episodic -> semantic.
 func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]MemoryResult, error) {
 	var results []MemoryResult
 
 	// Layer 1: Check working memory (current session)
-	workingMsgs := m.working.Search(query, limit)
+	working := m.working.Load()
+	workingMsgs := working.Search(query, limit)
 	for _, msg := range workingMsgs {
 		results = append(results, MemoryResult{
 			Type:     "working",
@@ -98,12 +94,17 @@ func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]Memory
 	}
 
 	// Embed the query once and reuse across vector-backed layers.
-	queryVec := m.embed(ctx, query)
+	queryVecRaw, embedErr := m.embedder.Embed(ctx, query)
+	if embedErr != nil {
+		slog.Warn("failed to embed query", "error", embedErr)
+		queryVecRaw = make([]float32, m.embedder.Dimensions())
+	}
+	queryVec := pgvector.NewVector(queryVecRaw)
 
 	// Guard: if the query vector is all zeros (NoOpEmbedder), skip vector search
 	// to avoid pgvector returning garbage results or crashing on NaN similarity.
 	isZeroVector := true
-	for _, v := range queryVec.Slice() {
+	for _, v := range queryVecRaw {
 		if v != 0 {
 			isZeroVector = false
 			break
@@ -160,7 +161,10 @@ func (m *Manager) StoreEpisode(ctx context.Context, userID, episodeType, title, 
 		Title:       title,
 		Content:     content,
 		Importance:  importance,
-		Embedding:   m.embed(ctx, title+"\n"+content),
+		Embedding:   func() pgvector.Vector {
+			v, _ := m.embedder.Embed(ctx, title+"\n"+content)
+			return pgvector.NewVector(v)
+		}(),
 	}
 	return m.episodic.Store(ctx, mem)
 }
@@ -174,14 +178,20 @@ func (m *Manager) StorePattern(ctx context.Context, userID, projectID, patternTy
 		Name:        name,
 		Description: description,
 		Confidence:  0.5,
-		Embedding:   m.embed(ctx, name+"\n"+description),
+		Embedding:   func() pgvector.Vector {
+			v, _ := m.embedder.Embed(ctx, name+"\n"+description)
+			return pgvector.NewVector(v)
+		}(),
 	}
 	return m.semantic.Store(ctx, pattern)
 }
 
 // AddWorkingMessage adds a message to working memory.
 func (m *Manager) AddWorkingMessage(role, content string, tokens int) {
-	m.working.Add(Message{Role: role, Content: content, Tokens: tokens})
+	working := m.working.Load()
+	if working != nil {
+		working.Add(Message{Role: role, Content: content, Tokens: tokens})
+	}
 }
 
 // EnableRedisBacking configures working memory to persist to Redis
@@ -190,18 +200,39 @@ func (m *Manager) EnableRedisBacking(rds *redis.Client, sessionID string) {
 	if rds == nil || sessionID == "" {
 		return
 	}
-	m.working = NewRedisBackedWorkingMemory(rds, sessionID, 24*time.Hour)
+	m.working.Store(NewRedisBackedWorkingMemory(rds, sessionID, 24*time.Hour))
 	slog.Info("working memory: Redis-backed", "session_id", sessionID)
 }
 
 // GetWorkingMessages returns all working memory messages.
 func (m *Manager) GetWorkingMessages() []Message {
-	return m.working.Get()
+	working := m.working.Load()
+	if working != nil {
+		return working.Get()
+	}
+	return nil
 }
 
 // ClearWorkingMemory clears the working memory.
 func (m *Manager) ClearWorkingMemory() {
-	m.working.Clear()
+	working := m.working.Load()
+	if working != nil {
+		working.Clear()
+	}
+}
+
+// WorkingMemory returns the current working memory instance.
+func (m *Manager) WorkingMemory() *WorkingMemory {
+	return m.working.Load()
+}
+
+// WorkingCount returns the number of messages in working memory.
+func (m *Manager) WorkingCount() int {
+	working := m.working.Load()
+	if working != nil {
+		return working.Count()
+	}
+	return 0
 }
 
 // MemoryResult represents a unified memory recall result.

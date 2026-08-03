@@ -1,4 +1,3 @@
-// Package timeout provides HTTP request timeout middleware.
 package timeout
 
 import (
@@ -8,9 +7,6 @@ import (
 	"time"
 )
 
-// Middleware wraps an HTTP handler with a request timeout.
-// If the handler doesn't complete within the duration, the context is cancelled
-// and a 504 Gateway Timeout is returned.
 func Middleware(d time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,8 +27,9 @@ func Middleware(d time.Duration) func(http.Handler) http.Handler {
 			case <-ctx.Done():
 				ww.mu.Lock()
 				defer ww.mu.Unlock()
+				ww.timedOut = true
 				if !ww.wroteHeader {
-					http.Error(w, "gateway timeout", http.StatusGatewayTimeout)
+					w.WriteHeader(http.StatusGatewayTimeout)
 					ww.wroteHeader = true
 				}
 			}
@@ -40,17 +37,20 @@ func Middleware(d time.Duration) func(http.Handler) http.Handler {
 	}
 }
 
-// timeoutWriter tracks whether a response has been written.
 type timeoutWriter struct {
 	http.ResponseWriter
 	mu          sync.Mutex
 	wroteHeader bool
+	timedOut    bool
 	done        chan struct{}
 }
 
 func (tw *timeoutWriter) WriteHeader(code int) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
+	if tw.timedOut {
+		return
+	}
 	tw.wroteHeader = true
 	tw.ResponseWriter.WriteHeader(code)
 }
@@ -58,6 +58,9 @@ func (tw *timeoutWriter) WriteHeader(code int) {
 func (tw *timeoutWriter) Write(b []byte) (int, error) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
+	if tw.timedOut {
+		return 0, http.ErrHandlerTimeout
+	}
 	tw.wroteHeader = true
 	return tw.ResponseWriter.Write(b)
 }

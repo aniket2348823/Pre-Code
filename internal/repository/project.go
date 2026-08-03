@@ -70,14 +70,26 @@ func (r *ProjectRepository) Update(ctx context.Context, id, name, description, s
 		SET name = $2, description = $3, status = $4, updated_at = NOW()
 		WHERE id = $1
 	`
-	_, err := r.pool.Exec(ctx, query, id, name, description, status)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id, name, description, status)
+	if err != nil {
+		return fmt.Errorf("failed to update project: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("project not found")
+	}
+	return nil
 }
 
 // Delete removes a project by ID.
 func (r *ProjectRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, id)
-	return err
+	tag, err := r.pool.Exec(ctx, `DELETE FROM projects WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete project: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("project not found")
+	}
+	return nil
 }
 
 // Count returns the total number of projects.
@@ -109,6 +121,9 @@ func (r *ProjectRepository) ListByOrg(ctx context.Context, orgID string) ([]Proj
 			return nil, fmt.Errorf("failed to scan project: %w", err)
 		}
 		projects = append(projects, p)
+	}
+	if projects == nil {
+		projects = []Project{}
 	}
 	return projects, rows.Err()
 }

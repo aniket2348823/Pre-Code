@@ -66,6 +66,14 @@ test-integration:
 	@echo "Running integration tests (requires Docker)..."
 	@$(GOTEST) -tags=integration -v ./...
 
+bench:
+	@echo "Running Go benchmarks..."
+	@$(GOTEST) -bench=. -benchmem ./internal/proxy/... ./internal/scanner/... ./internal/llm/...
+
+loadtest:
+	@echo "Running k6 load test suite..."
+	@k6 run scripts/loadtest.js
+
 # ── Quality ──────────────────────────────────────────────
 lint:
 	@golangci-lint run ./...

@@ -35,6 +35,9 @@ type JWT struct {
 
 // NewJWT creates a new JWT service from config.
 func NewJWT(cfg *config.AuthConfig) *JWT {
+	if len(cfg.JWTSecret) < 32 {
+		panic("jwt secret must be at least 32 bytes")
+	}
 	return &JWT{
 		secret:     []byte(cfg.JWTSecret),
 		expiration: cfg.JWTExpiration,
@@ -43,8 +46,8 @@ func NewJWT(cfg *config.AuthConfig) *JWT {
 
 // GenerateToken creates a new signed JWT token for the given user.
 func (j *JWT) GenerateToken(userID, email, role, orgID string) (string, error) {
-	if len(j.secret) == 0 {
-		return "", fmt.Errorf("jwt secret must not be empty")
+	if len(j.secret) < 32 {
+		return "", fmt.Errorf("jwt secret must be at least 32 bytes")
 	}
 	now := time.Now()
 	claims := &Claims{
@@ -74,12 +77,12 @@ func (j *JWT) GenerateToken(userID, email, role, orgID string) (string, error) {
 func (j *JWT) ValidateToken(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			return nil, ErrInvalidToken
 		}
 		return j.secret, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
+		return nil, ErrInvalidToken
 	}
 
 	claims, ok := token.Claims.(*Claims)

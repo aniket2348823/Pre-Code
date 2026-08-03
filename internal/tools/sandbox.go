@@ -38,9 +38,24 @@ func DockerSandboxConfig() *SandboxConfig {
 	}
 }
 
-// Sandbox wraps command execution with safety constraints.
+// WARNING: When using Engine="local", the Sandbox provides NO isolation.
+// Commands execute directly on the host system with full access to the
+// filesystem, network, and all system resources. This is NOT a security
+// boundary. Never use the "local" engine with untrusted input or in
+// production environments. Use Engine="docker" for actual sandboxing.
 type Sandbox struct {
 	config *SandboxConfig
+}
+
+// LocalWarning returns a warning about the lack of isolation in local mode.
+// Returns empty string for non-local engines.
+func (s *Sandbox) LocalWarning() string {
+	if s.config.Engine == "local" {
+		return "SECURITY WARNING: Local sandbox provides NO isolation. " +
+			"Commands execute with full host access. " +
+			"Do not use with untrusted input."
+	}
+	return ""
 }
 
 // NewSandbox creates a new sandbox with the given configuration.
@@ -71,15 +86,21 @@ func (s *Sandbox) executeLocal(ctx context.Context, command string) (string, err
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	output, err := cmd.CombinedOutput()
 
+	warning := s.LocalWarning()
+	result := string(output)
+	if warning != "" {
+		result = warning + "\n" + result
+	}
+
 	if ctx.Err() == context.DeadlineExceeded {
-		return string(output), fmt.Errorf("command timed out after %s", timeout)
+		return result, fmt.Errorf("command timed out after %s", timeout)
 	}
 
 	if err != nil {
-		return string(output), fmt.Errorf("command failed: %w (output: %s)", err, string(output))
+		return result, fmt.Errorf("command failed: %w (output: %s)", err, result)
 	}
 
-	return string(output), nil
+	return result, nil
 }
 
 func (s *Sandbox) executeDocker(ctx context.Context, command string) (string, error) {

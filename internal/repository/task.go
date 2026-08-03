@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -98,28 +99,31 @@ func (r *TaskRepository) ListByProjectCursor(ctx context.Context, projectID stri
 	var err error
 
 	if cursor != "" {
-		// Decode cursor (RFC3339 timestamp)
-		cursorTime, parseErr := time.Parse(time.RFC3339Nano, cursor)
+		parts := strings.SplitN(cursor, "|", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid cursor")
+		}
+		cursorTime, parseErr := time.Parse(time.RFC3339Nano, parts[0])
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid cursor: %w", parseErr)
 		}
-		// Use keyset pagination: WHERE created_at < cursor
+		cursorID := parts[1]
 		query = `
 			SELECT id, project_id, user_id, prompt, status, result, model, provider,
 			       complexity, max_tokens, max_iterations, input_tokens, output_tokens,
 			       total_tokens, cost, error, plan_json, created_at, updated_at, completed_at
-			FROM tasks WHERE project_id = $1 AND created_at < $2
-			ORDER BY created_at DESC
-			LIMIT $3
+			FROM tasks WHERE project_id = $1 AND (created_at, id) < ($2, $3)
+			ORDER BY created_at DESC, id DESC
+			LIMIT $4
 		`
-		rows, err = r.pool.Query(ctx, query, projectID, cursorTime, limit+1) // fetch one extra to detect has_more
+		rows, err = r.pool.Query(ctx, query, projectID, cursorTime, cursorID, limit+1)
 	} else {
 		query = `
 			SELECT id, project_id, user_id, prompt, status, result, model, provider,
 			       complexity, max_tokens, max_iterations, input_tokens, output_tokens,
 			       total_tokens, cost, error, plan_json, created_at, updated_at, completed_at
 			FROM tasks WHERE project_id = $1
-			ORDER BY created_at DESC
+			ORDER BY created_at DESC, id DESC
 			LIMIT $2
 		`
 		rows, err = r.pool.Query(ctx, query, projectID, limit+1)
@@ -154,7 +158,8 @@ func (r *TaskRepository) ListByProjectCursor(ctx context.Context, projectID stri
 		HasMore: hasMore,
 	}
 	if hasMore && len(tasks) > 0 {
-		page.NextCursor = tasks[len(tasks)-1].CreatedAt.Format(time.RFC3339Nano)
+		last := tasks[len(tasks)-1]
+		page.NextCursor = last.CreatedAt.Format(time.RFC3339Nano) + "|" + last.ID
 	}
 
 	return page, nil
@@ -203,8 +208,14 @@ func (r *TaskRepository) ListByProject(ctx context.Context, projectID string, of
 // UpdateStatus updates the status and related fields of a task.
 func (r *TaskRepository) UpdateStatus(ctx context.Context, id, status string) error {
 	query := `UPDATE tasks SET status = $2, updated_at = NOW() WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, id, status)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id, status)
+	if err != nil {
+		return fmt.Errorf("failed to update task status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task not found")
+	}
+	return nil
 }
 
 // Complete marks a task as completed with result data.
@@ -215,20 +226,38 @@ func (r *TaskRepository) Complete(ctx context.Context, id, result, model, provid
 		       completed_at = NOW(), updated_at = NOW()
 		WHERE id = $1
 	`
-	_, err := r.pool.Exec(ctx, query, id, result, model, provider, inputTokens, outputTokens, totalTokens, cost)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id, result, model, provider, inputTokens, outputTokens, totalTokens, cost)
+	if err != nil {
+		return fmt.Errorf("failed to complete task: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task not found")
+	}
+	return nil
 }
 
 // Cancel marks a task as cancelled.
 func (r *TaskRepository) Cancel(ctx context.Context, id string) error {
 	query := `UPDATE tasks SET status = 'cancelled', updated_at = NOW() WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, id)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to cancel task: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task not found")
+	}
+	return nil
 }
 
 // Delete removes a task by ID.
 func (r *TaskRepository) Delete(ctx context.Context, id string) error {
 	query := `DELETE FROM tasks WHERE id = $1`
-	_, err := r.pool.Exec(ctx, query, id)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete task: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task not found")
+	}
+	return nil
 }

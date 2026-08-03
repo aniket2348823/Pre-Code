@@ -129,19 +129,9 @@ func RateLimitByUser(client *redis.Client, limit int, window time.Duration) func
 }
 
 // RateLimitByIPKey extracts the client IP address for use as a rate-limit key.
+// Uses only the actual connection IP (r.RemoteAddr) to prevent header spoofing.
 func RateLimitByIPKey(r *http.Request) string {
-	ip := r.Header.Get("X-Forwarded-For")
-	if ip != "" {
-		if idx := strings.Index(ip, ","); idx != -1 {
-			ip = strings.TrimSpace(ip[:idx])
-		}
-	}
-	if ip == "" {
-		ip = r.Header.Get("X-Real-IP")
-	}
-	if ip == "" {
-		ip = r.RemoteAddr
-	}
+	ip := r.RemoteAddr
 	if strings.HasPrefix(ip, "[") {
 		if idx := strings.LastIndex(ip, "]:"); idx != -1 {
 			ip = ip[1:idx]

@@ -27,6 +27,8 @@ type ServerConfig struct {
 	Host              string
 	Port              int
 	Env               string
+	BaseURL           string
+	RateLimitPerMin   int
 	ReadTimeout       time.Duration
 	ReadHeaderTimeout time.Duration
 	WriteTimeout      time.Duration
@@ -136,6 +138,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.env", "development")
+	viper.SetDefault("server.base_url", "http://localhost:8080")
+	viper.SetDefault("server.rate_limit_per_min", 10000)
 	viper.SetDefault("server.read_timeout", 30*time.Second)
 	viper.SetDefault("server.read_header_timeout", 10*time.Second)
 	viper.SetDefault("server.write_timeout", 60*time.Second)
@@ -192,6 +196,8 @@ func Load() (*Config, error) {
 			Host:              viper.GetString("server.host"),
 			Port:              viper.GetInt("server.port"),
 			Env:               viper.GetString("server.env"),
+			BaseURL:           viper.GetString("server.base_url"),
+			RateLimitPerMin:   viper.GetInt("server.rate_limit_per_min"),
 			ReadTimeout:       viper.GetDuration("server.read_timeout"),
 			ReadHeaderTimeout: viper.GetDuration("server.read_header_timeout"),
 			WriteTimeout:      viper.GetDuration("server.write_timeout"),

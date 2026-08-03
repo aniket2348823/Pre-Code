@@ -37,7 +37,7 @@ func (vr *ValidationResult) AddError(field, rule, message string) {
 func Validate(fields map[string]interface{}, rules []Rule) *ValidationResult {
 	vr := &ValidationResult{Valid: true}
 	for _, rule := range rules {
-		val, _ := fields[rule.Field]
+		val := fields[rule.Field]
 		rule.Validate(val, vr)
 	}
 	return vr

@@ -4,16 +4,78 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
+// validateCommand checks a command against security policy.
+func validateCommand(command string, security *CommandSecurityConfig) error {
+	if security == nil {
+		return nil
+	}
+
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return fmt.Errorf("command is required")
+	}
+
+	// Strip leading sudo and env var assignments
+	for {
+		if strings.HasPrefix(command, "sudo ") {
+			command = strings.TrimPrefix(command, "sudo ")
+			continue
+		}
+		if eqIdx := strings.Index(command, "="); eqIdx >= 0 && strings.IndexByte(command[:eqIdx], ' ') < 0 {
+			parts := strings.SplitN(command, " ", 2)
+			if len(parts) > 1 {
+				command = parts[1]
+				continue
+			}
+		}
+		break
+	}
+
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return fmt.Errorf("empty command after parsing")
+	}
+
+	cmd := filepath.Base(fields[0])
+
+	if len(security.Blocklist) > 0 {
+		for _, blocked := range security.Blocklist {
+			if cmd == blocked {
+				return fmt.Errorf("command %q is blocked by security policy", cmd)
+			}
+		}
+	}
+
+	if len(security.Allowlist) > 0 {
+		for _, allowed := range security.Allowlist {
+			if cmd == allowed {
+				return nil
+			}
+		}
+		return fmt.Errorf("command %q is not in the allowlist", cmd)
+	}
+
+	return nil
+}
+
 // RunCommandTool executes terminal commands.
-type RunCommandTool struct{}
+type RunCommandTool struct {
+	Security *CommandSecurityConfig
+}
 
 func (t *RunCommandTool) Name() string        { return "run_command" }
 func (t *RunCommandTool) Description() string  { return "Execute a terminal command and return output" }
 func (t *RunCommandTool) RequiresHITL(params map[string]interface{}) bool { return true }
+
+func NewRunCommandTool(sec *CommandSecurityConfig) *RunCommandTool {
+	return &RunCommandTool{Security: sec}
+}
 
 func (t *RunCommandTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
@@ -45,6 +107,10 @@ func (t *RunCommandTool) Execute(ctx context.Context, params map[string]interfac
 	command, _ := params["command"].(string)
 	if command == "" {
 		return &ToolResult{Success: false, Error: "command is required"}, nil
+	}
+
+	if err := validateCommand(command, t.Security); err != nil {
+		return &ToolResult{Success: false, Error: err.Error(), Duration: time.Since(start)}, nil
 	}
 
 	timeout := 30

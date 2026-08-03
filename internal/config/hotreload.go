@@ -64,6 +64,7 @@ func readFromViper() *Config {
 			MaxOpenConns: viper.GetInt("database.max_open_conns"),
 			MaxIdleConns: viper.GetInt("database.max_idle_conns"),
 			MaxLifetime:  viper.GetDuration("database.max_lifetime"),
+			ConnIdleTime: viper.GetDuration("database.conn_idle_time"),
 		},
 		Redis: RedisConfig{
 			Host:     viper.GetString("redis.host"),
@@ -98,6 +99,19 @@ func readFromViper() *Config {
 			WebhookSecret: viper.GetString("stripe.webhook_secret"),
 			SuccessURL:    viper.GetString("stripe.success_url"),
 			CancelURL:     viper.GetString("stripe.cancel_url"),
+		},
+		SMTP: SMTPConfig{
+			Host:     viper.GetString("smtp.host"),
+			Port:     viper.GetInt("smtp.port"),
+			Username: viper.GetString("smtp.username"),
+			Password: viper.GetString("smtp.password"),
+			From:     viper.GetString("smtp.from"),
+			FromName: viper.GetString("smtp.from_name"),
+		},
+		SendGrid: SendGridConfig{
+			APIKey:    viper.GetString("sendgrid.api_key"),
+			FromEmail: viper.GetString("sendgrid.from_email"),
+			FromName:  viper.GetString("sendgrid.from_name"),
 		},
 		CORS: CORSConfig{
 			AllowedOrigins:  viper.GetStringSlice("cors.allowed_origins"),

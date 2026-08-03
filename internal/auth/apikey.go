@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,8 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+var apiLookupPepper = []byte("vigilagent-api-key-lookup")
 
 // APIKey represents an API key with its metadata.
 type APIKey struct {
@@ -41,8 +44,9 @@ func (s *APIKeyService) GenerateKey() (plaintext string, hashed string, prefix s
 	// Create a short prefix for identification (first 8 chars after the prefix)
 	prefix = plaintext[:min(len(s.prefix)+8, len(plaintext))]
 
-	// Hash with bcrypt for storage
-	hashBytes, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
+	// Hash with SHA-256 first to avoid bcrypt 72-byte truncation
+	keyHash := sha256.Sum256([]byte(plaintext))
+	hashBytes, err := bcrypt.GenerateFromPassword(keyHash[:], bcrypt.DefaultCost)
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to hash api key: %w", err)
 	}
@@ -53,7 +57,8 @@ func (s *APIKeyService) GenerateKey() (plaintext string, hashed string, prefix s
 
 // VerifyKey checks if a plaintext key matches a bcrypt hash.
 func (s *APIKeyService) VerifyKey(plaintext, hash string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(plaintext))
+	keyHash := sha256.Sum256([]byte(plaintext))
+	err := bcrypt.CompareHashAndPassword([]byte(hash), keyHash[:])
 	return err == nil
 }
 
@@ -65,10 +70,15 @@ func (s *APIKeyService) ExtractPrefix(plaintext string) string {
 	return plaintext[:min(len(s.prefix)+8, len(plaintext))]
 }
 
-// SHA256Hash returns the SHA-256 hex digest of a string (for indexing).
+// SHA256Hash returns the HMAC-SHA256 hex digest of a string (for indexing).
+// Uses a server-side pepper to prevent rainbow table attacks on API key lookups.
+// API keys are high-entropy secrets, so HMAC with a pepper is appropriate here
+// rather than a slow password hashing function which would be too slow for
+// per-request lookups.
 func SHA256Hash(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])
+	mac := hmac.New(sha256.New, apiLookupPepper)
+	mac.Write([]byte(s))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // ValidatePrefix checks if a key string starts with the expected prefix.

@@ -230,9 +230,11 @@ func TestProceduralStore_ListByUserLimit(t *testing.T) {
 
 func TestManager_AddWorkingMessage(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.AddWorkingMessage("user", "hello", 5)
-	if m.working.Count() != 1 {
-		t.Errorf("expected 1, got %d", m.working.Count())
+	working := m.working.Load().(*WorkingMemory)
+	if working.Count() != 1 {
+		t.Errorf("expected 1, got %d", working.Count())
 	}
 }
 
@@ -248,9 +250,11 @@ func TestManager_GetWorkingMessages(t *testing.T) {
 
 func TestManager_ClearWorkingMemory(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.AddWorkingMessage("user", "hello", 5)
 	m.ClearWorkingMemory()
-	if m.working.Count() != 0 {
+	working := m.working.Load().(*WorkingMemory)
+	if working.Count() != 0 {
 		t.Error("expected 0 after clear")
 	}
 }
@@ -449,8 +453,10 @@ func TestManager_EnableRedisBacking_NilRedis(t *testing.T) {
 
 func TestManager_EnableRedisBacking_EmptySession(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.EnableRedisBacking(nil, "")
-	if m.working.Count() != 0 {
+	working := m.working.Load().(*WorkingMemory)
+	if working.Count() != 0 {
 		t.Error("expected 0 messages")
 	}
 }

@@ -74,8 +74,14 @@ func (r *SessionRepository) Update(ctx context.Context, id, status string) error
 		SET status = $2, updated_at = NOW()
 		WHERE id = $1
 	`
-	_, err := r.pool.Exec(ctx, query, id, status)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id, status)
+	if err != nil {
+		return fmt.Errorf("failed to update session: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("session not found")
+	}
+	return nil
 }
 
 // EndSession sets the ended_at timestamp and status to completed.
@@ -85,8 +91,14 @@ func (r *SessionRepository) EndSession(ctx context.Context, id string) error {
 		SET status = 'completed', ended_at = NOW(), updated_at = NOW()
 		WHERE id = $1
 	`
-	_, err := r.pool.Exec(ctx, query, id)
-	return err
+	tag, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to end session: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("session not found")
+	}
+	return nil
 }
 
 // CleanupStaleSessions marks sessions as 'expired' if they have been inactive
@@ -152,6 +164,56 @@ func (r *SessionRepository) StartStaleSessionCleanup(ctx context.Context, thresh
 	return cancel
 }
 
+// ListByUser returns all sessions for a user across all agents/projects.
+func (r *SessionRepository) ListByUser(ctx context.Context, userID string) ([]Session, error) {
+	query := `
+		SELECT id, project_id, agent_id, user_id, status, started_at, ended_at, created_at, updated_at
+		FROM sessions WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT 100
+	`
+	rows, err := r.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list user sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		var s Session
+		if err := rows.Scan(
+			&s.ID, &s.ProjectID, &s.AgentID,
+			&s.UserID, &s.Status,
+			&s.StartedAt, &s.EndedAt,
+			&s.CreatedAt, &s.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan session: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+	if sessions == nil {
+		sessions = []Session{}
+	}
+	return sessions, rows.Err()
+}
+
+// InvalidateSession forces a session to 'cancelled' status.
+func (r *SessionRepository) InvalidateSession(ctx context.Context, id, userID string) error {
+	query := `
+		UPDATE sessions
+		SET status = 'cancelled', ended_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND user_id = $2 AND status = 'active'
+	`
+	tag, err := r.pool.Exec(ctx, query, id, userID)
+	if err != nil {
+		return fmt.Errorf("failed to invalidate session: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("session not found or already inactive")
+	}
+	return nil
+}
+
 // ListByAgent returns all sessions for an agent.
 func (r *SessionRepository) ListByAgent(ctx context.Context, agentID string) ([]Session, error) {
 	query := `
@@ -177,6 +239,9 @@ func (r *SessionRepository) ListByAgent(ctx context.Context, agentID string) ([]
 			return nil, fmt.Errorf("failed to scan session: %w", err)
 		}
 		sessions = append(sessions, s)
+	}
+	if sessions == nil {
+		sessions = []Session{}
 	}
 	return sessions, rows.Err()
 }

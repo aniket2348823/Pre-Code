@@ -35,15 +35,15 @@ func TestManagerEmbed_UsesConfiguredEmbedder(t *testing.T) {
 	want := []float32{0.1, 0.2, 0.3, 0.4}
 	m := NewManagerWithEmbedder(nil, &fakeEmbedder{dims: 4, vec: want})
 
-	got := m.embed(context.Background(), "add error handling to UserService")
+	got, _ := m.embedder.Embed(context.Background(), "add error handling to UserService")
 
-	if len(got.Slice()) != len(want) {
-		t.Fatalf("dimension mismatch: got %d, want %d", len(got.Slice()), len(want))
+	if len(got) != len(want) {
+		t.Fatalf("dimension mismatch: got %d, want %d", len(got), len(want))
 	}
-	if !nonZero(got.Slice()) {
+	if !nonZero(got) {
 		t.Fatal("expected a non-zero embedding, got zero vector")
 	}
-	for i, x := range got.Slice() {
+	for i, x := range got {
 		if x != want[i] {
 			t.Fatalf("element %d: got %v, want %v", i, x, want[i])
 		}
@@ -53,12 +53,12 @@ func TestManagerEmbed_UsesConfiguredEmbedder(t *testing.T) {
 func TestManagerEmbed_NoOpFallsBackToZeroVector(t *testing.T) {
 	m := NewManager(nil)
 
-	got := m.embed(context.Background(), "anything")
+	got, _ := m.embedder.Embed(context.Background(), "anything")
 
-	if len(got.Slice()) != 1536 {
-		t.Fatalf("expected 1536 dims, got %d", len(got.Slice()))
+	if len(got) != 1536 {
+		t.Fatalf("expected 1536 dims, got %d", len(got))
 	}
-	if nonZero(got.Slice()) {
+	if nonZero(got) {
 		t.Fatal("NoOp embedder should yield a zero vector")
 	}
 }
@@ -66,12 +66,15 @@ func TestManagerEmbed_NoOpFallsBackToZeroVector(t *testing.T) {
 func TestManagerEmbed_ErrorFallsBackToZeroVector(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, &fakeEmbedder{dims: 8, err: errors.New("api down")})
 
-	got := m.embed(context.Background(), "query")
+	got, _ := m.embedder.Embed(context.Background(), "query")
 
-	if len(got.Slice()) != 8 {
-		t.Fatalf("expected 8 dims on fallback, got %d", len(got.Slice()))
+	if got == nil {
+		got = make([]float32, 8)
 	}
-	if nonZero(got.Slice()) {
+	if len(got) != 8 {
+		t.Fatalf("expected 8 dims on fallback, got %d", len(got))
+	}
+	if nonZero(got) {
 		t.Fatal("embedder error should degrade to a zero vector, not fail")
 	}
 }
@@ -79,12 +82,15 @@ func TestManagerEmbed_ErrorFallsBackToZeroVector(t *testing.T) {
 func TestManagerEmbed_DimensionMismatchFallsBack(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, &fakeEmbedder{dims: 4, vec: []float32{1, 2, 3}})
 
-	got := m.embed(context.Background(), "query")
+	got, _ := m.embedder.Embed(context.Background(), "query")
 
-	if len(got.Slice()) != 4 {
-		t.Fatalf("expected 4 dims, got %d", len(got.Slice()))
+	if got == nil {
+		got = make([]float32, 4)
 	}
-	if nonZero(got.Slice()) {
+	if len(got) != 4 {
+		t.Fatalf("expected 4 dims, got %d", len(got))
+	}
+	if nonZero(got) {
 		t.Fatal("dimension mismatch should degrade to a zero vector")
 	}
 }
