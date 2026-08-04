@@ -88,15 +88,18 @@ func (t *ReadFileTool) Parameters() map[string]interface{} {
 
 func (t *ReadFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
 	start := time.Now()
+
+	if t.Security == nil {
+		return &ToolResult{Success: false, Error: "file tool requires security configuration"}, nil
+	}
+
 	path, _ := params["path"].(string)
 	if path == "" {
 		return &ToolResult{Success: false, Error: "path is required"}, nil
 	}
 
-	if t.Security != nil {
-		if err := validateFilePath(path, t.Security.AllowedDirs); err != nil {
-			return &ToolResult{Success: false, Error: err.Error(), Duration: time.Since(start)}, nil
-		}
+	if err := validateFilePath(path, t.Security.AllowedDirs); err != nil {
+		return &ToolResult{Success: false, Error: err.Error(), Duration: time.Since(start)}, nil
 	}
 
 	data, err := os.ReadFile(path)
@@ -152,6 +155,11 @@ func (t *WriteFileTool) Parameters() map[string]interface{} {
 
 func (t *WriteFileTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
 	start := time.Now()
+
+	if t.Security == nil {
+		return &ToolResult{Success: false, Error: "file tool requires security configuration"}, nil
+	}
+
 	path, _ := params["path"].(string)
 	content, _ := params["content"].(string)
 
@@ -159,10 +167,8 @@ func (t *WriteFileTool) Execute(ctx context.Context, params map[string]interface
 		return &ToolResult{Success: false, Error: "path is required"}, nil
 	}
 
-	if t.Security != nil {
-		if err := validateFilePath(path, t.Security.AllowedDirs); err != nil {
-			return &ToolResult{Success: false, Error: err.Error()}, nil
-		}
+	if err := validateFilePath(path, t.Security.AllowedDirs); err != nil {
+		return &ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
 	dir := filepath.Dir(path)

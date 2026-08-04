@@ -6,12 +6,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vigilagent/vigilagent/internal/auth"
 )
+
+func reqWithClaims(req *http.Request, userID string) *http.Request {
+	claims := &auth.Claims{UserID: userID, Role: "user"}
+	return req.WithContext(auth.ContextWithClaims(req.Context(), claims))
+}
 
 func TestNewHITLQueue(t *testing.T) {
 	q := NewHITLQueue(nil, 5*time.Second)
@@ -239,9 +246,9 @@ func TestHITLQueue_SetCallback(t *testing.T) {
 	q := NewHITLQueue(nil, 5*time.Second)
 	defer q.Close()
 
-	var called bool
+	var called atomic.Bool
 	q.SetCallback(func(entry *HITLCheckpointEntry) {
-		called = true
+		called.Store(true)
 	})
 
 	entry := &HITLCheckpointEntry{ID: "cp-cb", TaskID: "task-cb", UserID: "user-1"}
@@ -250,7 +257,7 @@ func TestHITLQueue_SetCallback(t *testing.T) {
 	q.Decide(context.Background(), "cp-cb", HITLApprove, "")
 	time.Sleep(50 * time.Millisecond)
 
-	assert.True(t, called, "callback should have been invoked")
+	assert.True(t, called.Load(), "callback should have been invoked")
 }
 
 func TestHITLQueue_GetPendingEmpty(t *testing.T) {
@@ -277,8 +284,7 @@ func TestHITLHandler_ListPending(t *testing.T) {
 	go q.Submit(context.Background(), entry)
 	time.Sleep(10 * time.Millisecond)
 
-	req := httptest.NewRequest("GET", "/hitl/pending", nil)
-	req.Header.Set("X-User-ID", "user-list")
+	req := reqWithClaims(httptest.NewRequest("GET", "/hitl/pending", nil), "user-list")
 	w := httptest.NewRecorder()
 	h.ListPendingHandler(w, req)
 
@@ -305,8 +311,7 @@ func TestHITLHandler_ListPending_Empty(t *testing.T) {
 	defer q.Close()
 	h := NewHITLHandler(q)
 
-	req := httptest.NewRequest("GET", "/hitl/pending", nil)
-	req.Header.Set("X-User-ID", "nobody")
+	req := reqWithClaims(httptest.NewRequest("GET", "/hitl/pending", nil), "nobody")
 	w := httptest.NewRecorder()
 	h.ListPendingHandler(w, req)
 
@@ -330,8 +335,7 @@ func TestHITLHandler_DecideHandler_Success(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	body := `{"checkpoint_id":"cp-decide","decision":"approve"}`
-	req := httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString(body))
-	req.Header.Set("X-User-ID", "user-decide")
+	req := reqWithClaims(httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString(body)), "user-decide")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.DecideHandler(w, req)
@@ -358,8 +362,7 @@ func TestHITLHandler_DecideHandler_InvalidBody(t *testing.T) {
 	defer q.Close()
 	h := NewHITLHandler(q)
 
-	req := httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString("not json"))
-	req.Header.Set("X-User-ID", "user1")
+	req := reqWithClaims(httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString("not json")), "user1")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.DecideHandler(w, req)
@@ -373,8 +376,7 @@ func TestHITLHandler_DecideHandler_MissingCheckpointID(t *testing.T) {
 	h := NewHITLHandler(q)
 
 	body := `{"decision":"approve"}`
-	req := httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString(body))
-	req.Header.Set("X-User-ID", "user1")
+	req := reqWithClaims(httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString(body)), "user1")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.DecideHandler(w, req)
@@ -388,8 +390,7 @@ func TestHITLHandler_DecideHandler_InvalidDecision(t *testing.T) {
 	h := NewHITLHandler(q)
 
 	body := `{"checkpoint_id":"cp-1","decision":"invalid"}`
-	req := httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString(body))
-	req.Header.Set("X-User-ID", "user1")
+	req := reqWithClaims(httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString(body)), "user1")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.DecideHandler(w, req)
@@ -403,8 +404,7 @@ func TestHITLHandler_DecideHandler_NotFound(t *testing.T) {
 	h := NewHITLHandler(q)
 
 	body := `{"checkpoint_id":"nonexistent","decision":"approve"}`
-	req := httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString(body))
-	req.Header.Set("X-User-ID", "user1")
+	req := reqWithClaims(httptest.NewRequest("POST", "/hitl/decide", bytes.NewBufferString(body)), "user1")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.DecideHandler(w, req)

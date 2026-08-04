@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vigilagent/vigilagent/internal/auth"
+	"github.com/vigilagent/vigilagent/internal/config"
 	"github.com/vigilagent/vigilagent/internal/database"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
@@ -33,6 +34,7 @@ func hashKey(plaintext string) string {
 
 // Authenticate validates an API key and returns user claims.
 // Returns nil, nil if no API key was presented.
+// During rotation grace period, also accepts the old key via rotation_token_hash lookup.
 func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 	plaintext := extractAPIKey(r)
 	if plaintext == "" {
@@ -49,6 +51,7 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 		scopes   []string
 	)
 
+	// Primary lookup: match by key_hash (normal path)
 	query := `
 		SELECT id, user_id, is_active, expires_at, scopes
 		FROM api_keys
@@ -58,7 +61,20 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 		&id, &userID, &isActive, &expires, &scopes,
 	)
 	if err != nil {
-		return nil, ErrInvalidAPIKey
+		// Key hash not found — could be an old rotated key still valid during grace period.
+		// Try rotation_token_hash lookup: the client may be sending the rotation token.
+		rotHash := auth.SHA256Hash(plaintext)
+		rotQuery := `
+			SELECT id, user_id, is_active, expires_at, scopes
+			FROM api_keys
+			WHERE rotation_token_hash = $1 AND rotated_at IS NOT NULL
+		`
+		err2 := a.pool.QueryRow(r.Context(), rotQuery, rotHash).Scan(
+			&id, &userID, &isActive, &expires, &scopes,
+		)
+		if err2 != nil {
+			return nil, ErrInvalidAPIKey
+		}
 	}
 
 	if !isActive {
@@ -207,9 +223,7 @@ func (m *AuthSessionMiddleware) AuthSessionCheckHandler(w http.ResponseWriter, r
 	}
 
 	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"authenticated_user": claims.UserID,
-		"session_user":       sessionUser,
-		"match":              sessionUser == claims.UserID,
+		"session_valid": sessionUser == claims.UserID,
 	})
 }
 
@@ -282,6 +296,77 @@ func RequireJWTRefresh(jwtSvc *auth.JWT) func(http.Handler) http.Handler {
 			}
 
 			w.Header().Set("X-New-Token", newToken)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// FingerprintBindingConfig configures IP + User-Agent binding for JWT tokens.
+type FingerprintBindingConfig struct {
+	BindToIP        bool
+	BindToUserAgent bool
+}
+
+// NewFingerprintBindingConfig creates config from AuthConfig.
+func NewFingerprintBindingConfig(cfg *config.AuthConfig) *FingerprintBindingConfig {
+	return &FingerprintBindingConfig{
+		BindToIP:        cfg.JWTBindToIP,
+		BindToUserAgent: cfg.JWTBindToUserAgent,
+	}
+}
+
+// FingerprintBindingMiddleware verifies that the JWT fingerprint matches the current request's IP + User-Agent.
+// Must run AFTER auth middleware has placed claims in context.
+func FingerprintBindingMiddleware(cfg *FingerprintBindingConfig) func(http.Handler) http.Handler {
+	if cfg == nil || (!cfg.BindToIP && !cfg.BindToUserAgent) {
+		return func(next http.Handler) http.Handler { return next }
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := auth.ClaimsFromContext(r.Context())
+			if !ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Skip fingerprint check for API keys (they don't have fingerprints)
+			if claims.IsAPIKey {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if claims.Fingerprint == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			ip := r.RemoteAddr
+			if idx := strings.LastIndex(ip, ":"); idx > 0 {
+				ip = ip[:idx]
+			}
+			ua := r.UserAgent()
+
+			var expected string
+			switch {
+			case cfg.BindToIP && cfg.BindToUserAgent:
+				expected = auth.ComputeFingerprint(ip, ua)
+			case cfg.BindToIP:
+				expected = auth.ComputeFingerprint(ip, "")
+			case cfg.BindToUserAgent:
+				expected = auth.ComputeFingerprint("", ua)
+			}
+
+			if claims.Fingerprint != expected {
+				slog.Warn("fingerprint-binding: mismatch",
+					"user_id", claims.UserID,
+					"expected", expected,
+					"got", claims.Fingerprint,
+				)
+				response.Unauthorized(w, "token fingerprint mismatch — IP or User-Agent changed")
+				return
+			}
+
 			next.ServeHTTP(w, r)
 		})
 	}

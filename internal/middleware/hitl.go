@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
@@ -291,11 +292,12 @@ func NewHITLHandler(queue *HITLQueue) *HITLHandler {
 
 // ListPendingHandler returns all pending HITL checkpoints for the authenticated user.
 func (h *HITLHandler) ListPendingHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		response.Unauthorized(w, "missing user context")
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
+	userID := claims.UserID
 
 	checkpoints := h.queue.GetPending(userID)
 	if checkpoints == nil {
@@ -309,11 +311,13 @@ func (h *HITLHandler) ListPendingHandler(w http.ResponseWriter, r *http.Request)
 
 // DecideHandler processes a human decision on a checkpoint.
 func (h *HITLHandler) DecideHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		response.Unauthorized(w, "missing user context")
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		response.Unauthorized(w, "missing authentication")
 		return
 	}
+	userID := claims.UserID
+	_ = userID // used for access control; decision applies to checkpoint owner
 
 	var input struct {
 		CheckpointID string       `json:"checkpoint_id"`

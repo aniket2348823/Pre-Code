@@ -147,7 +147,10 @@ func readFromViper() *Config {
 // (protected by sync.Once). A debounce timer prevents rapid-fire reloads.
 func (hr *HotReloader) Start(ctx context.Context) {
 	hr.startOnce.Do(func() {
-		ctx, hr.cancel = context.WithCancel(ctx)
+		ctx, cancel := context.WithCancel(ctx)
+		hr.mu.Lock()
+		hr.cancel = cancel
+		hr.mu.Unlock()
 
 		// Debounce timer — if multiple fsnotify events arrive within the debounce
 		// window, only the last one triggers a reload.
@@ -201,11 +204,15 @@ func (hr *HotReloader) Start(ctx context.Context) {
 
 // Stop stops the config watcher and waits for the goroutine to exit.
 func (hr *HotReloader) Stop() {
-	if hr.cancel != nil {
-		hr.cancel()
+	hr.mu.RLock()
+	cancel := hr.cancel
+	done := hr.done
+	hr.mu.RUnlock()
+	if cancel != nil {
+		cancel()
 	}
-	if hr.done != nil {
-		<-hr.done
+	if done != nil {
+		<-done
 	}
 }
 

@@ -8,10 +8,14 @@ package database
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/vigilagent/vigilagent/internal/telemetry"
 )
 
 // Conn wraps a pgxpool.Pool and provides context-aware query methods.
@@ -19,12 +23,21 @@ import (
 // WithConn or WithTx), queries execute on that connection. Otherwise,
 // they fall back to the shared pool.
 type Conn struct {
-	pool *pgxpool.Pool
+	pool              *pgxpool.Pool
+	slowQueryThreshold time.Duration
 }
 
 // NewConn creates a context-aware connection wrapper around the pool.
 func NewConn(pool *pgxpool.Pool) *Conn {
-	return &Conn{pool: pool}
+	return &Conn{pool: pool, slowQueryThreshold: 100 * time.Millisecond}
+}
+
+// NewConnWithThreshold creates a connection wrapper with a custom slow query threshold.
+func NewConnWithThreshold(pool *pgxpool.Pool, threshold time.Duration) *Conn {
+	if threshold <= 0 {
+		threshold = 100 * time.Millisecond
+	}
+	return &Conn{pool: pool, slowQueryThreshold: threshold}
 }
 
 // Pool returns the underlying pgxpool.Pool for operations that require
@@ -34,39 +47,121 @@ func (c *Conn) Pool() *pgxpool.Pool {
 }
 
 // QueryRow executes a single-row query using the connection/transaction from
-// context, falling back to the pool.
+// context, falling back to the pool. Checks the DB circuit breaker before
+// pool access — returns an error row if the breaker is open.
 func (c *Conn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	start := time.Now()
+	var row pgx.Row
 	if tx, ok := TxFromContext(ctx); ok {
-		return tx.QueryRow(ctx, sql, args...)
+		row = tx.QueryRow(ctx, sql, args...)
+	} else if conn, ok := ConnFromContext(ctx); ok {
+		row = conn.QueryRow(ctx, sql, args...)
+	} else {
+		dbCircuitBreaker.mu.Lock()
+		cbState := dbCircuitBreaker.state
+		dbCircuitBreaker.mu.Unlock()
+		if cbState == "open" {
+			recordDBFailure()
+			return &errRow{err: ErrDBCircuitOpen}
+		}
+		row = c.pool.QueryRow(ctx, sql, args...)
 	}
-	if conn, ok := ConnFromContext(ctx); ok {
-		return conn.QueryRow(ctx, sql, args...)
+	if dur := time.Since(start); dur > c.slowQueryThreshold {
+		slog.Warn("slow query",
+			"duration_ms", dur.Milliseconds(),
+			"query", sql,
+			"rows", 1,
+		)
+		telemetry.SlowQueryDuration.Observe(dur.Seconds())
 	}
-	return c.pool.QueryRow(ctx, sql, args...)
+	return row
 }
 
+// errRow implements pgx.Row and always returns an error.
+type errRow struct{ err error }
+
+func (r *errRow) Scan(dest ...any) error { return r.err }
+func (r *errRow) Conn() *pgx.Conn        { return nil }
+
 // Query executes a multi-row query using the connection/transaction from
-// context, falling back to the pool.
+// context, falling back to the pool. Checks the DB circuit breaker before
+// pool access.
 func (c *Conn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	start := time.Now()
+	var rows pgx.Rows
+	var err error
 	if tx, ok := TxFromContext(ctx); ok {
-		return tx.Query(ctx, sql, args...)
+		rows, err = tx.Query(ctx, sql, args...)
+	} else if conn, ok := ConnFromContext(ctx); ok {
+		rows, err = conn.Query(ctx, sql, args...)
+	} else {
+		dbCircuitBreaker.mu.Lock()
+		cbState := dbCircuitBreaker.state
+		dbCircuitBreaker.mu.Unlock()
+		if cbState == "open" {
+			recordDBFailure()
+			return nil, ErrDBCircuitOpen
+		}
+		rows, err = c.pool.Query(ctx, sql, args...)
+		if err != nil {
+			recordDBFailure()
+		} else {
+			recordDBSuccess()
+		}
 	}
-	if conn, ok := ConnFromContext(ctx); ok {
-		return conn.Query(ctx, sql, args...)
+	if dur := time.Since(start); dur > c.slowQueryThreshold {
+		var rowCount int
+		if rows != nil {
+			rowCount = -1 // unknown until consumed
+		}
+		slog.Warn("slow query",
+			"duration_ms", dur.Milliseconds(),
+			"query", sql,
+			"rows", rowCount,
+		)
+		telemetry.SlowQueryDuration.Observe(dur.Seconds())
 	}
-	return c.pool.Query(ctx, sql, args...)
+	return rows, err
 }
 
 // Exec executes a command using the connection/transaction from context,
-// falling back to the pool.
+// falling back to the pool. Checks the DB circuit breaker before pool access.
 func (c *Conn) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	start := time.Now()
+	var tag pgconn.CommandTag
+	var err error
 	if tx, ok := TxFromContext(ctx); ok {
-		return tx.Exec(ctx, sql, args...)
+		tag, err = tx.Exec(ctx, sql, args...)
+	} else if conn, ok := ConnFromContext(ctx); ok {
+		tag, err = conn.Exec(ctx, sql, args...)
+	} else {
+		dbCircuitBreaker.mu.Lock()
+		cbState := dbCircuitBreaker.state
+		dbCircuitBreaker.mu.Unlock()
+		if cbState == "open" {
+			recordDBFailure()
+			return pgconn.CommandTag{}, ErrDBCircuitOpen
+		}
+		tag, err = c.pool.Exec(ctx, sql, args...)
+		if err != nil {
+			recordDBFailure()
+		} else {
+			recordDBSuccess()
+		}
 	}
-	if conn, ok := ConnFromContext(ctx); ok {
-		return conn.Exec(ctx, sql, args...)
+	if dur := time.Since(start); dur > c.slowQueryThreshold {
+		rowsAffected := int64(-1)
+		if err == nil {
+			rowsAffected = tag.RowsAffected()
+		}
+		slog.Warn("slow query",
+			"duration_ms", dur.Milliseconds(),
+			"query", sql,
+			"rows_affected", rowsAffected,
+		)
+		telemetry.SlowQueryDuration.Observe(dur.Seconds())
 	}
-	return c.pool.Exec(ctx, sql, args...)
+	return tag, err
 }
 
 type ctxSavepointCounter struct{}

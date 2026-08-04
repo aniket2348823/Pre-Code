@@ -47,6 +47,10 @@ func (t *SearchCodeTool) Execute(ctx context.Context, params map[string]interfac
 	if searchPath == "" {
 		searchPath = "."
 	}
+	// Validate search path to prevent directory traversal
+	if strings.Contains(searchPath, "..") {
+		return &ToolResult{Success: false, Error: "path must not contain '..'"}, nil
+	}
 
 	glob, _ := params["glob"].(string)
 

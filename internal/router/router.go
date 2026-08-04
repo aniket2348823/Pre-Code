@@ -51,6 +51,12 @@ func (r *Router) setupMiddleware() {
 	r.Use(compression.Middleware)
 	r.Use(r.securityHeadersMiddleware)
 	r.Use(mw.CacheControl(mw.DefaultAPICache()))
+
+	// ETag + in-memory response cache for read-only endpoints
+	r.responseCache = mw.NewResponseCache(mw.DefaultResponseCacheConfig())
+	r.Use(mw.ResponseCacheMiddleware(r.responseCache))
+	r.Use(mw.CacheInvalidationMiddleware(r.responseCache))
+
 	r.useCORSFromConfig()
 	r.Use(middleware.Heartbeat("/health"))
 
@@ -149,25 +155,19 @@ func corsAllExplicit(origins []string) bool {
 }
 
 func (r *Router) setupRoutes() {
-	// Top-level route for VS Code extension compatibility (sends /v1/deep-analyze without /api prefix)
-	r.Post("/v1/deep-analyze", r.deepAnalyzeHandler)
-
 	r.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/health", r.healthHandler)
 		v1.Get("/ready", r.readinessHandler)
 		v1.Get("/docs", r.swaggerUIHandler)
 		v1.Get("/docs/openapi.yaml", r.openapiSpecHandler)
 
-		// Dual-engine analysis — no auth/middleware, same level as /health (used by VS Code extension)
-		v1.Post("/deep-analyze", r.deepAnalyzeHandler)
-
 		public := v1.Group(nil)
 		public.Use(r.authRateLimitMiddleware)
-		public.Use(limitBodySize)
+		public.Use(mw.BodySizeLimiter(mw.DefaultBodySizeConfig()))
 		public.Use(mw.SanitizeMiddleware)
 		{
 			public.Post("/auth/register", r.registerHandler)
-			public.Post("/auth/login", r.loginHandler)
+			public.With(r.loginRateLimiter.Middleware()).Post("/auth/login", r.loginHandler)
 			public.Post("/auth/forgot-password", r.forgotPasswordHandler)
 			public.Post("/auth/reset-password", r.resetPasswordHandler)
 			public.Get("/auth/verify-email", r.verifyEmailHandler)
@@ -181,7 +181,19 @@ func (r *Router) setupRoutes() {
 		protected := v1.Group(nil)
 		protected.Use(r.authMiddleware)
 		protected.Use(r.apiKeyRateLimitMiddleware)
-		protected.Use(limitBodySize)
+		protected.Use(mw.BodySizeLimiter(mw.DefaultBodySizeConfig()))
+
+		// Read-only ETag cache config: 30s max-age, stale-while-revalidate 60s
+		etagReadCfg := mw.DefaultETagConfig().
+			WithPathPatterns([]string{
+				"/api/v1/organizations",
+				"/api/v1/projects",
+				"/api/v1/agents",
+				"/api/v1/sessions",
+				"/api/v1/tasks",
+				"/api/v1/skills",
+				"/api/v1/alerts",
+			})
 
 		// Plan-based rate limiting + usage metering + quota enforcement
 		if r.planRateLimiter != nil {
@@ -199,6 +211,9 @@ func (r *Router) setupRoutes() {
 			protected.Use(r.csrf.Middleware)
 		}
 
+		// Deep analysis — requires auth
+		protected.Post("/deep-analyze", r.deepAnalyzeHandler)
+
 		// Logout is protected — requires valid token to revoke
 		protected.Post("/auth/logout", r.logoutHandler)
 		protected.Put("/users/me/password", r.changePasswordHandler)
@@ -213,26 +228,26 @@ func (r *Router) setupRoutes() {
 			)
 
 			protected.With(mw.RequireScope("orgs:write")).Post("/organizations", r.createOrgHandler)
-			protected.With(mw.RequireScope("orgs:read")).Get("/organizations", r.listOrgsHandler)
-			protected.With(mw.RequireScope("orgs:read")).Get("/organizations/{orgID}", r.getOrgHandler)
+			protected.With(mw.RequireScope("orgs:read"), mw.ETagMiddleware(etagReadCfg)).Get("/organizations", r.listOrgsHandler)
+			protected.With(mw.RequireScope("orgs:read"), mw.ETagMiddleware(etagReadCfg)).Get("/organizations/{orgID}", r.getOrgHandler)
 			protected.With(mw.RequireScope("orgs:write")).Put("/organizations/{orgID}", r.updateOrgHandler)
 			protected.With(mw.RequireScope("orgs:write")).Delete("/organizations/{orgID}", r.deleteOrgHandler)
 
 			protected.With(mw.RequireScope("projects:write")).Post("/projects", r.createProjectHandler)
-			protected.With(mw.RequireScope("projects:read")).Get("/projects", r.listProjectsHandler)
-			protected.With(mw.RequireScope("projects:read")).Get("/projects/{projectID}", r.getProjectHandler)
+			protected.With(mw.RequireScope("projects:read"), mw.ETagMiddleware(etagReadCfg)).Get("/projects", r.listProjectsHandler)
+			protected.With(mw.RequireScope("projects:read"), mw.ETagMiddleware(etagReadCfg)).Get("/projects/{projectID}", r.getProjectHandler)
 			protected.With(mw.RequireScope("projects:write")).Put("/projects/{projectID}", r.updateProjectHandler)
 			protected.With(mw.RequireScope("projects:write")).Delete("/projects/{projectID}", r.deleteProjectHandler)
 
 			protected.With(mw.RequireScope("agents:write")).Post("/projects/{projectID}/agents", r.createAgentHandler)
-			protected.With(mw.RequireScope("agents:read")).Get("/projects/{projectID}/agents", r.listAgentsHandler)
-			protected.With(mw.RequireScope("agents:read")).Get("/agents/{agentID}", r.getAgentHandler)
+			protected.With(mw.RequireScope("agents:read"), mw.ETagMiddleware(etagReadCfg)).Get("/projects/{projectID}/agents", r.listAgentsHandler)
+			protected.With(mw.RequireScope("agents:read"), mw.ETagMiddleware(etagReadCfg)).Get("/agents/{agentID}", r.getAgentHandler)
 			protected.With(mw.RequireScope("agents:write")).Put("/agents/{agentID}", r.updateAgentHandler)
 			protected.With(mw.RequireScope("agents:write")).Delete("/agents/{agentID}", r.deleteAgentHandler)
 
 			protected.With(mw.RequireScope("agents:write")).Post("/agents/{agentID}/sessions", r.createSessionHandler)
-			protected.With(mw.RequireScope("agents:read")).Get("/agents/{agentID}/sessions", r.listSessionsHandler)
-			protected.With(mw.RequireScope("agents:read")).Get("/sessions/{sessionID}", r.getSessionHandler)
+			protected.With(mw.RequireScope("agents:read"), mw.ETagMiddleware(etagReadCfg)).Get("/agents/{agentID}/sessions", r.listSessionsHandler)
+			protected.With(mw.RequireScope("agents:read"), mw.ETagMiddleware(etagReadCfg)).Get("/sessions/{sessionID}", r.getSessionHandler)
 			protected.With(mw.RequireScope("agents:write")).Put("/sessions/{sessionID}", r.updateSessionHandler)
 
 			if r.idempotency != nil {
@@ -240,8 +255,8 @@ func (r *Router) setupRoutes() {
 			} else {
 				protected.With(mw.RequireScope("tasks:write")).Post("/tasks", r.createTaskHandler)
 			}
-			protected.With(mw.RequireScope("tasks:read")).Get("/tasks", r.listTasksHandler)
-			protected.With(mw.RequireScope("tasks:read")).Get("/tasks/{taskID}", r.getTaskHandler)
+			protected.With(mw.RequireScope("tasks:read"), mw.ETagMiddleware(etagReadCfg)).Get("/tasks", r.listTasksHandler)
+			protected.With(mw.RequireScope("tasks:read"), mw.ETagMiddleware(etagReadCfg)).Get("/tasks/{taskID}", r.getTaskHandler)
 			protected.With(mw.RequireScope("tasks:write")).Post("/tasks/{taskID}/cancel", r.cancelTaskHandler)
 			protected.With(mw.RequireScope("tasks:read")).Get("/tasks/{taskID}/stream", r.streamTaskHandler)
 			protected.With(mw.RequireScope("tasks:write")).Post("/tasks/{taskID}/hitl", r.approveHITLHandler)
@@ -293,13 +308,13 @@ func (r *Router) setupRoutes() {
 
 			skills := protected.Group(nil)
 			{
-				skills.With(mw.RequireScope("skills:read")).Get("/skills", r.listSkillsHandler)
-				skills.With(mw.RequireScope("skills:read")).Get("/skills/{skillID}", r.getSkillHandler)
+				skills.With(mw.RequireScope("skills:read"), mw.ETagMiddleware(etagReadCfg)).Get("/skills", r.listSkillsHandler)
+				skills.With(mw.RequireScope("skills:read"), mw.ETagMiddleware(etagReadCfg)).Get("/skills/{skillID}", r.getSkillHandler)
 				skills.With(mw.RequireScope("skills:write")).Post("/skills", r.createSkillHandler)
 				skills.With(mw.RequireScope("skills:write")).Put("/skills/{skillID}", r.updateSkillHandler)
 				skills.With(mw.RequireScope("skills:write")).Delete("/skills/{skillID}", r.deleteSkillHandler)
 				skills.With(mw.RequireScope("skills:write")).Post("/skills/{skillID}/rate", r.rateSkillHandler)
-				skills.With(mw.RequireScope("skills:read")).Get("/skills/{skillID}/ratings", r.listSkillRatingsHandler)
+				skills.With(mw.RequireScope("skills:read"), mw.ETagMiddleware(etagReadCfg)).Get("/skills/{skillID}/ratings", r.listSkillRatingsHandler)
 				skills.With(mw.RequireScope("skills:write")).Post("/skills/{skillID}/install", r.installSkillHandler)
 			}
 
@@ -311,14 +326,14 @@ func (r *Router) setupRoutes() {
 			}
 		}
 
-			protected.With(mw.RequireScope("alerts:read")).Get("/alerts", r.listAlertsHandler)
+			protected.With(mw.RequireScope("alerts:read"), mw.ETagMiddleware(etagReadCfg)).Get("/alerts", r.listAlertsHandler)
 			protected.With(mw.RequireScope("alerts:write")).Post("/alerts", r.createAlertHandler)
-			protected.With(mw.RequireScope("alerts:read")).Get("/alerts/{alertID}", r.getAlertHandler)
+			protected.With(mw.RequireScope("alerts:read"), mw.ETagMiddleware(etagReadCfg)).Get("/alerts/{alertID}", r.getAlertHandler)
 			protected.With(mw.RequireScope("alerts:write")).Put("/alerts/{alertID}", r.updateAlertHandler)
 			protected.With(mw.RequireScope("alerts:write")).Delete("/alerts/{alertID}", r.deleteAlertHandler)
 
-			protected.With(mw.RequireScope("billing:read")).Get("/billing/invoices", r.listInvoicesHandler)
-			protected.With(mw.RequireScope("billing:read")).Get("/billing/invoices/{invoiceID}", r.getInvoiceHandler)
+			protected.With(mw.RequireScope("billing:read"), mw.ETagMiddleware(etagReadCfg)).Get("/billing/invoices", r.listInvoicesHandler)
+			protected.With(mw.RequireScope("billing:read"), mw.ETagMiddleware(etagReadCfg)).Get("/billing/invoices/{invoiceID}", r.getInvoiceHandler)
 			if r.idempotency != nil {
 				protected.With(mw.RequireScope("billing:write"), r.idempotency.AsMiddleware()).Post("/billing/checkout", r.createCheckoutHandler)
 			} else {
@@ -331,7 +346,7 @@ func (r *Router) setupRoutes() {
 				protected.With(mw.RequireScope("billing:write")).Post("/billing/portal", r.createBillingPortalHandler)
 			}
 
-			protected.With(mw.RequireScope("api_keys:manage")).Post("/api-keys", r.createAPIKeyHandler)
+			protected.With(mw.RequireScope("api_keys:manage"), r.apiKeyCreateRateLimiter.Middleware()).Post("/api-keys", r.createAPIKeyHandler)
 			protected.With(mw.RequireScope("api_keys:manage")).Get("/api-keys", r.listAPIKeysHandler)
 			protected.With(mw.RequireScope("api_keys:manage")).Post("/api-keys/{keyID}/rotate", r.rotateAPIKeyHandler)
 			protected.With(mw.RequireScope("api_keys:manage")).Delete("/api-keys/{keyID}", r.deleteAPIKeyHandler)
@@ -398,6 +413,9 @@ func (r *Router) setupRoutes() {
 
 			protected.Get("/ws", r.handleWebSocket)
 
+		// General batch endpoint — process multiple API operations
+		protected.Post("/batch", r.batchHandler)
+
 			if r.authSessionMiddleware != nil {
 				protected.Get("/auth/session-check", r.authSessionMiddleware.AuthSessionCheckHandler)
 			}
@@ -411,7 +429,7 @@ func (r *Router) forgotPasswordHandler(w http.ResponseWriter, req *http.Request)
 	// Rate limit this endpoint to prevent email bombing
 	lockoutKey := "forgot-password:" + req.RemoteAddr
 	if r.lockout != nil && r.lockout.IsLocked(req.Context(), lockoutKey) {
-		response.JSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests, please try again later"})
+		response.ErrorR(w, req, http.StatusTooManyRequests, "INFRA_001", "too many requests, please try again later")
 		return
 	}
 
@@ -550,7 +568,7 @@ func (r *Router) readinessHandler(w http.ResponseWriter, req *http.Request) {
 
 	if r.db != nil {
 		if err := r.db.HealthCheck(ctx); err != nil {
-			checks["postgres"] = "unhealthy: " + err.Error()
+			checks["postgres"] = "unhealthy"
 			allHealthy = false
 		} else {
 			// Include pool stats for operational monitoring
@@ -569,7 +587,7 @@ func (r *Router) readinessHandler(w http.ResponseWriter, req *http.Request) {
 
 	if r.rds != nil {
 		if err := r.rds.HealthCheck(ctx); err != nil {
-			checks["redis"] = "unhealthy: " + err.Error()
+			checks["redis"] = "unhealthy"
 			allHealthy = false
 		} else {
 			checks["redis"] = "healthy"
@@ -581,7 +599,7 @@ func (r *Router) readinessHandler(w http.ResponseWriter, req *http.Request) {
 
 	if r.nats != nil {
 		if err := r.nats.HealthCheck(); err != nil {
-			checks["nats"] = "unhealthy: " + err.Error()
+			checks["nats"] = "unhealthy"
 			allHealthy = false
 		} else {
 			checks["nats"] = "healthy"
@@ -804,6 +822,9 @@ func (r *Router) loginHandler(w http.ResponseWriter, req *http.Request) {
 
 	if !auth.CheckPassword(input.Password, user.PasswordHash) {
 		r.lockout.RecordFailure(req.Context(), input.Email)
+		if r.loginRateLimiter != nil {
+			r.loginRateLimiter.RecordFailure(req.Context(), extractLoginIP(req), input.Email)
+		}
 		apiErr := apperrors.New(apperrors.ErrInvalidCredentials, "invalid credentials")
 		response.JSON(w, apiErr.HTTPStatus(), apiErr)
 		return
@@ -816,6 +837,9 @@ func (r *Router) loginHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	r.lockout.RecordSuccess(req.Context(), input.Email)
+	if r.loginRateLimiter != nil {
+		r.loginRateLimiter.RecordSuccess(req.Context(), extractLoginIP(req), input.Email)
+	}
 
 	if err := r.users.UpdateLastLogin(req.Context(), user.ID); err != nil {
 		slog.Warn("failed to update last login", "error", err, "user_id", user.ID)
@@ -1631,7 +1655,11 @@ func (r *Router) costAnalyticsHandler(w http.ResponseWriter, req *http.Request) 
 		response.JSON(w, http.StatusForbidden, apperrors.New(apperrors.ErrInsufficientPerms, "access denied"))
 		return
 	}
-	from, to := parseTimeRange(req)
+	from, to, err := parseTimeRange(req)
+	if err != nil {
+		response.BadRequest(w, err.Error())
+		return
+	}
 	summary, err := r.events.GetCostByOrg(req.Context(), orgID, from, to)
 	if err != nil {
 		response.JSON(w, http.StatusInternalServerError, apperrors.New(apperrors.ErrDBError, "failed to get cost analytics"))
@@ -1655,7 +1683,11 @@ func (r *Router) tokenAnalyticsHandler(w http.ResponseWriter, req *http.Request)
 		response.JSON(w, http.StatusForbidden, apperrors.New(apperrors.ErrInsufficientPerms, "access denied"))
 		return
 	}
-	from, to := parseTimeRange(req)
+	from, to, err := parseTimeRange(req)
+	if err != nil {
+		response.BadRequest(w, err.Error())
+		return
+	}
 	summary, err := r.events.GetTokensByOrg(req.Context(), orgID, from, to)
 	if err != nil {
 		response.JSON(w, http.StatusInternalServerError, apperrors.New(apperrors.ErrDBError, "failed to get token analytics"))
@@ -1709,14 +1741,26 @@ func (r *Router) dashboardOverviewHandler(w http.ResponseWriter, req *http.Reque
 	}
 	from := time.Now().AddDate(0, 0, -30)
 	to := time.Now()
-	costSummary, _ := r.events.GetCostByOrg(req.Context(), orgID, from, to)
-	tokenSummary, _ := r.events.GetTokensByOrg(req.Context(), orgID, from, to)
-	topAgents, _ := r.events.GetTopAgentsByOrg(req.Context(), orgID, 5)
+	costSummary, costErr := r.events.GetCostByOrg(req.Context(), orgID, from, to)
+	tokenSummary, tokenErr := r.events.GetTokensByOrg(req.Context(), orgID, from, to)
+	topAgents, agentsErr := r.events.GetTopAgentsByOrg(req.Context(), orgID, 5)
+
+	warnings := []string{}
+	if costErr != nil {
+		warnings = append(warnings, "cost data unavailable")
+	}
+	if tokenErr != nil {
+		warnings = append(warnings, "token data unavailable")
+	}
+	if agentsErr != nil {
+		warnings = append(warnings, "top agents data unavailable")
+	}
 	response.JSON(w, http.StatusOK, map[string]interface{}{
 		"sessions":   stats,
 		"cost_30d":   costSummary,
 		"tokens_30d": tokenSummary,
 		"top_agents": topAgents,
+		"warnings":   warnings,
 	})
 }
 
@@ -1766,20 +1810,24 @@ func (r *Router) dashboardTopAgentsHandler(w http.ResponseWriter, req *http.Requ
 	response.JSON(w, http.StatusOK, agents)
 }
 
-func parseTimeRange(req *http.Request) (time.Time, time.Time) {
+func parseTimeRange(req *http.Request) (time.Time, time.Time, error) {
 	to := time.Now()
 	from := to.AddDate(0, 0, -30)
 	if f := req.URL.Query().Get("from"); f != "" {
-		if t, err := time.Parse("2006-01-02", f); err == nil {
-			from = t
+		t, err := time.Parse("2006-01-02", f)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid 'from' date: %w", err)
 		}
+		from = t
 	}
 	if t := req.URL.Query().Get("to"); t != "" {
-		if parsed, err := time.Parse("2006-01-02", t); err == nil {
-			to = parsed
+		parsed, err := time.Parse("2006-01-02", t)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid 'to' date: %w", err)
 		}
+		to = parsed
 	}
-	return from, to
+	return from, to, nil
 }
 
 const maxRequestBodySize = 2 << 20
@@ -1791,6 +1839,15 @@ func limitBodySize(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// extractLoginIP extracts the client IP from RemoteAddr for login rate limiting.
+func extractLoginIP(r *http.Request) string {
+	ip := r.RemoteAddr
+	if idx := strings.LastIndex(ip, ":"); idx > 0 {
+		ip = ip[:idx]
+	}
+	return ip
 }
 
 func (r *Router) authMiddleware(next http.Handler) http.Handler {
@@ -1822,28 +1879,13 @@ func (r *Router) authMiddleware(next http.Handler) http.Handler {
 				response.JSON(w, apiErr.HTTPStatus(), apiErr)
 				return
 			}
-// Check for dev token (only allowed in development mode)
-		if parts[1] == "local-dev" || parts[1] == "va_dev" || strings.HasPrefix(parts[1], "va_dev_") {
-			if r.cfg != nil && r.cfg.Server.Env == "development" {
-				claims = &auth.Claims{
-					UserID:   "dev-user-001",
-					Role:     "admin",
-					IsAPIKey: true,
-				}
-			} else {
-				apiErr := apperrors.New(apperrors.ErrTokenInvalid, "dev tokens are not allowed in production")
+			c, err := r.auth.ValidateToken(parts[1])
+			if err != nil {
+				apiErr := apperrors.New(apperrors.ErrTokenExpired, "invalid or expired token")
 				response.JSON(w, apiErr.HTTPStatus(), apiErr)
 				return
 			}
-		} else {
-				c, err := r.auth.ValidateToken(parts[1])
-				if err != nil {
-					apiErr := apperrors.New(apperrors.ErrTokenExpired, "invalid or expired token")
-					response.JSON(w, apiErr.HTTPStatus(), apiErr)
-					return
-				}
-				claims = c
-			}
+			claims = c
 		}
 
 		ctx := auth.ContextWithClaims(req.Context(), claims)
@@ -1898,7 +1940,7 @@ func (r *Router) eventsRateLimitMiddleware(next http.Handler) http.Handler {
 	if r.rl == nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			slog.Warn("events rate limiting disabled: Redis-backed limiter not configured")
-			response.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "rate limiting not available"})
+			response.ErrorR(w, req, http.StatusServiceUnavailable, "INFRA_002", "rate limiting not available")
 		})
 	}
 	return r.rl.Middleware(func(req *http.Request) string {
@@ -1915,6 +1957,6 @@ func (r *Router) metricsHandler(w http.ResponseWriter, req *http.Request) {
 	if h != nil {
 		h.ServeHTTP(w, req)
 	} else {
-		response.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "metrics not available"})
+		response.ErrorR(w, req, http.StatusServiceUnavailable, "INFRA_002", "metrics not available")
 	}
 }

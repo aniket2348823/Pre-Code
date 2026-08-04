@@ -14,6 +14,7 @@ import (
 	"github.com/vigilagent/vigilagent/pkg/pagination"
 	"github.com/vigilagent/vigilagent/pkg/query"
 	"github.com/vigilagent/vigilagent/pkg/response"
+	"github.com/vigilagent/vigilagent/pkg/validation"
 )
 
 // listSkillsHandler returns a paginated list of skills.
@@ -76,13 +77,13 @@ func (r *Router) createSkillHandler(w http.ResponseWriter, req *http.Request) {
 		Category    string   `json:"category"`
 		Permissions []string `json:"permissions"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
-		response.BadRequest(w, "invalid request body")
+	v, ok := validation.DecodeAndValidate(w, req, &input)
+	if !ok {
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
-	if input.Name == "" {
-		response.BadRequest(w, "name is required")
+	v.Required("name", input.Name)
+	if v.WriteResponse(w, req) {
 		return
 	}
 	if input.Version == "" {

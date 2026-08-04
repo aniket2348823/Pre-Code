@@ -294,3 +294,36 @@ func TestSavepointTx_Begin_NestedNaming(t *testing.T) {
 	}
 	tx.mu.Unlock()
 }
+
+// --- NewConnWithThreshold ---
+
+func TestNewConnWithThreshold(t *testing.T) {
+	c := NewConnWithThreshold(nil, 200*time.Millisecond)
+	if c == nil {
+		t.Fatal("NewConnWithThreshold returned nil")
+	}
+	if c.slowQueryThreshold != 200*time.Millisecond {
+		t.Errorf("threshold = %v, want 200ms", c.slowQueryThreshold)
+	}
+}
+
+func TestNewConnWithThreshold_ZeroFallsBack(t *testing.T) {
+	c := NewConnWithThreshold(nil, 0)
+	if c.slowQueryThreshold != 100*time.Millisecond {
+		t.Errorf("zero threshold should fallback to 100ms, got %v", c.slowQueryThreshold)
+	}
+}
+
+func TestNewConnWithThreshold_NegativeFallsBack(t *testing.T) {
+	c := NewConnWithThreshold(nil, -time.Second)
+	if c.slowQueryThreshold != 100*time.Millisecond {
+		t.Errorf("negative threshold should fallback to 100ms, got %v", c.slowQueryThreshold)
+	}
+}
+
+func TestNewConn_DefaultThreshold(t *testing.T) {
+	c := NewConn(nil)
+	if c.slowQueryThreshold != 100*time.Millisecond {
+		t.Errorf("default threshold = %v, want 100ms", c.slowQueryThreshold)
+	}
+}

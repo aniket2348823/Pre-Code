@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,4 +239,129 @@ func TestPostgres_HealthCheck_NilPool_NoPanic(t *testing.T) {
 		}()
 		p.HealthCheck(context.Background())
 	}()
+}
+
+func TestConfigureSSL_RequireMode_InsecureSkipVerify(t *testing.T) {
+	poolCfg := newTestPoolCfg()
+	cfg := &config.DatabaseConfig{Host: "db.prod.com", SSLMode: "require"}
+	configureSSL(poolCfg, cfg)
+
+	if poolCfg.ConnConfig.TLSConfig == nil {
+		t.Fatal("require mode should set TLS config")
+	}
+	if poolCfg.ConnConfig.TLSConfig.InsecureSkipVerify {
+		t.Error("require mode must set InsecureSkipVerify=false")
+	}
+}
+
+func TestConfigureSSL_PreferMode_InsecureSkipVerify(t *testing.T) {
+	poolCfg := newTestPoolCfg()
+	cfg := &config.DatabaseConfig{Host: "db.prod.com", SSLMode: "prefer"}
+	configureSSL(poolCfg, cfg)
+
+	if poolCfg.ConnConfig.TLSConfig == nil {
+		t.Fatal("prefer mode should set TLS config")
+	}
+	if !poolCfg.ConnConfig.TLSConfig.InsecureSkipVerify {
+		t.Error("prefer mode must set InsecureSkipVerify=true")
+	}
+}
+
+func TestConfigureSSL_VerifyCA_InsecureSkipVerify(t *testing.T) {
+	poolCfg := newTestPoolCfg()
+	cfg := &config.DatabaseConfig{Host: "db.prod.com", SSLMode: "verify-ca"}
+	configureSSL(poolCfg, cfg)
+
+	if poolCfg.ConnConfig.TLSConfig == nil {
+		t.Fatal("verify-ca mode should set TLS config")
+	}
+	if !poolCfg.ConnConfig.TLSConfig.InsecureSkipVerify {
+		t.Error("verify-ca mode must set InsecureSkipVerify=true")
+	}
+}
+
+// --- PoolHealthCheck ---
+
+func TestPoolHealthCheck_NilPool(t *testing.T) {
+	p := &Postgres{Pool: nil}
+	_, err := p.PoolHealthCheck(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil pool")
+	}
+}
+
+func TestPoolHealthCheck_NilPoolErrorMsg(t *testing.T) {
+	p := &Postgres{Pool: nil}
+	_, err := p.PoolHealthCheck(context.Background())
+	if err.Error() != "pool is nil" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// --- updatePoolMetrics ---
+
+func TestUpdatePoolMetrics_NilPoolNoPanic(t *testing.T) {
+	p := &Postgres{Pool: nil}
+	p.updatePoolMetrics() // should not panic
+}
+
+// --- collectPoolStats ---
+
+func TestCollectPoolStats_NilPoolNoPanic(t *testing.T) {
+	p := &Postgres{Pool: nil}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p.collectPoolStats(ctx, &config.DatabaseConfig{PoolStatsInterval: time.Millisecond})
+}
+
+func TestCollectPoolStats_DefaultInterval(t *testing.T) {
+	p := &Postgres{Pool: nil}
+	ctx, cancel := context.WithCancel(context.Background())
+	go p.collectPoolStats(ctx, &config.DatabaseConfig{})
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+}
+
+// --- Postgres struct zero value ---
+
+func TestPostgres_ZeroValue_HasCancelFunc(t *testing.T) {
+	p := &Postgres{}
+	if p.cancelStats != nil {
+		t.Error("zero value Postgres should have nil cancelStats")
+	}
+}
+
+func TestPostgres_Close_NilCancelFuncNoPanic(t *testing.T) {
+	p := &Postgres{Pool: nil, cancelStats: nil}
+	p.Close() // should not panic
+}
+
+func TestDatabaseConfig_DSN(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Host:     "db.example.com",
+		Port:     5433,
+		User:     "admin",
+		Password: "s3cret",
+		Name:     "mydb",
+		SSLMode:  "require",
+	}
+
+	dsn := cfg.DSN()
+	expected := "host=db.example.com port=5433 user=admin password=s3cret dbname=mydb sslmode=require"
+	if dsn != expected {
+		t.Errorf("DSN() = %q, want %q", dsn, expected)
+	}
+}
+
+func TestDatabaseConfig_DSN_DefaultPort(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		Host: "localhost",
+		Port: 5432,
+		User: "user",
+		Name: "db",
+	}
+	dsn := cfg.DSN()
+	if !strings.Contains(dsn, "port=5432") {
+		t.Errorf("DSN should contain port=5432, got %q", dsn)
+	}
 }

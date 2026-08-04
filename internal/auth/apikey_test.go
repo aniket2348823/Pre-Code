@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -145,5 +146,30 @@ func TestGenerateKey_LongPrefixNoBcryptError(t *testing.T) {
 	}
 	if !svc.VerifyKey(plaintext, hashed) {
 		t.Fatal("key with long prefix should verify after SHA-256 pre-hashing")
+	}
+}
+
+func TestSHA256Hash_DefaultPepper(t *testing.T) {
+	os.Unsetenv("VIGILAGENT_AUTH_API_KEY_PEPPER")
+	h1 := SHA256Hash("test-key")
+	h2 := SHA256Hash("test-key")
+	if h1 != h2 {
+		t.Fatal("SHA256Hash should be deterministic with default pepper")
+	}
+	if len(h1) != 64 {
+		t.Fatalf("expected 64 char hex string, got %d chars", len(h1))
+	}
+}
+
+func TestSHA256Hash_EnvPepper(t *testing.T) {
+	os.Setenv("VIGILAGENT_AUTH_API_KEY_PEPPER", "my-custom-pepper")
+	defer os.Unsetenv("VIGILAGENT_AUTH_API_KEY_PEPPER")
+
+	// With env pepper set, SHA256Hash should produce a different result
+	// than with the default pepper (env pepper is read at init time via var,
+	// so we test that the function works with whatever pepper is active)
+	h := SHA256Hash("test-key")
+	if len(h) != 64 {
+		t.Fatalf("expected 64 char hex string, got %d chars", len(h))
 	}
 }

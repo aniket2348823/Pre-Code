@@ -161,8 +161,12 @@ func (m *Manager) StoreEpisode(ctx context.Context, userID, episodeType, title, 
 		Title:       title,
 		Content:     content,
 		Importance:  importance,
-		Embedding:   func() pgvector.Vector {
-			v, _ := m.embedder.Embed(ctx, title+"\n"+content)
+		Embedding: func() pgvector.Vector {
+			v, err := m.embedder.Embed(ctx, title+"\n"+content)
+			if err != nil {
+				slog.Warn("failed to embed episode, using zero vector", "error", err)
+				return pgvector.NewVector(make([]float32, m.embedder.Dimensions()))
+			}
 			return pgvector.NewVector(v)
 		}(),
 	}
@@ -178,8 +182,12 @@ func (m *Manager) StorePattern(ctx context.Context, userID, projectID, patternTy
 		Name:        name,
 		Description: description,
 		Confidence:  0.5,
-		Embedding:   func() pgvector.Vector {
-			v, _ := m.embedder.Embed(ctx, name+"\n"+description)
+		Embedding: func() pgvector.Vector {
+			v, err := m.embedder.Embed(ctx, name+"\n"+description)
+			if err != nil {
+				slog.Warn("failed to embed pattern, using zero vector", "error", err)
+				return pgvector.NewVector(make([]float32, m.embedder.Dimensions()))
+			}
 			return pgvector.NewVector(v)
 		}(),
 	}

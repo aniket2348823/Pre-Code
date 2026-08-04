@@ -40,7 +40,7 @@ func (r *Router) scanHandler(w http.ResponseWriter, req *http.Request) {
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) || (err != nil && strings.Contains(err.Error(), "too large")) {
-			response.JSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+			response.ErrorR(w, req, http.StatusRequestEntityTooLarge, "VAL_005", "request body too large")
 			return
 		}
 		response.BadRequest(w, "invalid request body")

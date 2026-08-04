@@ -30,7 +30,11 @@ func (r *Router) costIntelDashboardHandler(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	from, to := parseTimeRange(req)
+	from, to, err := parseTimeRange(req)
+	if err != nil {
+		response.BadRequest(w, err.Error())
+		return
+	}
 
 	costSummary, err := r.events.GetCostByOrg(req.Context(), orgID, from, to)
 	if err != nil {

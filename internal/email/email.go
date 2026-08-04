@@ -10,6 +10,8 @@ import (
 	"html/template"
 	"log/slog"
 	"net/smtp"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -224,15 +226,28 @@ func (vs *VerificationService) SendVerificationEmail(ctx context.Context, userID
 	return vs.sender.Send(ctx, msg)
 }
 
+// sanitizeForText strips HTML tags and control characters from a string
+// to make it safe for plain text contexts (subject lines, text bodies).
+func sanitizeForText(s string) string {
+	// Remove HTML tags
+	tagRe := regexp.MustCompile(`<[^>]*>`)
+	s = tagRe.ReplaceAllString(s, "")
+	// Remove control characters (except newline/tab)
+	controlRe := regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]`)
+	s = controlRe.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
+
 // SendInvitationEmail sends a team invitation email.
 func (vs *VerificationService) SendInvitationEmail(ctx context.Context, emailAddr, orgName, inviteURL string) error {
+	safeOrgName := sanitizeForText(orgName)
 	escapedOrgName := html.EscapeString(orgName)
 	escapedInviteURL := html.EscapeString(inviteURL)
 
 	msg := &Message{
 		To:      []string{emailAddr},
-		Subject: fmt.Sprintf("You're invited to %s on VigilAgent", orgName),
-		Body:    fmt.Sprintf("You've been invited to join %s on VigilAgent. Accept the invitation here: %s", orgName, inviteURL),
+		Subject: fmt.Sprintf("You're invited to %s on VigilAgent", safeOrgName),
+		Body:    fmt.Sprintf("You've been invited to join %s on VigilAgent. Accept the invitation here: %s", safeOrgName, inviteURL),
 		HTMLBody: fmt.Sprintf(`
 			<h2>Team Invitation</h2>
 			<p>You've been invited to join <strong>%s</strong> on VigilAgent.</p>

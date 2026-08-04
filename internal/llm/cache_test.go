@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -70,5 +71,138 @@ func TestInMemoryCache_Expiry(t *testing.T) {
 	fake = fake.Add(2 * time.Minute) // advance past TTL
 	if _, ok := c.Get("k"); ok {
 		t.Fatal("expected miss after TTL expiry")
+	}
+}
+
+func TestInMemoryCache_Concurrent(t *testing.T) {
+	c := NewInMemoryCache(time.Minute)
+	var wg sync.WaitGroup
+
+	// Concurrent writes
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := "key"
+			c.Set(key, &ChatResponse{Content: "val"})
+		}(i)
+	}
+
+	// Concurrent reads
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Get("key")
+			c.Stats()
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestInMemoryCache_NilResponse(t *testing.T) {
+	c := NewInMemoryCache(time.Minute)
+	c.Set("k", nil)
+	if _, ok := c.Get("k"); ok {
+		t.Fatal("nil response should not be stored")
+	}
+}
+
+func TestInMemoryCache_CacheHitZeroLatency(t *testing.T) {
+	c := NewInMemoryCache(time.Minute)
+	c.Set("k", &ChatResponse{Content: "x", Cost: 0.10, Latency: 5 * time.Second})
+	got, ok := c.Get("k")
+	if !ok {
+		t.Fatal("expected hit")
+	}
+	if got.Cost != 0 {
+		t.Errorf("expected zero cost on cache hit, got %v", got.Cost)
+	}
+	if got.Latency != 0 {
+		t.Errorf("expected zero latency on cache hit, got %v", got.Latency)
+	}
+}
+
+func TestInMemoryCache_MultipleKeys(t *testing.T) {
+	c := NewInMemoryCache(time.Minute)
+	c.Set("a", &ChatResponse{Content: "alpha"})
+	c.Set("b", &ChatResponse{Content: "beta"})
+
+	got, ok := c.Get("a")
+	if !ok || got.Content != "alpha" {
+		t.Errorf("key a: got %v, want alpha", got)
+	}
+	got, ok = c.Get("b")
+	if !ok || got.Content != "beta" {
+		t.Errorf("key b: got %v, want beta", got)
+	}
+}
+
+func TestInMemoryCache_ConcurrentReadWrite(t *testing.T) {
+	c := NewInMemoryCache(time.Minute)
+	var wg sync.WaitGroup
+	const n = 100
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c.Set("key", &ChatResponse{Content: "val"})
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Get("key")
+			c.Stats()
+		}()
+	}
+	wg.Wait()
+
+	// Verify cache still works after concurrent access
+	c.Set("after", &ChatResponse{Content: "ok"})
+	if _, ok := c.Get("after"); !ok {
+		t.Error("cache broken after concurrent access")
+	}
+}
+
+func TestInMemoryCache_ExpiredEntryEvicted(t *testing.T) {
+	c := NewInMemoryCache(time.Minute)
+	fake := time.Unix(1_700_000_000, 0)
+	c.now = func() time.Time { return fake }
+
+	c.Set("k", &ChatResponse{Content: "x"})
+	if _, ok := c.Get("k"); !ok {
+		t.Fatal("expected hit")
+	}
+
+	// Advance past TTL
+	fake = fake.Add(2 * time.Minute)
+	if _, ok := c.Get("k"); ok {
+		t.Fatal("expected miss after expiry")
+	}
+
+	// Verify entry was evicted from map
+	c.mu.RLock()
+	_, exists := c.entries["k"]
+	c.mu.RUnlock()
+	if exists {
+		t.Error("expired entry should be evicted from map")
+	}
+}
+
+func TestInMemoryCache_NilResponseNotStored(t *testing.T) {
+	c := NewInMemoryCache(time.Minute)
+	c.Set("k", nil)
+	if _, ok := c.Get("k"); ok {
+		t.Fatal("nil response should not be stored")
+	}
+
+	// Also verify stats: should be a miss, not a hit
+	st := c.Stats()
+	if st.Misses == 0 {
+		t.Error("expected at least one miss")
 	}
 }

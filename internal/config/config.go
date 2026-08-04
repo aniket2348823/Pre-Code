@@ -10,17 +10,47 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Redis    RedisConfig
-	NATS     NATSConfig
-	Auth     AuthConfig
-	LLM      LLMConfig
-	Stripe   StripeConfig
-	CORS     CORSConfig
-	Log      LogConfig
-	SMTP     SMTPConfig
-	SendGrid SendGridConfig
+	Server          ServerConfig
+	Database        DatabaseConfig
+	Redis           RedisConfig
+	NATS            NATSConfig
+	Auth            AuthConfig
+	LLM             LLMConfig
+	Stripe          StripeConfig
+	CORS            CORSConfig
+	Log             LogConfig
+	SMTP            SMTPConfig
+	SendGrid        SendGridConfig
+	BodySize        BodySizeConfig
+	SecurityHeaders SecurityHeadersConfig
+	Secrets         SecretsConfig
+	Audit           AuditConfig
+	IPAnomaly       IPAnomalyConfig
+}
+
+// AuditConfig configures audit log retention and cleanup.
+type AuditConfig struct {
+	RetentionDays    int // Delete audit events older than this many days
+	MaxStorageMB     int // Maximum audit log storage in MB before alerting
+	CleanupInterval  time.Duration
+	CompressAfterDays int // Compress events older than this many days
+	AlertThresholdMB int // Alert when storage exceeds this threshold
+}
+
+// IPAnomalyConfig configures IP-based anomaly detection.
+type IPAnomalyConfig struct {
+	Enabled              bool
+	BruteForceThreshold  int           // requests per minute to trigger brute force detection
+	PortScanThreshold    int           // unique 404 endpoints to trigger port scan detection
+	CredentialStufThresh int           // login attempts with different emails to trigger detection
+	ScoreThreshold       int           // anomaly score threshold (0-100) for action
+	BlockDuration        time.Duration // how long to block a flagged IP
+	TrackingWindow       time.Duration // sliding window for request tracking
+}
+
+// BodySizeConfig configures request body size limits.
+type BodySizeConfig struct {
+	MaxBodySize int64 // Maximum request body size in bytes (default 10MB)
 }
 
 type ServerConfig struct {
@@ -36,16 +66,23 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Host          string
-	Port          int
-	User          string
-	Password      string
-	Name          string
-	SSLMode       string
-	MaxOpenConns  int
-	MaxIdleConns  int
-	MaxLifetime   time.Duration
-	ConnIdleTime  time.Duration // MaxConnIdleTime — how long idle connections stay open (default 5min)
+	Host                string
+	Port                int
+	User                string
+	Password            string
+	Name                string
+	SSLMode             string
+	MaxOpenConns        int
+	MaxIdleConns        int
+	MaxLifetime         time.Duration
+	ConnIdleTime        time.Duration // MaxConnIdleTime — how long idle connections stay open (default 5min)
+	PoolMaxOpen         int           // explicit pool max open (default 25, overrides MaxOpenConns if > 0)
+	PoolMaxIdle         int           // explicit pool max idle (default 5)
+	PoolMaxLifetime     time.Duration // explicit pool max connection lifetime (default 5m)
+	PoolMaxIdleTime     time.Duration // explicit pool max idle time (default 3m)
+	SlowQueryThreshold  time.Duration // log queries slower than this (default 100ms)
+	RetryMaxAttempts    int           // max retry attempts for transient errors (default 3)
+	PoolStatsInterval   time.Duration // interval for periodic pool stats logging (default 30s)
 }
 
 type RedisConfig struct {
@@ -61,9 +98,12 @@ type NATSConfig struct {
 }
 
 type AuthConfig struct {
-	JWTSecret     string
-	JWTExpiration time.Duration
-	APIKeyPrefix  string
+	JWTSecret         string
+	JWTExpiration     time.Duration
+	JWTAudience       string
+	JWTBindToIP       bool
+	JWTBindToUserAgent bool
+	APIKeyPrefix      string
 }
 
 // LLMConfig holds LLM provider API keys and routing config.
@@ -91,11 +131,12 @@ type StripeConfig struct {
 
 // CORSConfig holds CORS middleware configuration.
 type CORSConfig struct {
-	AllowedOrigins  []string
-	AllowedMethods  []string
-	AllowedHeaders  []string
-	AllowCredentials bool
-	MaxAge          int
+	AllowedOrigins       []string
+	AllowedMethods       []string
+	AllowedHeaders       []string
+	AllowCredentials     bool
+	MaxAge               int
+	AllowInsecureOrigins bool // only for dev mode, default false
 }
 
 type LogConfig struct {
@@ -118,6 +159,34 @@ type SendGridConfig struct {
 	APIKey    string
 	FromEmail string
 	FromName  string
+}
+
+// SecretsConfig holds secrets management configuration.
+type SecretsConfig struct {
+	Backend                  string // vault, env, file
+	Path                     string // secrets path/prefix
+	RotationDays             int    // default rotation interval (days)
+	CredentialLeakDetection  bool   // enable outbound credential scanning
+	VaultAddress             string // HashiCorp Vault address
+	VaultToken               string // Vault auth token
+	VaultMountPath           string // Vault KV mount path
+}
+
+// SecurityHeadersConfig holds security header middleware configuration.
+type SecurityHeadersConfig struct {
+	Enabled                bool
+	HSTSMaxAge             int
+	HSTSIncludeSubDomains  bool
+	HSTSPreload            bool
+	CSP                    string
+	XContentTypeOptions    bool
+	XFrameOptions          string
+	ReferrerPolicy         string
+	PermissionsPolicy      string
+	XSSProtection          string
+	CacheControlAPI        string
+	CacheControlStatic     string
+	CustomHeaders          map[string]string
 }
 
 func Load() (*Config, error) {
@@ -155,6 +224,13 @@ func Load() (*Config, error) {
 	viper.SetDefault("database.max_idle_conns", 10)
 	viper.SetDefault("database.max_lifetime", 5*time.Minute)
 	viper.SetDefault("database.conn_idle_time", 5*time.Minute)
+	viper.SetDefault("database.pool_max_open", 25)
+	viper.SetDefault("database.pool_max_idle", 5)
+	viper.SetDefault("database.pool_max_lifetime", 5*time.Minute)
+	viper.SetDefault("database.pool_max_idle_time", 3*time.Minute)
+	viper.SetDefault("database.slow_query_threshold", 100*time.Millisecond)
+	viper.SetDefault("database.retry_max_attempts", 3)
+	viper.SetDefault("database.pool_stats_interval", 30*time.Second)
 
 	viper.SetDefault("redis.host", "localhost")
 	viper.SetDefault("redis.port", 6379)
@@ -164,8 +240,11 @@ func Load() (*Config, error) {
 	viper.SetDefault("nats.url", "nats://localhost:4222")
 	viper.SetDefault("nats.stream", "vigilagent")
 
-	viper.SetDefault("auth.jwt_secret", "change-me-in-production")
+	viper.SetDefault("auth.jwt_secret", "")
 	viper.SetDefault("auth.jwt_expiration", 24*time.Hour)
+	viper.SetDefault("auth.jwt_audience", "vigilagent-api")
+	viper.SetDefault("auth.jwt_bind_to_ip", false)
+	viper.SetDefault("auth.jwt_bind_to_user_agent", false)
 	viper.SetDefault("auth.api_key_prefix", "va_")
 
 	// LLM defaults
@@ -175,6 +254,47 @@ func Load() (*Config, error) {
 
 	// SMTP defaults
 	viper.SetDefault("smtp.port", 587)
+
+	// Security headers defaults
+	viper.SetDefault("security_headers.enabled", true)
+	viper.SetDefault("security_headers.hsts_max_age", 63072000)
+	viper.SetDefault("security_headers.hsts_include_sub_domains", true)
+	viper.SetDefault("security_headers.hsts_preload", true)
+	viper.SetDefault("security_headers.csp", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+	viper.SetDefault("security_headers.x_content_type_options", true)
+	viper.SetDefault("security_headers.x_frame_options", "DENY")
+	viper.SetDefault("security_headers.referrer_policy", "strict-origin-when-cross-origin")
+	viper.SetDefault("security_headers.permissions_policy", "camera=(), microphone=(), geolocation=(), payment=()")
+	viper.SetDefault("security_headers.xss_protection", "1; mode=block")
+	viper.SetDefault("security_headers.cache_control_api", "no-store, no-cache, must-revalidate")
+	viper.SetDefault("security_headers.cache_control_static", "public, max-age=31536000")
+
+	// Audit log defaults
+	viper.SetDefault("audit.retention_days", 90)
+	viper.SetDefault("audit.max_storage_mb", 1024)
+	viper.SetDefault("audit.cleanup_interval", 1*time.Hour)
+	viper.SetDefault("audit.compress_after_days", 30)
+	viper.SetDefault("audit.alert_threshold_mb", 800)
+
+	// IP anomaly detection defaults
+	viper.SetDefault("ip_anomaly.enabled", true)
+	viper.SetDefault("ip_anomaly.brute_force_threshold", 100)
+	viper.SetDefault("ip_anomaly.port_scan_threshold", 50)
+	viper.SetDefault("ip_anomaly.credential_stuf_thresh", 20)
+	viper.SetDefault("ip_anomaly.score_threshold", 70)
+	viper.SetDefault("ip_anomaly.block_duration", 30*time.Minute)
+	viper.SetDefault("ip_anomaly.tracking_window", 5*time.Minute)
+
+	viper.SetDefault("body_size.max_body_size", 10<<20) // 10 MB
+
+	// Secrets defaults
+	viper.SetDefault("secrets.backend", "env")
+	viper.SetDefault("secrets.path", "")
+	viper.SetDefault("secrets.rotation_days", 90)
+	viper.SetDefault("secrets.credential_leak_detection", false)
+	viper.SetDefault("secrets.vault_address", "")
+	viper.SetDefault("secrets.vault_token", "")
+	viper.SetDefault("secrets.vault_mount_path", "secret")
 
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("log.format", "json")
@@ -204,16 +324,23 @@ func Load() (*Config, error) {
 			IdleTimeout:       viper.GetDuration("server.idle_timeout"),
 		},
 		Database: DatabaseConfig{
-			Host:         viper.GetString("database.host"),
-			Port:         viper.GetInt("database.port"),
-			User:         viper.GetString("database.user"),
-			Password:     viper.GetString("database.password"),
-			Name:         viper.GetString("database.name"),
-			SSLMode:      viper.GetString("database.sslmode"),
-			MaxOpenConns:  viper.GetInt("database.max_open_conns"),
-			MaxIdleConns:  viper.GetInt("database.max_idle_conns"),
-			MaxLifetime:   viper.GetDuration("database.max_lifetime"),
-			ConnIdleTime:  viper.GetDuration("database.conn_idle_time"),
+			Host:               viper.GetString("database.host"),
+			Port:               viper.GetInt("database.port"),
+			User:               viper.GetString("database.user"),
+			Password:           viper.GetString("database.password"),
+			Name:               viper.GetString("database.name"),
+			SSLMode:            viper.GetString("database.sslmode"),
+			MaxOpenConns:       viper.GetInt("database.max_open_conns"),
+			MaxIdleConns:       viper.GetInt("database.max_idle_conns"),
+			MaxLifetime:        viper.GetDuration("database.max_lifetime"),
+			ConnIdleTime:       viper.GetDuration("database.conn_idle_time"),
+			PoolMaxOpen:        viper.GetInt("database.pool_max_open"),
+			PoolMaxIdle:        viper.GetInt("database.pool_max_idle"),
+			PoolMaxLifetime:    viper.GetDuration("database.pool_max_lifetime"),
+			PoolMaxIdleTime:    viper.GetDuration("database.pool_max_idle_time"),
+			SlowQueryThreshold: viper.GetDuration("database.slow_query_threshold"),
+			RetryMaxAttempts:   viper.GetInt("database.retry_max_attempts"),
+			PoolStatsInterval:  viper.GetDuration("database.pool_stats_interval"),
 		},
 		Redis: RedisConfig{
 			Host:     viper.GetString("redis.host"),
@@ -226,9 +353,12 @@ func Load() (*Config, error) {
 			Stream: viper.GetString("nats.stream"),
 		},
 		Auth: AuthConfig{
-			JWTSecret:     viper.GetString("auth.jwt_secret"),
-			JWTExpiration: viper.GetDuration("auth.jwt_expiration"),
-			APIKeyPrefix:  viper.GetString("auth.api_key_prefix"),
+			JWTSecret:          viper.GetString("auth.jwt_secret"),
+			JWTExpiration:      viper.GetDuration("auth.jwt_expiration"),
+			JWTAudience:        viper.GetString("auth.jwt_audience"),
+			JWTBindToIP:        viper.GetBool("auth.jwt_bind_to_ip"),
+			JWTBindToUserAgent: viper.GetBool("auth.jwt_bind_to_user_agent"),
+			APIKeyPrefix:       viper.GetString("auth.api_key_prefix"),
 		},
 		LLM: LLMConfig{
 			OpenAIKey:     viper.GetString("llm.openai_key"),
@@ -272,6 +402,49 @@ func Load() (*Config, error) {
 		Log: LogConfig{
 			Level:  viper.GetString("log.level"),
 			Format: viper.GetString("log.format"),
+		},
+		SecurityHeaders: SecurityHeadersConfig{
+			Enabled:               viper.GetBool("security_headers.enabled"),
+			HSTSMaxAge:            viper.GetInt("security_headers.hsts_max_age"),
+			HSTSIncludeSubDomains: viper.GetBool("security_headers.hsts_include_sub_domains"),
+			HSTSPreload:           viper.GetBool("security_headers.hsts_preload"),
+			CSP:                   viper.GetString("security_headers.csp"),
+			XContentTypeOptions:   viper.GetBool("security_headers.x_content_type_options"),
+			XFrameOptions:         viper.GetString("security_headers.x_frame_options"),
+			ReferrerPolicy:        viper.GetString("security_headers.referrer_policy"),
+			PermissionsPolicy:     viper.GetString("security_headers.permissions_policy"),
+			XSSProtection:         viper.GetString("security_headers.xss_protection"),
+			CacheControlAPI:       viper.GetString("security_headers.cache_control_api"),
+			CacheControlStatic:    viper.GetString("security_headers.cache_control_static"),
+			CustomHeaders:         viper.GetStringMapString("security_headers.custom_headers"),
+		},
+		BodySize: BodySizeConfig{
+			MaxBodySize: viper.GetInt64("body_size.max_body_size"),
+		},
+		Audit: AuditConfig{
+			RetentionDays:     viper.GetInt("audit.retention_days"),
+			MaxStorageMB:      viper.GetInt("audit.max_storage_mb"),
+			CleanupInterval:   viper.GetDuration("audit.cleanup_interval"),
+			CompressAfterDays: viper.GetInt("audit.compress_after_days"),
+			AlertThresholdMB:  viper.GetInt("audit.alert_threshold_mb"),
+		},
+		IPAnomaly: IPAnomalyConfig{
+			Enabled:              viper.GetBool("ip_anomaly.enabled"),
+			BruteForceThreshold:  viper.GetInt("ip_anomaly.brute_force_threshold"),
+			PortScanThreshold:    viper.GetInt("ip_anomaly.port_scan_threshold"),
+			CredentialStufThresh: viper.GetInt("ip_anomaly.credential_stuf_thresh"),
+			ScoreThreshold:       viper.GetInt("ip_anomaly.score_threshold"),
+			BlockDuration:        viper.GetDuration("ip_anomaly.block_duration"),
+			TrackingWindow:       viper.GetDuration("ip_anomaly.tracking_window"),
+		},
+		Secrets: SecretsConfig{
+			Backend:                 viper.GetString("secrets.backend"),
+			Path:                    viper.GetString("secrets.path"),
+			RotationDays:            viper.GetInt("secrets.rotation_days"),
+			CredentialLeakDetection: viper.GetBool("secrets.credential_leak_detection"),
+			VaultAddress:            viper.GetString("secrets.vault_address"),
+			VaultToken:              viper.GetString("secrets.vault_token"),
+			VaultMountPath:          viper.GetString("secrets.vault_mount_path"),
 		},
 	}
 
@@ -326,6 +499,12 @@ func (c *Config) Validate() error {
 	if c.Database.MaxOpenConns < 1 {
 		return fmt.Errorf("database.max_open_conns must be at least 1")
 	}
+	if c.Database.RetryMaxAttempts < 0 {
+		return fmt.Errorf("database.retry_max_attempts must be non-negative")
+	}
+	if c.Database.SlowQueryThreshold < 0 {
+		return fmt.Errorf("database.slow_query_threshold must be non-negative")
+	}
 
 	// Redis
 	if c.Redis.Host == "" {
@@ -347,14 +526,27 @@ func (c *Config) Validate() error {
 	if c.Auth.JWTSecret == "" {
 		return fmt.Errorf("auth.jwt_secret is required")
 	}
-	if c.Auth.JWTSecret == "change-me-in-production" && c.Server.Env == "production" {
-		return fmt.Errorf("auth.jwt_secret must be changed in production")
+	if c.Auth.JWTSecret == "change-me-in-production" {
+		return fmt.Errorf("auth.jwt_secret must be changed from default value")
 	}
-	if len(c.Auth.JWTSecret) < 32 && c.Server.Env == "production" {
-		return fmt.Errorf("auth.jwt_secret should be at least 32 characters in production")
+	if c.Auth.JWTSecret == "secret" || c.Auth.JWTSecret == "default" {
+		return fmt.Errorf("auth.jwt_secret must not be a common weak secret")
+	}
+	if len(c.Auth.JWTSecret) < 32 {
+		return fmt.Errorf("auth.jwt_secret must be at least 32 characters")
 	}
 	if c.Auth.JWTExpiration <= 0 {
 		return fmt.Errorf("auth.jwt_expiration must be positive")
+	}
+
+	// Production DB safety
+	if c.Server.Env == "production" {
+		if c.Database.Password == "vigilagent" {
+			return fmt.Errorf("database.password must be changed from default in production")
+		}
+		if c.Database.SSLMode == "disable" {
+			return fmt.Errorf("database.sslmode must not be 'disable' in production")
+		}
 	}
 
 	// LLM
@@ -375,6 +567,15 @@ func (c *Config) Validate() error {
 	for _, o := range c.CORS.AllowedOrigins {
 		if o == "*" {
 			continue // wildcard handled by production check below
+		}
+		// Accept subdomain patterns like *.example.com
+		if strings.HasPrefix(o, "*.") {
+			// validate the suffix part is a valid domain
+			suffix := o[1:] // ".example.com"
+			if !strings.Contains(suffix, ".") {
+				return fmt.Errorf("cors.allowed_origins: %q is not a valid subdomain pattern", o)
+			}
+			continue
 		}
 		lower := strings.ToLower(o)
 		if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
@@ -406,6 +607,25 @@ func (c *Config) Validate() error {
 		if !validLevels[c.Log.Level] {
 			return fmt.Errorf("log.level must be one of: debug, info, warn, error")
 		}
+	}
+
+	// Audit
+	if c.Audit.RetentionDays <= 0 {
+		return fmt.Errorf("audit.retention_days must be positive")
+	}
+	if c.Audit.CompressAfterDays <= 0 {
+		return fmt.Errorf("audit.compress_after_days must be positive")
+	}
+	if c.Audit.CompressAfterDays >= c.Audit.RetentionDays {
+		return fmt.Errorf("audit.compress_after_days must be less than retention_days")
+	}
+
+	// IP Anomaly
+	if c.IPAnomaly.BruteForceThreshold <= 0 {
+		return fmt.Errorf("ip_anomaly.brute_force_threshold must be positive")
+	}
+	if c.IPAnomaly.ScoreThreshold < 0 || c.IPAnomaly.ScoreThreshold > 100 {
+		return fmt.Errorf("ip_anomaly.score_threshold must be between 0 and 100")
 	}
 
 	return nil

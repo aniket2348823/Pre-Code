@@ -47,6 +47,28 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Auth.JWTExpiration != 24*time.Hour {
 		t.Errorf("expected default JWT expiration 24h, got %v", cfg.Auth.JWTExpiration)
 	}
+	// New pool/retry defaults
+	if cfg.Database.PoolMaxOpen != 25 {
+		t.Errorf("expected default pool_max_open 25, got %d", cfg.Database.PoolMaxOpen)
+	}
+	if cfg.Database.PoolMaxIdle != 5 {
+		t.Errorf("expected default pool_max_idle 5, got %d", cfg.Database.PoolMaxIdle)
+	}
+	if cfg.Database.PoolMaxLifetime != 5*time.Minute {
+		t.Errorf("expected default pool_max_lifetime 5m, got %v", cfg.Database.PoolMaxLifetime)
+	}
+	if cfg.Database.PoolMaxIdleTime != 3*time.Minute {
+		t.Errorf("expected default pool_max_idle_time 3m, got %v", cfg.Database.PoolMaxIdleTime)
+	}
+	if cfg.Database.SlowQueryThreshold != 100*time.Millisecond {
+		t.Errorf("expected default slow_query_threshold 100ms, got %v", cfg.Database.SlowQueryThreshold)
+	}
+	if cfg.Database.RetryMaxAttempts != 3 {
+		t.Errorf("expected default retry_max_attempts 3, got %d", cfg.Database.RetryMaxAttempts)
+	}
+	if cfg.Database.PoolStatsInterval != 30*time.Second {
+		t.Errorf("expected default pool_stats_interval 30s, got %v", cfg.Database.PoolStatsInterval)
+	}
 }
 
 func TestDatabaseConfig_DSN(t *testing.T) {
@@ -93,13 +115,13 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigilagent", Name: "vigilagent", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
-				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
-			},
-			wantErr: false,
+		Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
+			LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 		},
-		{
-			name: "missing database host",
+		wantErr: false,
+	},
+	{
+		name: "missing database host",
 			cfg: Config{
 				Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
 				Database: DatabaseConfig{User: "vigilagent", Name: "vigilagent", MaxOpenConns: 10},
@@ -148,7 +170,59 @@ func TestConfigValidate(t *testing.T) {
 				LLM:      LLMConfig{DefaultModel: "gpt-4o", OpenAIKey: "sk-test"},
 			},
 			wantErr: true,
-			errMsg:  "auth.jwt_secret must be changed in production",
+			errMsg:  "auth.jwt_secret must be changed from default value",
+		},
+		{
+			name: "default jwt secret rejected in development",
+			cfg: Config{
+				Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
+				Redis:    RedisConfig{Host: "localhost", Port: 6379},
+				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
+				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
+			},
+			wantErr: true,
+			errMsg:  "auth.jwt_secret must be changed from default value",
+		},
+		{
+			name: "secret jwt rejected in development",
+			cfg: Config{
+				Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
+				Redis:    RedisConfig{Host: "localhost", Port: 6379},
+				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
+				Auth:     AuthConfig{JWTSecret: "secret", JWTExpiration: 24 * time.Hour},
+				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
+			},
+			wantErr: true,
+			errMsg:  "auth.jwt_secret must not be a common weak secret",
+		},
+		{
+			name: "default jwt rejected in development",
+			cfg: Config{
+				Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
+				Redis:    RedisConfig{Host: "localhost", Port: 6379},
+				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
+				Auth:     AuthConfig{JWTSecret: "default", JWTExpiration: 24 * time.Hour},
+				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
+			},
+			wantErr: true,
+			errMsg:  "auth.jwt_secret must not be a common weak secret",
+		},
+		{
+			name: "short jwt secret rejected in development",
+			cfg: Config{
+				Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
+				Redis:    RedisConfig{Host: "localhost", Port: 6379},
+				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
+				Auth:     AuthConfig{JWTSecret: "short", JWTExpiration: 24 * time.Hour},
+				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
+			},
+			wantErr: true,
+			errMsg:  "auth.jwt_secret must be at least 32 characters",
 		},
 		{
 			name: "production with real jwt secret",
@@ -170,7 +244,7 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 				CORS:     CORSConfig{AllowedOrigins: []string{"localhost:3000"}},
 			},
@@ -184,7 +258,7 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 				CORS:     CORSConfig{AllowedOrigins: []string{"example.com"}},
 			},
@@ -198,7 +272,7 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 				CORS:     CORSConfig{AllowedOrigins: []string{"https://app.example.com"}},
 			},
@@ -211,7 +285,7 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 				CORS:     CORSConfig{AllowedOrigins: []string{"http://localhost:3000"}},
 			},
@@ -224,7 +298,7 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 				CORS:     CORSConfig{AllowedOrigins: []string{"*"}},
 			},
@@ -265,7 +339,7 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 				CORS:     CORSConfig{AllowedOrigins: []string{"https://app.com", "bad-origin"}},
 			},
@@ -279,7 +353,7 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 				CORS:     CORSConfig{AllowedOrigins: []string{"https://example.com/dashboard"}},
 			},
@@ -293,7 +367,7 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigil", Name: "vigil", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-				Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
 				CORS:     CORSConfig{AllowedOrigins: []string{"HTTP://EXAMPLE.COM"}},
 			},
@@ -322,7 +396,7 @@ func TestValidate_PortRange(t *testing.T) {
 			Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
 			Redis:    RedisConfig{Host: "localhost", Port: 6379},
 			NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
-			Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+			Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 			LLM:      LLMConfig{DefaultModel: "m"},
 		}
 	}
@@ -377,7 +451,7 @@ func TestValidate_Timeouts(t *testing.T) {
 			Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
 			Redis:    RedisConfig{Host: "localhost", Port: 6379},
 			NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
-			Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+			Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 			LLM:      LLMConfig{DefaultModel: "m"},
 		}
 	}
@@ -402,7 +476,7 @@ func TestValidate_MissingNATS(t *testing.T) {
 			Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
 			Redis:    RedisConfig{Host: "localhost", Port: 6379},
 			NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
-			Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+			Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 			LLM:      LLMConfig{DefaultModel: "m"},
 		}
 	}
@@ -427,7 +501,7 @@ func TestValidate_Auth(t *testing.T) {
 			Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
 			Redis:    RedisConfig{Host: "localhost", Port: 6379},
 			NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
-			Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+			Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 			LLM:      LLMConfig{DefaultModel: "m"},
 		}
 	}
@@ -447,7 +521,7 @@ func TestValidate_Auth(t *testing.T) {
 	cfg = base()
 	cfg.Server.Env = "production"
 	cfg.Auth.JWTSecret = "short"
-	if err := cfg.Validate(); err == nil || err.Error() != "auth.jwt_secret should be at least 32 characters in production" {
+	if err := cfg.Validate(); err == nil || err.Error() != "auth.jwt_secret must be at least 32 characters" {
 		t.Errorf("short jwt secret in prod: %v", err)
 	}
 }
@@ -459,7 +533,7 @@ func TestValidate_LLM(t *testing.T) {
 			Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
 			Redis:    RedisConfig{Host: "localhost", Port: 6379},
 			NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
-			Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+			Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 			LLM:      LLMConfig{DefaultModel: "m"},
 		}
 	}
@@ -497,7 +571,7 @@ func TestValidate_LogLevel(t *testing.T) {
 			Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
 			Redis:    RedisConfig{Host: "localhost", Port: 6379},
 			NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
-			Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+			Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 			LLM:      LLMConfig{DefaultModel: "m"},
 		}
 	}
@@ -529,7 +603,7 @@ func TestValidate_MaxOpenConns(t *testing.T) {
 		Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 0},
 		Redis:    RedisConfig{Host: "localhost", Port: 6379},
 		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
-		Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+		Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 		LLM:      LLMConfig{DefaultModel: "m"},
 	}
 	if err := cfg.Validate(); err == nil || err.Error() != "database.max_open_conns must be at least 1" {
@@ -714,7 +788,7 @@ func TestValidateProduction_EmptyJWT(t *testing.T) {
 }
 
 func TestValidateProduction_DefaultJWT(t *testing.T) {
-	cfg := &Config{Server: ServerConfig{Env: "production"}, Auth: AuthConfig{JWTSecret: "change-me-in-production"}}
+	cfg := &Config{Server: ServerConfig{Env: "production"}, Auth: AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!"}}
 	err := ValidateProduction(cfg)
 	if err == nil {
 		t.Fatal("expected error for default JWT secret in production")
@@ -902,5 +976,150 @@ func TestValidateProductionEnv_Valid(t *testing.T) {
 	}()
 	if err := ValidateProductionEnv(); err != nil {
 		t.Errorf("valid production env: %v", err)
+	}
+}
+
+func TestValidate_DefaultJWTSecretRejectedAllEnvironments(t *testing.T) {
+	base := func(env string) Config {
+		return Config{
+			Server:   ServerConfig{Env: env, Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+			Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
+			Redis:    RedisConfig{Host: "localhost", Port: 6379},
+			NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+			Auth:     AuthConfig{JWTSecret: "change-me-in-production", JWTExpiration: 24 * time.Hour},
+			LLM:      LLMConfig{DefaultModel: "m"},
+		}
+	}
+
+	for _, env := range []string{"development", "staging", "production", "test"} {
+		cfg := base(env)
+		err := cfg.Validate()
+		if err == nil || err.Error() != "auth.jwt_secret must be changed from default value" {
+			t.Errorf("env=%s: expected default JWT rejection, got %v", env, err)
+		}
+	}
+}
+
+func TestValidate_DefaultDBPasswordRejectedInProduction(t *testing.T) {
+	cfg := Config{
+		Server:   ServerConfig{Env: "production", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+		Database: DatabaseConfig{Host: "db.prod.com", Port: 5432, User: "u", Password: "vigilagent", Name: "n", MaxOpenConns: 10, SSLMode: "require"},
+		Redis:    RedisConfig{Host: "redis.prod.com", Port: 6379},
+		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+		Auth:     AuthConfig{JWTSecret: "super-secret-long-key-for-prod-1234", JWTExpiration: 24 * time.Hour},
+		LLM:      LLMConfig{DefaultModel: "m", OpenAIKey: "sk-test"},
+		CORS:     CORSConfig{AllowedOrigins: []string{"https://app.example.com"}},
+	}
+	err := cfg.Validate()
+	if err == nil || err.Error() != "database.password must be changed from default in production" {
+		t.Errorf("expected default DB password rejection, got %v", err)
+	}
+}
+
+func TestValidate_CORS_AllowInsecureOriginsDefaultFalse(t *testing.T) {
+	cfg := Config{
+		Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+		Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
+		Redis:    RedisConfig{Host: "localhost", Port: 6379},
+		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+		Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
+		LLM:      LLMConfig{DefaultModel: "m"},
+		CORS:     CORSConfig{AllowedOrigins: []string{"*"}},
+	}
+	if cfg.CORS.AllowInsecureOrigins {
+		t.Error("AllowInsecureOrigins should default to false")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("wildcard allowed in dev: %v", err)
+	}
+}
+
+func TestValidate_CORS_SubdomainPatternAccepted(t *testing.T) {
+	cfg := Config{
+		Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+		Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10},
+		Redis:    RedisConfig{Host: "localhost", Port: 6379},
+		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+		Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
+		LLM:      LLMConfig{DefaultModel: "m"},
+		CORS:     CORSConfig{AllowedOrigins: []string{"*.example.com"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("subdomain pattern should be valid: %v", err)
+	}
+}
+
+func TestValidate_CORS_SubdomainPatternInProduction(t *testing.T) {
+	cfg := Config{
+		Server:   ServerConfig{Env: "production", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+		Database: DatabaseConfig{Host: "db.prod.com", Port: 5432, User: "u", Password: "strong-password-123", Name: "n", MaxOpenConns: 10, SSLMode: "require"},
+		Redis:    RedisConfig{Host: "redis.prod.com", Port: 6379},
+		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+		Auth:     AuthConfig{JWTSecret: "super-secret-long-key-for-prod-1234", JWTExpiration: 24 * time.Hour},
+		LLM:      LLMConfig{DefaultModel: "m", OpenAIKey: "sk-test"},
+		CORS:     CORSConfig{AllowedOrigins: []string{"*.app.example.com"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("subdomain pattern in production should be valid: %v", err)
+	}
+}
+
+func TestValidate_SSLModeDisableRejectedInProduction(t *testing.T) {
+	cfg := Config{
+		Server:   ServerConfig{Env: "production", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+		Database: DatabaseConfig{Host: "db.prod.com", Port: 5432, User: "u", Password: "strong-password-123", Name: "n", MaxOpenConns: 10, SSLMode: "disable"},
+		Redis:    RedisConfig{Host: "redis.prod.com", Port: 6379},
+		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+		Auth:     AuthConfig{JWTSecret: "super-secret-long-key-for-prod-1234", JWTExpiration: 24 * time.Hour},
+		LLM:      LLMConfig{DefaultModel: "m", OpenAIKey: "sk-test"},
+		CORS:     CORSConfig{AllowedOrigins: []string{"https://app.example.com"}},
+	}
+	err := cfg.Validate()
+	if err == nil || err.Error() != "database.sslmode must not be 'disable' in production" {
+		t.Errorf("expected sslmode=disable rejection, got %v", err)
+	}
+}
+
+func TestValidate_RetryMaxAttemptsNegative(t *testing.T) {
+	cfg := Config{
+		Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+		Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10, RetryMaxAttempts: -1},
+		Redis:    RedisConfig{Host: "localhost", Port: 6379},
+		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+		Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
+		LLM:      LLMConfig{DefaultModel: "m"},
+	}
+	err := cfg.Validate()
+	if err == nil || err.Error() != "database.retry_max_attempts must be non-negative" {
+		t.Errorf("expected retry_max_attempts negative error, got %v", err)
+	}
+}
+
+func TestValidate_SlowQueryThresholdNegative(t *testing.T) {
+	cfg := Config{
+		Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+		Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10, SlowQueryThreshold: -time.Second},
+		Redis:    RedisConfig{Host: "localhost", Port: 6379},
+		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+		Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
+		LLM:      LLMConfig{DefaultModel: "m"},
+	}
+	err := cfg.Validate()
+	if err == nil || err.Error() != "database.slow_query_threshold must be non-negative" {
+		t.Errorf("expected slow_query_threshold negative error, got %v", err)
+	}
+}
+
+func TestValidate_RetryMaxAttemptsZeroValid(t *testing.T) {
+	cfg := Config{
+		Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
+		Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "u", Name: "n", MaxOpenConns: 10, RetryMaxAttempts: 0},
+		Redis:    RedisConfig{Host: "localhost", Port: 6379},
+		NATS:     NATSConfig{URL: "nats://x", Stream: "s"},
+		Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
+		LLM:      LLMConfig{DefaultModel: "m"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("zero retry_max_attempts should be valid: %v", err)
 	}
 }

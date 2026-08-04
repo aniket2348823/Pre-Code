@@ -327,3 +327,349 @@ func TestCSRFProtect_EmptyHeader(t *testing.T) {
 		t.Errorf("empty header should be 403, got %d", rec.Code)
 	}
 }
+
+// --- Security Headers Tests ---
+
+func TestDefaultSecurityHeadersConfig(t *testing.T) {
+	cfg := DefaultSecurityHeadersConfig()
+	if !cfg.Enabled {
+		t.Error("expected Enabled=true")
+	}
+	if cfg.HSTSMaxAge != 63072000 {
+		t.Errorf("HSTSMaxAge = %d, want 63072000", cfg.HSTSMaxAge)
+	}
+	if !cfg.HSTSIncludeSubDomains {
+		t.Error("expected HSTSIncludeSubDomains=true")
+	}
+	if !cfg.HSTSPreload {
+		t.Error("expected HSTSPreload=true")
+	}
+	if cfg.CSP == "" {
+		t.Error("expected non-empty CSP")
+	}
+	if !cfg.XContentTypeOptions {
+		t.Error("expected XContentTypeOptions=true")
+	}
+	if cfg.XFrameOptions != "DENY" {
+		t.Errorf("XFrameOptions = %q, want DENY", cfg.XFrameOptions)
+	}
+	if cfg.ReferrerPolicy != "strict-origin-when-cross-origin" {
+		t.Errorf("ReferrerPolicy = %q", cfg.ReferrerPolicy)
+	}
+	if cfg.PermissionsPolicy == "" {
+		t.Error("expected non-empty PermissionsPolicy")
+	}
+	if cfg.XSSProtection != "1; mode=block" {
+		t.Errorf("XSSProtection = %q", cfg.XSSProtection)
+	}
+	if cfg.CacheControlAPI != "no-store, no-cache, must-revalidate" {
+		t.Errorf("CacheControlAPI = %q", cfg.CacheControlAPI)
+	}
+	if cfg.CacheControlStatic != "public, max-age=31536000" {
+		t.Errorf("CacheControlStatic = %q", cfg.CacheControlStatic)
+	}
+}
+
+func TestSecurityHeaders_NilConfig(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	m := SecurityHeaders(nil)
+	if m == nil {
+		t.Fatal("nil config should not return nil middleware")
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	h := rec.Header()
+	if h.Get("Strict-Transport-Security") == "" {
+		t.Error("HSTS header missing with nil config")
+	}
+	if h.Get("Content-Security-Policy") == "" {
+		t.Error("CSP header missing with nil config")
+	}
+}
+
+func TestSecurityHeaders_Disabled(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	cfg := DefaultSecurityHeadersConfig()
+	cfg.Enabled = false
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	if h := rec.Header().Get("Strict-Transport-Security"); h != "" {
+		t.Errorf("expected no HSTS when disabled, got %q", h)
+	}
+	if h := rec.Header().Get("Content-Security-Policy"); h != "" {
+		t.Errorf("expected no CSP when disabled, got %q", h)
+	}
+}
+
+func TestSecurityHeaders_HSTS(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	tests := []struct {
+		name     string
+		cfg      *SecurityHeadersConfig
+		expected string
+	}{
+		{
+			name:     "full",
+			cfg:      DefaultSecurityHeadersConfig(),
+			expected: "max-age=63072000; includeSubDomains; preload",
+		},
+		{
+			name: "no_preload",
+			cfg: &SecurityHeadersConfig{
+				Enabled:               true,
+				HSTSMaxAge:            31536000,
+				HSTSIncludeSubDomains: true,
+				HSTSPreload:           false,
+			},
+			expected: "max-age=31536000; includeSubDomains",
+		},
+		{
+			name: "no_subdomains",
+			cfg: &SecurityHeadersConfig{
+				Enabled:               true,
+				HSTSMaxAge:            86400,
+				HSTSIncludeSubDomains: false,
+				HSTSPreload:           false,
+			},
+			expected: "max-age=86400",
+		},
+		{
+			name: "zero_max_age",
+			cfg: &SecurityHeadersConfig{
+				Enabled:    true,
+				HSTSMaxAge: 0,
+			},
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := SecurityHeaders(tt.cfg)
+			req := httptest.NewRequest("GET", "/", nil)
+			rec := httptest.NewRecorder()
+			m(handler).ServeHTTP(rec, req)
+			got := rec.Header().Get("Strict-Transport-Security")
+			if got != tt.expected {
+				t.Errorf("HSTS = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSecurityHeaders_CSP(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	customCSP := "default-src 'none'; script-src 'self'"
+	cfg := &SecurityHeadersConfig{
+		Enabled: true,
+		CSP:     customCSP,
+	}
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	got := rec.Header().Get("Content-Security-Policy")
+	if got != customCSP {
+		t.Errorf("CSP = %q, want %q", got, customCSP)
+	}
+}
+
+func TestSecurityHeaders_XContentTypeOptions(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	t.Run("enabled", func(t *testing.T) {
+		cfg := &SecurityHeadersConfig{Enabled: true, XContentTypeOptions: true}
+		m := SecurityHeaders(cfg)
+		req := httptest.NewRequest("GET", "/", nil)
+		rec := httptest.NewRecorder()
+		m(handler).ServeHTTP(rec, req)
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+			t.Errorf("got %q, want nosniff", got)
+		}
+	})
+
+	t.Run("disabled", func(t *testing.T) {
+		cfg := &SecurityHeadersConfig{Enabled: true, XContentTypeOptions: false}
+		m := SecurityHeaders(cfg)
+		req := httptest.NewRequest("GET", "/", nil)
+		rec := httptest.NewRecorder()
+		m(handler).ServeHTTP(rec, req)
+		if got := rec.Header().Get("X-Content-Type-Options"); got != "" {
+			t.Errorf("expected empty, got %q", got)
+		}
+	})
+}
+
+func TestSecurityHeaders_XFrameOptions(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	tests := []struct {
+		name, value, expected string
+	}{
+		{"deny", "DENY", "DENY"},
+		{"sameorigin", "SAMEORIGIN", "SAMEORIGIN"},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SecurityHeadersConfig{Enabled: true, XFrameOptions: tt.value}
+			m := SecurityHeaders(cfg)
+			req := httptest.NewRequest("GET", "/", nil)
+			rec := httptest.NewRecorder()
+			m(handler).ServeHTTP(rec, req)
+			got := rec.Header().Get("X-Frame-Options")
+			if got != tt.expected {
+				t.Errorf("X-Frame-Options = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSecurityHeaders_ReferrerPolicy(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	cfg := &SecurityHeadersConfig{Enabled: true, ReferrerPolicy: "no-referrer"}
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("got %q, want no-referrer", got)
+	}
+}
+
+func TestSecurityHeaders_PermissionsPolicy(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	policy := "camera=(), microphone=(), geolocation=()"
+	cfg := &SecurityHeadersConfig{Enabled: true, PermissionsPolicy: policy}
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Permissions-Policy"); got != policy {
+		t.Errorf("got %q, want %q", got, policy)
+	}
+}
+
+func TestSecurityHeaders_XSSProtection(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	tests := []struct {
+		name, value, expected string
+	}{
+		{"block", "1; mode=block", "1; mode=block"},
+		{"disabled", "0", "0"},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SecurityHeadersConfig{Enabled: true, XSSProtection: tt.value}
+			m := SecurityHeaders(cfg)
+			req := httptest.NewRequest("GET", "/", nil)
+			rec := httptest.NewRecorder()
+			m(handler).ServeHTTP(rec, req)
+			got := rec.Header().Get("X-XSS-Protection")
+			if got != tt.expected {
+				t.Errorf("X-XSS-Protection = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSecurityHeaders_CacheControl_API(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	cfg := DefaultSecurityHeadersConfig()
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/api/v1/users", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Cache-Control"); got != "no-store, no-cache, must-revalidate" {
+		t.Errorf("API Cache-Control = %q, want no-store, no-cache, must-revalidate", got)
+	}
+}
+
+func TestSecurityHeaders_CacheControl_Static(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	cfg := DefaultSecurityHeadersConfig()
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/static/app.js", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000" {
+		t.Errorf("static Cache-Control = %q, want public, max-age=31536000", got)
+	}
+}
+
+func TestSecurityHeaders_CustomHeaders(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	cfg := &SecurityHeadersConfig{
+		Enabled:       true,
+		CustomHeaders: map[string]string{"X-Custom": "test-value", "X-Another": "another-value"},
+	}
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	if got := rec.Header().Get("X-Custom"); got != "test-value" {
+		t.Errorf("X-Custom = %q, want test-value", got)
+	}
+	if got := rec.Header().Get("X-Another"); got != "another-value" {
+		t.Errorf("X-Another = %q, want another-value", got)
+	}
+}
+
+func TestSecurityHeaders_AllHeadersPresent(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	cfg := DefaultSecurityHeadersConfig()
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	h := rec.Header()
+
+	expected := map[string]string{
+		"Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+		"Content-Security-Policy":   cfg.CSP,
+		"X-Content-Type-Options":    "nosniff",
+		"X-Frame-Options":           "DENY",
+		"Referrer-Policy":           "strict-origin-when-cross-origin",
+		"Permissions-Policy":        cfg.PermissionsPolicy,
+		"X-XSS-Protection":         "1; mode=block",
+	}
+
+	for name, want := range expected {
+		if got := h.Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestSecurityHeaders_PassesToNext(t *testing.T) {
+	called := false
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	cfg := DefaultSecurityHeadersConfig()
+	m := SecurityHeaders(cfg)
+	req := httptest.NewRequest("GET", "/test", nil)
+	rec := httptest.NewRecorder()
+	m(handler).ServeHTTP(rec, req)
+	if !called {
+		t.Error("next handler not called")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+}

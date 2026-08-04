@@ -68,7 +68,7 @@ func (m *CSRFMiddleware) Middleware(next http.Handler) http.Handler {
 			Name:     m.cookieName,
 			Value:    token,
 			Path:     "/",
-			HttpOnly: false, // JS needs to read this for the header
+			HttpOnly: true,
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   3600,
 		})
@@ -104,7 +104,7 @@ func (m *CSRFMiddleware) SetToken(w http.ResponseWriter, r *http.Request) {
 		Name:     m.cookieName,
 		Value:    token,
 		Path:     "/",
-		HttpOnly: false,
+		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   3600,
 	})

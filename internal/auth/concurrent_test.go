@@ -9,7 +9,13 @@ import (
 	"time"
 
 	"github.com/vigilagent/vigilagent/internal/config"
+	"golang.org/x/crypto/bcrypt"
 )
+
+func init() {
+	// Speed up bcrypt hashing for tests
+	bcryptCost = bcrypt.MinCost
+}
 
 func newTestJWT_Deep() *JWT {
 	return NewJWT(&config.AuthConfig{JWTSecret: "test-secret-key-that-is-at-least-32-bytes!", JWTExpiration: 15 * time.Minute})

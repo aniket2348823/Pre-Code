@@ -6,12 +6,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
-var apiLookupPepper = []byte("vigilagent-api-key-lookup")
+var bcryptCost = bcrypt.DefaultCost
+
+var apiLookupPepper = func() []byte {
+	if p := os.Getenv("VIGILAGENT_AUTH_API_KEY_PEPPER"); p != "" {
+		return []byte(p)
+	}
+	return []byte("vigilagent-api-key-lookup")
+}()
 
 // APIKey represents an API key with its metadata.
 type APIKey struct {
@@ -46,7 +54,7 @@ func (s *APIKeyService) GenerateKey() (plaintext string, hashed string, prefix s
 
 	// Hash with SHA-256 first to avoid bcrypt 72-byte truncation
 	keyHash := sha256.Sum256([]byte(plaintext))
-	hashBytes, err := bcrypt.GenerateFromPassword(keyHash[:], bcrypt.DefaultCost)
+	hashBytes, err := bcrypt.GenerateFromPassword(keyHash[:], bcryptCost)
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to hash api key: %w", err)
 	}
@@ -84,5 +92,50 @@ func SHA256Hash(s string) string {
 // ValidatePrefix checks if a key string starts with the expected prefix.
 func (s *APIKeyService) ValidatePrefix(plaintext string) bool {
 	return strings.HasPrefix(plaintext, s.prefix)
+}
+
+// ErrAPIKeyExpired is returned when an API key has passed its expiration time.
+var ErrAPIKeyExpired = fmt.Errorf("API key has expired")
+
+// RotationResult holds the output of a key rotation operation.
+type RotationResult struct {
+	NewPlaintext string
+	NewHash      string
+	NewPrefix    string
+	OldKeyID     string
+	RotationTokenHash string
+}
+
+// GenerateRotationToken creates a new rotation token and returns its hash.
+// The plaintext rotation token is returned once to the caller for secure storage.
+func (s *APIKeyService) GenerateRotationToken() (plaintext string, hash string, err error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", "", fmt.Errorf("failed to generate rotation token: %w", err)
+	}
+	plaintext = hex.EncodeToString(bytes)
+	hash = SHA256Hash(plaintext)
+	return plaintext, hash, nil
+}
+
+// RotateKey performs a full key rotation: generates new key + rotation token, returns all artifacts.
+// Caller is responsible for persisting via repository.RotateAPIKey.
+func (s *APIKeyService) RotateKey() (*RotationResult, error) {
+	plaintext, hash, prefix, err := s.GenerateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate new key during rotation: %w", err)
+	}
+
+	_, rotHash, err := s.GenerateRotationToken()
+	if err != nil {
+		return nil, err
+	}
+
+	return &RotationResult{
+		NewPlaintext:      plaintext,
+		NewHash:           hash,
+		NewPrefix:         prefix,
+		RotationTokenHash: rotHash,
+	}, nil
 }
 

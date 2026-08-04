@@ -847,14 +847,9 @@ func TestAnthropic_Chat_SystemPrompt(t *testing.T) {
 func TestAnthropic_Stream_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		events := []map[string]interface{}{
-			{"type": "content_block_delta", "delta": map[string]string{"text": "Hello"}},
-			{"type": "content_block_delta", "delta": map[string]string{"text": " World"}},
-			{"type": "message_stop"},
-		}
-		for _, e := range events {
-			json.NewEncoder(w).Encode(e)
-		}
+		w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hello\"}}\n\n"))
+		w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\" World\"}}\n\n"))
+		w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 	}))
 	defer srv.Close()
 
@@ -896,8 +891,7 @@ func TestAnthropic_Stream_ErrorStatus(t *testing.T) {
 func TestAnthropic_Stream_EmptyModel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		e := map[string]interface{}{"type": "message_stop"}
-		json.NewEncoder(w).Encode(e)
+		w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 	}))
 	defer srv.Close()
 
@@ -922,8 +916,7 @@ func TestAnthropic_Stream_NoMaxTokens(t *testing.T) {
 			t.Errorf("expected default max_tokens 8192, got %v", req["max_tokens"])
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		e := map[string]interface{}{"type": "message_stop"}
-		json.NewEncoder(w).Encode(e)
+		w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 	}))
 	defer srv.Close()
 
@@ -2037,7 +2030,7 @@ func TestCircuitBreaker_HalfOpenProbeLimit(t *testing.T) {
 	// Second call while still half-open should be blocked
 	cb.mu.Lock()
 	cb.state = CircuitHalfOpen
-	cb.halfOpenProbes = 1
+	cb.halfOpenProbes.Store(1)
 	cb.mu.Unlock()
 	err = cb.Execute(func() error { return nil })
 	if err != ErrCircuitOpen {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
@@ -60,6 +61,11 @@ func (r *Router) createAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Record API key creation for rate limiting
+	if r.apiKeyCreateRateLimiter != nil {
+		r.apiKeyCreateRateLimiter.Record(req.Context(), claims.UserID)
+	}
+
 	// Dispatch webhook notification
 	if r.webhookEngine != nil {
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
@@ -105,7 +111,7 @@ func (r *Router) listAPIKeysHandler(w http.ResponseWriter, req *http.Request) {
 	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }
 
-// rotateAPIKeyHandler deactivates the old key and creates a new one.
+// rotateAPIKeyHandler performs key rotation with a 24h grace period for the old key.
 // POST /api/v1/api-keys/{keyID}/rotate
 func (r *Router) rotateAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
@@ -116,8 +122,21 @@ func (r *Router) rotateAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 
 	keyID := chi.URLParam(req, "keyID")
 
-	// Deactivate old key
-	if err := r.apiKeys.Delete(req.Context(), keyID, claims.UserID); err != nil {
+	apiKeyService := auth.NewAPIKeyService(r.cfg.Auth.APIKeyPrefix)
+	result, err := apiKeyService.RotateKey()
+	if err != nil {
+		response.InternalError(w, "failed to generate rotated key")
+		return
+	}
+
+	gracePeriod := 24 * time.Hour
+
+	newKey, err := r.apiKeys.RotateAPIKey(
+		req.Context(), keyID, claims.UserID,
+		result.NewHash, result.NewPrefix, result.RotationTokenHash,
+		gracePeriod,
+	)
+	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			response.NotFound(w, "API key not found")
 			return
@@ -126,31 +145,24 @@ func (r *Router) rotateAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Create new key with same name
-	apiKeyService := auth.NewAPIKeyService(r.cfg.Auth.APIKeyPrefix)
-	plaintext, hash, prefix, err := apiKeyService.GenerateKey()
-	if err != nil {
-		response.InternalError(w, "failed to generate API key")
-		return
-	}
-
-	key := &repository.APIKey{
-		UserID:   claims.UserID,
-		Name:     "rotated-key",
-		KeyHash:  hash,
-		Prefix:   prefix,
-		IsActive: true,
-	}
-	if err := r.apiKeys.Create(req.Context(), key); err != nil {
-		response.InternalError(w, "failed to save rotated key")
-		return
+	// Dispatch webhook notification
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
+			Type: "apikey.rotated",
+			Payload: map[string]interface{}{
+				"old_key_id": keyID,
+				"new_key_id": newKey.ID,
+				"user_id":    claims.UserID,
+			},
+		})
 	}
 
 	response.Created(w, map[string]interface{}{
-		"id":     key.ID,
-		"name":   key.Name,
-		"key":    plaintext,
-		"prefix": prefix,
+		"id":              newKey.ID,
+		"name":            newKey.Name,
+		"key":             result.NewPlaintext,
+		"prefix":          result.NewPrefix,
+		"old_key_valid_until": time.Now().Add(gracePeriod).Format(time.RFC3339),
 	})
 }
 

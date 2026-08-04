@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -237,7 +238,8 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 		defer close(ch)
 		defer resp.Body.Close()
 
-		scanner := bufio.NewScanner(resp.Body)
+		limitedBody := io.LimitReader(resp.Body, 10<<20) // 10MB limit
+		scanner := bufio.NewScanner(limitedBody)
 		var eventType string
 		var dataBuffer strings.Builder
 		for scanner.Scan() {

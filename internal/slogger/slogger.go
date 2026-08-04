@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/vigilagent/vigilagent/internal/requestid"
 )
 
 // StatusWriter captures the response status code.
@@ -36,7 +38,9 @@ func Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 
 		duration := time.Since(start)
+		id := requestid.FromContext(r.Context())
 		slog.Info("http request",
+			"request_id", id,
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", sw.status,

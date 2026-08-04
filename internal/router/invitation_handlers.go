@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/webhook"
+	"github.com/vigilagent/vigilagent/pkg/pagination"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -47,7 +48,7 @@ func (r *Router) inviteMemberHandler(w http.ResponseWriter, req *http.Request) {
 		// Check if admin
 		isMember, _ := r.orgs.IsMember(req.Context(), orgID, claims.UserID)
 		if !isMember {
-			response.JSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
+			response.ErrorR(w, req, http.StatusForbidden, "AUTH_007", "access denied")
 			return
 		}
 	}
@@ -147,14 +148,16 @@ func (r *Router) listInvitationsHandler(w http.ResponseWriter, req *http.Request
 	// Check membership
 	isMember, err := r.orgs.IsMember(req.Context(), orgID, claims.UserID)
 	if err != nil || !isMember {
-		response.JSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
+		response.ErrorR(w, req, http.StatusForbidden, "AUTH_007", "access denied")
 		return
 	}
 
 	// For now, return empty list (would need invitations table in production)
-	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"data":  []Invitation{},
-		"total": 0,
+	pag := pagination.ParseRequest(req)
+	data := []Invitation{}
+	response.SuccessWithMeta(w, req, http.StatusOK, data, &response.Meta{
+		Limit:   pag.Limit,
+		HasMore: false,
 	})
 }
 
@@ -177,7 +180,7 @@ func (r *Router) revokeInvitationHandler(w http.ResponseWriter, req *http.Reques
 	// Check ownership
 	isOwner, err := r.orgs.IsOwner(req.Context(), orgID, claims.UserID)
 	if err != nil || !isOwner {
-		response.JSON(w, http.StatusForbidden, map[string]string{"error": "only owners can revoke invitations"})
+		response.ErrorR(w, req, http.StatusForbidden, "AUTH_007", "only owners can revoke invitations")
 		return
 	}
 
@@ -195,9 +198,7 @@ func (r *Router) acceptInvitationHandler(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	response.JSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "invitation acceptance is not yet implemented",
-	})
+	response.ErrorR(w, req, http.StatusNotImplemented, "INFRA_002", "invitation acceptance is not yet implemented")
 }
 
 // getBaseURL extracts the base URL from the router config.

@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vigilagent/vigilagent/internal/auth"
+	"github.com/vigilagent/vigilagent/internal/config"
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
@@ -30,7 +32,8 @@ type AuditEventLogger interface {
 
 // AuditLogger logs security events to the database.
 type AuditLogger struct {
-	pool *database.Conn
+	pool   *database.Conn
+	config config.AuditConfig
 }
 
 // NewAuditLogger creates a new audit logger.
@@ -148,4 +151,136 @@ func extractResource(path string) string {
 		}
 	}
 	return "unknown"
+}
+
+// AuditCleanup handles periodic cleanup and compression of old audit logs.
+type AuditCleanup struct {
+	pool   *database.Conn
+	config config.AuditConfig
+	stop   chan struct{}
+	wg     sync.WaitGroup
+}
+
+// NewAuditCleanup creates a new audit cleanup manager.
+func NewAuditCleanup(pool *database.Conn, cfg config.AuditConfig) *AuditCleanup {
+	return &AuditCleanup{
+		pool:   pool,
+		config: cfg,
+		stop:   make(chan struct{}),
+	}
+}
+
+// Start begins the periodic cleanup job.
+func (ac *AuditCleanup) Start() {
+	ac.wg.Add(1)
+	go func() {
+		defer ac.wg.Done()
+		ticker := time.NewTicker(ac.config.CleanupInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				ac.runCleanup()
+			case <-ac.stop:
+				return
+			}
+		}
+	}()
+	slog.Info("audit cleanup started",
+		"interval", ac.config.CleanupInterval,
+		"retention_days", ac.config.RetentionDays,
+	)
+}
+
+// Stop signals the cleanup goroutine to stop and waits for it.
+func (ac *AuditCleanup) Stop() {
+	close(ac.stop)
+	ac.wg.Wait()
+}
+
+func (ac *AuditCleanup) runCleanup() {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	ac.compressOldEvents(ctx)
+	ac.deleteExpiredEvents(ctx)
+	ac.monitorStorage(ctx)
+}
+
+// compressOldEvents compresses audit events older than CompressAfterDays
+// by truncating the details field and marking them as compressed.
+func (ac *AuditCleanup) compressOldEvents(ctx context.Context) {
+	cutoff := time.Now().AddDate(0, 0, -ac.config.CompressAfterDays)
+	result, err := ac.pool.Exec(ctx, `
+		UPDATE audit_logs
+		SET details = '[compressed] ' || LEFT(details, 100),
+		    status = status || ':compressed'
+		WHERE created_at < $1
+		  AND details NOT LIKE '[compressed]%'
+		  AND details != ''
+	`, cutoff)
+	if err != nil {
+		slog.Error("audit: failed to compress old events", "error", err)
+		return
+	}
+	rows := result.RowsAffected()
+	if rows > 0 {
+		slog.Info("audit: compressed old events", "count", rows, "before", cutoff)
+	}
+}
+
+// deleteExpiredEvents deletes audit events older than RetentionDays.
+func (ac *AuditCleanup) deleteExpiredEvents(ctx context.Context) {
+	cutoff := time.Now().AddDate(0, 0, -ac.config.RetentionDays)
+	result, err := ac.pool.Exec(ctx, `
+		DELETE FROM audit_logs
+		WHERE created_at < $1
+	`, cutoff)
+	if err != nil {
+		slog.Error("audit: failed to delete expired events", "error", err)
+		return
+	}
+	rows := result.RowsAffected()
+	if rows > 0 {
+		slog.Info("audit: deleted expired events", "count", rows, "before", cutoff)
+	}
+}
+
+// AuditStorageMetrics holds storage monitoring data.
+type AuditStorageMetrics struct {
+	TotalSizeMB   float64
+	EventCount    int64
+	OldestEventAt time.Time
+}
+
+// monitorStorage checks total storage size and logs warnings if thresholds are exceeded.
+func (ac *AuditCleanup) monitorStorage(ctx context.Context) AuditStorageMetrics {
+	var metrics AuditStorageMetrics
+	err := ac.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(pg_column_size(data)::bigint, 0) as total_bytes,
+			COUNT(*) as event_count,
+			COALESCE(MIN(created_at), NOW()) as oldest_event
+		FROM audit_logs data
+	`).Scan(&metrics.TotalSizeMB, &metrics.EventCount, &metrics.OldestEventAt)
+	if err != nil {
+		slog.Error("audit: failed to get storage metrics", "error", err)
+		return metrics
+	}
+	metrics.TotalSizeMB = metrics.TotalSizeMB / (1024 * 1024)
+
+	if ac.config.AlertThresholdMB > 0 && metrics.TotalSizeMB > float64(ac.config.AlertThresholdMB) {
+		slog.Warn("audit: storage threshold exceeded",
+			"size_mb", metrics.TotalSizeMB,
+			"threshold_mb", ac.config.AlertThresholdMB,
+		)
+	}
+	if ac.config.MaxStorageMB > 0 && metrics.TotalSizeMB > float64(ac.config.MaxStorageMB) {
+		slog.Error("audit: storage max capacity exceeded",
+			"size_mb", metrics.TotalSizeMB,
+			"max_mb", ac.config.MaxStorageMB,
+		)
+	}
+	return metrics
 }

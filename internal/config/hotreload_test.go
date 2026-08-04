@@ -145,7 +145,7 @@ server:
 func TestHotReloader_StartCallbackOnFileChange(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.yaml")
- validYAML := "server:\n  host: 0.0.0.0\n  port: 8080\n  env: development\n  read_timeout: 10s\n  write_timeout: 10s\ndatabase:\n  host: localhost\n  port: 5432\n  user: u\n  name: n\n  max_open_conns: 10\nredis:\n  host: localhost\n  port: 6379\nnats:\n  url: nats://x\n  stream: s\nauth:\n  jwt_secret: test-secret-32-chars-long!!!!\n  jwt_expiration: 24h\nllm:\n  default_model: m\n"
+  validYAML := "server:\n  host: 0.0.0.0\n  port: 8080\n  env: development\n  read_timeout: 10s\n  write_timeout: 10s\ndatabase:\n  host: localhost\n  port: 5432\n  user: u\n  name: n\n  max_open_conns: 10\nredis:\n  host: localhost\n  port: 6379\nnats:\n  url: nats://x\n  stream: s\nauth:\n  jwt_secret: test-secret-32-chars-long-ok!!!!\n  jwt_expiration: 24h\nllm:\n  default_model: m\n"
 	os.WriteFile(cfgFile, []byte(validYAML), 0644)
 
 	// Point viper at the temp config
@@ -184,7 +184,7 @@ func TestHotReloader_StartCallbackOnFileChange(t *testing.T) {
 	}()
 
 	// Modify config file to trigger watcher (change port)
-	updatedYAML := "server:\n  host: 0.0.0.0\n  port: 9999\n  env: development\n  read_timeout: 10s\n  write_timeout: 10s\ndatabase:\n  host: localhost\n  port: 5432\n  user: u\n  name: n\n  max_open_conns: 10\nredis:\n  host: localhost\n  port: 6379\nnats:\n  url: nats://x\n  stream: s\nauth:\n  jwt_secret: test-secret-32-chars-long!!!!\n  jwt_expiration: 24h\nllm:\n  default_model: m\n"
+	updatedYAML := "server:\n  host: 0.0.0.0\n  port: 9999\n  env: development\n  read_timeout: 10s\n  write_timeout: 10s\ndatabase:\n  host: localhost\n  port: 5432\n  user: u\n  name: n\n  max_open_conns: 10\nredis:\n  host: localhost\n  port: 6379\nnats:\n  url: nats://x\n  stream: s\nauth:\n  jwt_secret: test-secret-32-chars-long-ok!!!!\n  jwt_expiration: 24h\nllm:\n  default_model: m\n"
 	time.Sleep(200 * time.Millisecond)
 	os.WriteFile(cfgFile, []byte(updatedYAML), 0644)
 

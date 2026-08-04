@@ -232,7 +232,7 @@ func TestManager_AddWorkingMessage(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
 	m.initWorkingMemory()
 	m.AddWorkingMessage("user", "hello", 5)
-	working := m.working.Load().(*WorkingMemory)
+	working := m.working.Load()
 	if working.Count() != 1 {
 		t.Errorf("expected 1, got %d", working.Count())
 	}
@@ -240,6 +240,7 @@ func TestManager_AddWorkingMessage(t *testing.T) {
 
 func TestManager_GetWorkingMessages(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.AddWorkingMessage("user", "hello", 5)
 	m.AddWorkingMessage("assistant", "hi", 3)
 	msgs := m.GetWorkingMessages()
@@ -253,7 +254,7 @@ func TestManager_ClearWorkingMemory(t *testing.T) {
 	m.initWorkingMemory()
 	m.AddWorkingMessage("user", "hello", 5)
 	m.ClearWorkingMemory()
-	working := m.working.Load().(*WorkingMemory)
+	working := m.working.Load()
 	if working.Count() != 0 {
 		t.Error("expected 0 after clear")
 	}
@@ -261,6 +262,7 @@ func TestManager_ClearWorkingMemory(t *testing.T) {
 
 func TestManager_Recall_WorkingOnly(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
@@ -281,6 +283,7 @@ func TestManager_Recall_WorkingOnly(t *testing.T) {
 
 func TestManager_Recall_Empty(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	results, err := m.Recall(context.Background(), "anything", 10)
@@ -294,6 +297,7 @@ func TestManager_Recall_Empty(t *testing.T) {
 
 func TestManager_SearchMemory_FilterByType(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
@@ -308,6 +312,7 @@ func TestManager_SearchMemory_FilterByType(t *testing.T) {
 
 func TestManager_SearchMemory_FilterByScore(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
@@ -443,6 +448,7 @@ func TestWorkflowStep_JSON(t *testing.T) {
 
 func TestManager_EnableRedisBacking_NilRedis(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.AddWorkingMessage("user", "hello", 5)
 	m.EnableRedisBacking(nil, "session1")
 	msgs := m.GetWorkingMessages()
@@ -455,7 +461,7 @@ func TestManager_EnableRedisBacking_EmptySession(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
 	m.initWorkingMemory()
 	m.EnableRedisBacking(nil, "")
-	working := m.working.Load().(*WorkingMemory)
+	working := m.working.Load()
 	if working.Count() != 0 {
 		t.Error("expected 0 messages")
 	}
@@ -463,6 +469,7 @@ func TestManager_EnableRedisBacking_EmptySession(t *testing.T) {
 
 func TestManager_Recall_EarlyReturnFromWorking(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth bug", 5)
@@ -478,6 +485,7 @@ func TestManager_Recall_EarlyReturnFromWorking(t *testing.T) {
 
 func TestManager_SearchMemory_TypeMatches(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
@@ -495,6 +503,7 @@ func TestManager_SearchMemory_TypeMatches(t *testing.T) {
 
 func TestManager_SearchMemory_TypeMatchLimit(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
@@ -510,6 +519,7 @@ func TestManager_SearchMemory_TypeMatchLimit(t *testing.T) {
 
 func TestManager_SearchMemory_EmptyTypes(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
@@ -524,6 +534,7 @@ func TestManager_SearchMemory_EmptyTypes(t *testing.T) {
 
 func TestManager_SearchMemory_NoResults(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	results, err := m.SearchMemory(context.Background(), "anything", nil, 10, 0)
@@ -537,6 +548,7 @@ func TestManager_SearchMemory_NoResults(t *testing.T) {
 
 func TestManager_SearchMemory_MultipleTypesOneMatch(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
@@ -608,6 +620,7 @@ func TestProceduralStore_ListByUserNoMatch(t *testing.T) {
 
 func TestManager_Recall_WorkingMetadata(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
@@ -655,6 +668,7 @@ func TestWorkingMemory_TokenCountEmpty(t *testing.T) {
 
 func TestManager_Recall_EmbedFallback(t *testing.T) {
 	m := NewManagerWithEmbedder(nil, NewNoOpEmbedder(4))
+	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
 	results, err := m.Recall(context.Background(), "query", 10)

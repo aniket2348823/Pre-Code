@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+func testFileSec(t *testing.T) *FileSecurityConfig {
+	t.Helper()
+	return &FileSecurityConfig{AllowedDirs: []string{t.TempDir()}}
+}
+
 func TestReadFileTool_Name(t *testing.T) {
 	r := &ReadFileTool{}
 	if r.Name() != "read_file" {
@@ -49,11 +54,12 @@ func TestReadFileTool_Parameters(t *testing.T) {
 }
 
 func TestReadFileTool_Execute_Success(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "test.txt")
 	os.WriteFile(path, []byte("hello world"), 0644)
 
-	r := &ReadFileTool{}
+	r := &ReadFileTool{Security: sec}
 	res, err := r.Execute(context.Background(), map[string]interface{}{"path": path})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -160,10 +166,11 @@ func TestWriteFileTool_RequiresHITL_EmptyPath(t *testing.T) {
 }
 
 func TestWriteFileTool_Execute_Success(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "new.txt")
 
-	w := &WriteFileTool{}
+	w := &WriteFileTool{Security: sec}
 	res, err := w.Execute(context.Background(), map[string]interface{}{
 		"path":    path,
 		"content": "test content",
@@ -181,10 +188,11 @@ func TestWriteFileTool_Execute_Success(t *testing.T) {
 }
 
 func TestWriteFileTool_Execute_CreatesDir(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "sub", "dir", "file.txt")
 
-	w := &WriteFileTool{}
+	w := &WriteFileTool{Security: sec}
 	res, err := w.Execute(context.Background(), map[string]interface{}{
 		"path":    path,
 		"content": "nested",
@@ -209,11 +217,12 @@ func TestWriteFileTool_Execute_EmptyPath(t *testing.T) {
 }
 
 func TestWriteFileTool_Execute_Overwrite(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "overwrite.txt")
 	os.WriteFile(path, []byte("old"), 0644)
 
-	w := &WriteFileTool{}
+	w := &WriteFileTool{Security: sec}
 	res, err := w.Execute(context.Background(), map[string]interface{}{
 		"path":    path,
 		"content": "new content",
@@ -234,7 +243,7 @@ func TestWriteFileTool_Execute_MkdirAllError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("hard to trigger MkdirAll failure on Windows")
 	}
-	w := &WriteFileTool{}
+	w := &WriteFileTool{Security: testFileSec(t)}
 	res, err := w.Execute(context.Background(), map[string]interface{}{
 		"path":    "/dev/null/impossible/file.txt",
 		"content": "data",
@@ -248,7 +257,8 @@ func TestWriteFileTool_Execute_MkdirAllError(t *testing.T) {
 }
 
 func TestWriteFileTool_Execute_WriteFileError(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "readonly.txt")
 	os.WriteFile(path, []byte("old"), 0644)
 	os.Chmod(path, 0444)
@@ -267,10 +277,11 @@ func TestWriteFileTool_Execute_WriteFileError(t *testing.T) {
 }
 
 func TestWriteFileTool_Execute_NilContent(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "nil_content.txt")
 
-	w := &WriteFileTool{}
+	w := &WriteFileTool{Security: sec}
 	res, err := w.Execute(context.Background(), map[string]interface{}{
 		"path": path,
 	})
@@ -326,11 +337,12 @@ func TestEditFileTool_Parameters(t *testing.T) {
 }
 
 func TestEditFileTool_Execute_Success(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "edit.txt")
 	os.WriteFile(path, []byte("hello world"), 0644)
 
-	e := &EditFileTool{}
+	e := &EditFileTool{Security: sec}
 	res, err := e.Execute(context.Background(), map[string]interface{}{
 		"path":       path,
 		"old_string": "world",
@@ -404,11 +416,12 @@ func TestEditFileTool_Execute_NonexistentFile(t *testing.T) {
 }
 
 func TestEditFileTool_Execute_NotFound(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "no_match.txt")
 	os.WriteFile(path, []byte("content"), 0644)
 
-	e := &EditFileTool{}
+	e := &EditFileTool{Security: sec}
 	res, err := e.Execute(context.Background(), map[string]interface{}{
 		"path":       path,
 		"old_string": "nonexistent string",
@@ -423,12 +436,13 @@ func TestEditFileTool_Execute_NotFound(t *testing.T) {
 }
 
 func TestEditFileTool_Execute_WriteFileError(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	path := filepath.Join(dir, "readonly.txt")
 	os.WriteFile(path, []byte("hello world"), 0644)
 	os.Chmod(path, 0444)
 
-	e := &EditFileTool{}
+	e := &EditFileTool{Security: sec}
 	res, err := e.Execute(context.Background(), map[string]interface{}{
 		"path":       path,
 		"old_string": "world",
@@ -472,12 +486,13 @@ func TestListDirectoryTool_Parameters(t *testing.T) {
 }
 
 func TestListDirectoryTool_Execute_Success(t *testing.T) {
-	dir := t.TempDir()
+	sec := testFileSec(t)
+	dir := sec.AllowedDirs[0]
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0644)
 	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0644)
 	os.Mkdir(filepath.Join(dir, "subdir"), 0755)
 
-	l := &ListDirectoryTool{}
+	l := &ListDirectoryTool{Security: sec}
 	res, err := l.Execute(context.Background(), map[string]interface{}{"path": dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

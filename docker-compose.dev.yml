@@ -9,7 +9,7 @@ services:
     container_name: vigilagent-postgres
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: vigilagent
       POSTGRES_PASSWORD: vigilagent_dev
@@ -28,7 +28,7 @@ services:
     container_name: vigilagent-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -42,8 +42,8 @@ services:
     container_name: vigilagent-nats
     restart: unless-stopped
     ports:
-      - "4222:4222"
-      - "8222:8222"
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
     command: ["--jetstream", "--store_dir", "/data"]
     volumes:
       - nats_data:/data

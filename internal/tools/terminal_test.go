@@ -43,7 +43,7 @@ func TestRunCommandTool_Parameters(t *testing.T) {
 }
 
 func TestRunCommandTool_Execute_Success(t *testing.T) {
-	r := &RunCommandTool{}
+	r := &RunCommandTool{Security: &CommandSecurityConfig{}}
 	res, err := r.Execute(context.Background(), map[string]interface{}{"command": "echo hello"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -57,7 +57,7 @@ func TestRunCommandTool_Execute_Success(t *testing.T) {
 }
 
 func TestRunCommandTool_Execute_EmptyCommand(t *testing.T) {
-	r := &RunCommandTool{}
+	r := &RunCommandTool{Security: &CommandSecurityConfig{}}
 	res, err := r.Execute(context.Background(), map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -68,7 +68,7 @@ func TestRunCommandTool_Execute_EmptyCommand(t *testing.T) {
 }
 
 func TestRunCommandTool_Execute_FailingCommand(t *testing.T) {
-	r := &RunCommandTool{}
+	r := &RunCommandTool{Security: &CommandSecurityConfig{}}
 	var cmd string
 	if runtime.GOOS == "windows" {
 		cmd = "exit /b 1"
@@ -85,7 +85,7 @@ func TestRunCommandTool_Execute_FailingCommand(t *testing.T) {
 }
 
 func TestRunCommandTool_Execute_WithTimeout(t *testing.T) {
-	r := &RunCommandTool{}
+	r := &RunCommandTool{Security: &CommandSecurityConfig{}}
 	res, err := r.Execute(context.Background(), map[string]interface{}{
 		"command":         "echo timeout_test",
 		"timeout_seconds": float64(5),
@@ -99,7 +99,7 @@ func TestRunCommandTool_Execute_WithTimeout(t *testing.T) {
 }
 
 func TestRunCommandTool_Execute_NonStringCommand(t *testing.T) {
-	r := &RunCommandTool{}
+	r := &RunCommandTool{Security: &CommandSecurityConfig{}}
 	res, err := r.Execute(context.Background(), map[string]interface{}{"command": 123})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -139,7 +139,7 @@ func TestShellCommand_BranchWindows(t *testing.T) {
 }
 
 func TestRunCommandTool_Metadata(t *testing.T) {
-	r := &RunCommandTool{}
+	r := &RunCommandTool{Security: &CommandSecurityConfig{}}
 	res, err := r.Execute(context.Background(), map[string]interface{}{"command": "echo test"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -149,5 +149,78 @@ func TestRunCommandTool_Metadata(t *testing.T) {
 	}
 	if res.Metadata["os"] != runtime.GOOS {
 		t.Errorf("metadata os = %v, want %s", res.Metadata["os"], runtime.GOOS)
+	}
+}
+
+func TestValidateCommand_NilSecurityConfig(t *testing.T) {
+	err := validateCommand("echo hello", nil)
+	if err == nil {
+		t.Fatal("expected error when security config is nil")
+	}
+	if err.Error() != "command validation: no security config configured" {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestValidateCommand_AllowlistBlocksNonListed(t *testing.T) {
+	sec := &CommandSecurityConfig{Allowlist: []string{"ls", "cat"}}
+	err := validateCommand("rm -rf /", sec)
+	if err == nil {
+		t.Fatal("expected error for command not in allowlist")
+	}
+	if err.Error() != `command "rm" is not in the allowlist` {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateCommand_AllowlistAllowsListed(t *testing.T) {
+	sec := &CommandSecurityConfig{Allowlist: []string{"ls", "cat"}}
+	if err := validateCommand("ls -la", sec); err != nil {
+		t.Errorf("listed command should be allowed: %v", err)
+	}
+}
+
+func TestValidateCommand_BlocklistBlocksListed(t *testing.T) {
+	sec := &CommandSecurityConfig{Blocklist: []string{"rm", "sudo"}}
+	err := validateCommand("rm -rf /tmp", sec)
+	if err == nil {
+		t.Fatal("expected error for blocked command")
+	}
+	if err.Error() != `command "rm" is blocked by security policy` {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateCommand_BlocklistAllowsNonListed(t *testing.T) {
+	sec := &CommandSecurityConfig{Blocklist: []string{"rm", "sudo"}}
+	if err := validateCommand("ls -la", sec); err != nil {
+		t.Errorf("non-blocked command should be allowed: %v", err)
+	}
+}
+
+func TestValidateCommand_EmptyCommand(t *testing.T) {
+	sec := &CommandSecurityConfig{}
+	err := validateCommand("", sec)
+	if err == nil {
+		t.Fatal("expected error for empty command")
+	}
+}
+
+func TestValidateCommand_SudoStripped(t *testing.T) {
+	sec := &CommandSecurityConfig{Allowlist: []string{"ls"}}
+	if err := validateCommand("sudo ls", sec); err != nil {
+		t.Errorf("sudo-stripped command should match allowlist: %v", err)
+	}
+}
+
+func TestValidateCommand_BothAllowAndBlock(t *testing.T) {
+	sec := &CommandSecurityConfig{
+		Allowlist: []string{"ls", "cat"},
+		Blocklist: []string{"cat"},
+	}
+	// Blocklist checked first
+	err := validateCommand("cat /etc/passwd", sec)
+	if err == nil {
+		t.Fatal("blocklist should take precedence")
 	}
 }

@@ -113,11 +113,7 @@ func (r *Router) batchTaskHandler(w http.ResponseWriter, req *http.Request) {
 			}
 			if count > 5 {
 				r.rds.Client.Decr(req.Context(), batchKey)
-				response.JSON(w, http.StatusTooManyRequests, map[string]interface{}{
-					"code":    "RATE_003",
-					"error":   "batch rate limit exceeded",
-					"message": "maximum 5 concurrent batch operations per user",
-				})
+				response.ErrorR(w, req, http.StatusTooManyRequests, "INFRA_001", "maximum 5 concurrent batch operations per user")
 				return
 			}
 		}

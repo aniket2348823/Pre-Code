@@ -25,6 +25,7 @@ const (
 	ErrDuplicateEmail     ErrorCode = "AUTH_010"
 	ErrAPIKeyInvalid      ErrorCode = "AUTH_011"
 	ErrHashFailed         ErrorCode = "AUTH_012"
+	ErrAPIKeyExpired      ErrorCode = "AUTH_013"
 )
 
 // Validation errors
@@ -143,6 +144,7 @@ func errorCodeToStatus(code ErrorCode) int {
 		ErrAccountDisabled:    http.StatusUnauthorized,
 		ErrEmailNotVerified:   http.StatusUnauthorized,
 		ErrAPIKeyInvalid:      http.StatusUnauthorized,
+		ErrAPIKeyExpired:      http.StatusUnauthorized,
 		// Auth — 400
 		ErrHashFailed: http.StatusBadRequest,
 		// Auth — 403

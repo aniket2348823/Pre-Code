@@ -199,19 +199,24 @@ func (r *SkillRepository) IncrementDownloads(ctx context.Context, id string) err
 
 // AddRating adds a rating to a skill.
 func (r *SkillRepository) AddRating(ctx context.Context, rating *SkillRating) error {
-	query := `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	insertQuery := `
 		INSERT INTO skill_ratings (skill_id, user_id, rating, review)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id, created_at
 	`
-	err := r.pool.QueryRow(ctx, query,
+	err = tx.QueryRow(ctx, insertQuery,
 		rating.SkillID, rating.UserID, rating.Rating, rating.Review,
 	).Scan(&rating.ID, &rating.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to add rating: %w", err)
 	}
 
-	// Update aggregate rating
 	updateQuery := `
 		UPDATE skills SET
 			rating = (SELECT COALESCE(AVG(rating), 0) FROM skill_ratings WHERE skill_id = $1),
@@ -219,8 +224,11 @@ func (r *SkillRepository) AddRating(ctx context.Context, rating *SkillRating) er
 			updated_at = NOW()
 		WHERE id = $1
 	`
-	_, _ = r.pool.Exec(ctx, updateQuery, rating.SkillID)
-	return nil
+	if _, err := tx.Exec(ctx, updateQuery, rating.SkillID); err != nil {
+		return fmt.Errorf("failed to update aggregate rating: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // ListRatings lists ratings for a skill.
@@ -257,7 +265,7 @@ func (r *SkillRepository) ListRatings(ctx context.Context, skillID string, offse
 // Install creates a skill installation record.
 func (r *SkillRepository) Install(ctx context.Context, inst *SkillInstallation) error {
 	query := `
-		INSERT INTO skill_installations (skill_id, user_id, project_id, status, config)
+		INSERT INTO skill_installs (skill_id, user_id, project_id, status, config)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, installed_at
 	`

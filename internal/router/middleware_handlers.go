@@ -34,7 +34,7 @@ func (r *Router) middlewareProcessHandler(w http.ResponseWriter, req *http.Reque
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			response.JSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request exceeds 1MB limit"})
+			response.ErrorR(w, req, http.StatusRequestEntityTooLarge, "VAL_005", "request exceeds 1MB limit")
 			return
 		}
 		response.BadRequest(w, "invalid request body")

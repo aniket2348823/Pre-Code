@@ -95,10 +95,7 @@ func (r *Router) createCheckoutHandler(w http.ResponseWriter, req *http.Request)
 
 	// TODO: When Stripe is configured, create real checkout session
 	if r.cfg == nil || r.cfg.Stripe.SecretKey == "" {
-		response.JSON(w, http.StatusServiceUnavailable, map[string]interface{}{
-			"error":   "billing not configured",
-			"message": "Stripe integration not configured. Set VIGILAGENT_STRIPE_SECRET_KEY to enable.",
-		})
+		response.ErrorR(w, req, http.StatusServiceUnavailable, "BILL_001", "Stripe integration not configured. Set VIGILAGENT_STRIPE_SECRET_KEY to enable.")
 		return
 	}
 
@@ -160,10 +157,7 @@ func (r *Router) createBillingPortalHandler(w http.ResponseWriter, req *http.Req
 
 	// TODO: When Stripe is configured, create portal session
 	if r.cfg == nil || r.cfg.Stripe.SecretKey == "" {
-		response.JSON(w, http.StatusServiceUnavailable, map[string]interface{}{
-			"error":   "billing not configured",
-			"message": "Stripe integration not configured.",
-		})
+		response.ErrorR(w, req, http.StatusServiceUnavailable, "BILL_001", "Stripe integration not configured.")
 		return
 	}
 

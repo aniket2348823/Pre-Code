@@ -37,7 +37,7 @@ services:
     environment:
       POSTGRES_DB: vigilagent
       POSTGRES_USER: vigilagent
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in environment}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -69,6 +69,11 @@ services:
     volumes:
       - natsdata:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   prometheus:
     image: prom/prometheus:latest
@@ -81,7 +86,7 @@ services:
   grafana:
     image: grafana/grafana:latest
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?Set GRAFANA_PASSWORD in environment}
     volumes:
       - grafanadata:/var/lib/grafana
       - ./grafana/dashboards:/var/lib/grafana/dashboards

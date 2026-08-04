@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
@@ -99,21 +100,23 @@ func (r *EventRepository) BatchCreate(ctx context.Context, events []Event) error
 	}
 	defer tx.Rollback(context.Background())
 
-	// Use ON CONFLICT DO NOTHING for idempotent batch inserts.
-	// Do NOT use RETURNING here — ON CONFLICT DO NOTHING returns zero rows,
-	// causing Scan to fail with ErrNoRows for deduplicated inserts.
 	query := `
 		INSERT INTO events (session_id, event_type, source, payload, tokens_used, cost_usd, latency_ms)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT DO NOTHING
 	`
-	for i := range events {
-		_, err := tx.Exec(ctx, query,
-			events[i].SessionID, events[i].EventType, events[i].Source, events[i].Payload,
-			events[i].TokensUsed, events[i].CostUsd, events[i].LatencyMs,
+	batch := &pgx.Batch{}
+	for _, event := range events {
+		batch.Queue(query,
+			event.SessionID, event.EventType, event.Source, event.Payload,
+			event.TokensUsed, event.CostUsd, event.LatencyMs,
 		)
-		if err != nil {
-			return fmt.Errorf("failed to insert event %d: %w", i, err)
+	}
+	br := tx.SendBatch(ctx, batch)
+	defer br.Close()
+	for i := 0; i < len(events); i++ {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("batch insert event %d: %w", i, err)
 		}
 	}
 

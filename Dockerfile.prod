@@ -1,4 +1,4 @@
-FROM golang:1.26-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -39,5 +39,8 @@ ENV VIGILAGENT_CONFIG_PATH=/app/configs/config.prod.yaml
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD wget -qO- http://localhost:8080/api/v1/health || exit 1
+
+RUN adduser -D -g '' -u 1001 vigilagent
+USER vigilagent
 
 ENTRYPOINT ["/app/vigil-api"]

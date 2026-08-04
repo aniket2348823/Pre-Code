@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -24,6 +26,13 @@ func SanitizeInput(input string) string {
 		return input
 	}
 	input = strings.TrimSpace(input)
+	// Strip null bytes and control characters (except \n, \r, \t)
+	input = strings.Map(func(r rune) rune {
+		if r == 0 || (r < 32 && r != '\n' && r != '\r' && r != '\t') {
+			return -1
+		}
+		return r
+	}, input)
 	return input
 }
 
@@ -58,6 +67,7 @@ func SanitizeMiddleware(next http.Handler) http.Handler {
 			path = r.URL.RawPath
 		}
 		if pathTraversalPattern.MatchString(path) {
+			slog.Warn("security: injection attempt blocked", "type", "path_traversal", "remote", r.RemoteAddr, "path", path)
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
@@ -65,10 +75,12 @@ func SanitizeMiddleware(next http.Handler) http.Handler {
 		for key, values := range r.URL.Query() {
 			for _, v := range values {
 				if DetectSQLInjection(v) {
+					slog.Warn("security: injection attempt blocked", "type", "sql_injection", "remote", r.RemoteAddr, "param", key, "value", v)
 					http.Error(w, "invalid query parameter: "+key, http.StatusBadRequest)
 					return
 				}
 				if DetectXSS(v) {
+					slog.Warn("security: injection attempt blocked", "type", "xss", "remote", r.RemoteAddr, "param", key, "value", v)
 					http.Error(w, "invalid query parameter: "+key, http.StatusBadRequest)
 					return
 				}
@@ -153,7 +165,7 @@ func CSRFProtect(cfg *CSRFConfig) func(http.Handler) http.Handler {
 					Value:    token,
 					Path:     "/",
 					Domain:   cfg.CookieDomain,
-					Secure:   cfg.CookieSecure,
+					Secure:   cfg.CookieSecure || true,
 					HttpOnly: cfg.CookieHTTPOnly,
 					MaxAge:   int(cfg.MaxAge.Seconds()),
 					SameSite: http.SameSiteLaxMode,
@@ -185,12 +197,116 @@ func CSRFProtect(cfg *CSRFConfig) func(http.Handler) http.Handler {
 
 // compareTokens performs constant-time comparison to prevent timing attacks.
 func compareTokens(a, b string) bool {
-	if len(a) != len(b) {
-		return false
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// --- Security Headers ---
+
+// SecurityHeadersConfig holds security header middleware configuration.
+type SecurityHeadersConfig struct {
+	Enabled               bool
+	HSTSMaxAge            int
+	HSTSIncludeSubDomains bool
+	HSTSPreload           bool
+	CSP                   string
+	XContentTypeOptions   bool
+	XFrameOptions         string
+	ReferrerPolicy        string
+	PermissionsPolicy     string
+	XSSProtection         string
+	CacheControlAPI       string
+	CacheControlStatic    string
+	CustomHeaders         map[string]string
+}
+
+// DefaultSecurityHeadersConfig returns production-ready security header configuration.
+func DefaultSecurityHeadersConfig() *SecurityHeadersConfig {
+	return &SecurityHeadersConfig{
+		Enabled:               true,
+		HSTSMaxAge:            63072000,
+		HSTSIncludeSubDomains: true,
+		HSTSPreload:           true,
+		CSP:                   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+		XContentTypeOptions:   true,
+		XFrameOptions:         "DENY",
+		ReferrerPolicy:        "strict-origin-when-cross-origin",
+		PermissionsPolicy:     "camera=(), microphone=(), geolocation=(), payment=()",
+		XSSProtection:         "1; mode=block",
+		CacheControlAPI:       "no-store, no-cache, must-revalidate",
+		CacheControlStatic:    "public, max-age=31536000",
+		CustomHeaders:         make(map[string]string),
 	}
-	result := 0
-	for i := 0; i < len(a); i++ {
-		result |= int(a[i]) ^ int(b[i])
+}
+
+// SecurityHeaders returns middleware that sets security-related HTTP headers.
+func SecurityHeaders(cfg *SecurityHeadersConfig) func(http.Handler) http.Handler {
+	if cfg == nil {
+		cfg = DefaultSecurityHeadersConfig()
 	}
-	return result == 0
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !cfg.Enabled {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// HSTS
+			if cfg.HSTSMaxAge > 0 {
+				hsts := fmt.Sprintf("max-age=%d", cfg.HSTSMaxAge)
+				if cfg.HSTSIncludeSubDomains {
+					hsts += "; includeSubDomains"
+				}
+				if cfg.HSTSPreload {
+					hsts += "; preload"
+				}
+				w.Header().Set("Strict-Transport-Security", hsts)
+			}
+
+			// Content-Security-Policy
+			if cfg.CSP != "" {
+				w.Header().Set("Content-Security-Policy", cfg.CSP)
+			}
+
+			// X-Content-Type-Options
+			if cfg.XContentTypeOptions {
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+			}
+
+			// X-Frame-Options
+			if cfg.XFrameOptions != "" {
+				w.Header().Set("X-Frame-Options", cfg.XFrameOptions)
+			}
+
+			// Referrer-Policy
+			if cfg.ReferrerPolicy != "" {
+				w.Header().Set("Referrer-Policy", cfg.ReferrerPolicy)
+			}
+
+			// Permissions-Policy
+			if cfg.PermissionsPolicy != "" {
+				w.Header().Set("Permissions-Policy", cfg.PermissionsPolicy)
+			}
+
+			// X-XSS-Protection
+			if cfg.XSSProtection != "" {
+				w.Header().Set("X-XSS-Protection", cfg.XSSProtection)
+			}
+
+			// Cache-Control: use API policy for /api/ paths, static for everything else
+			isAPI := strings.HasPrefix(r.URL.Path, "/api/")
+			if isAPI && cfg.CacheControlAPI != "" {
+				w.Header().Set("Cache-Control", cfg.CacheControlAPI)
+			} else if !isAPI && cfg.CacheControlStatic != "" {
+				w.Header().Set("Cache-Control", cfg.CacheControlStatic)
+			}
+
+			// Custom headers
+			for k, v := range cfg.CustomHeaders {
+				w.Header().Set(k, v)
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }

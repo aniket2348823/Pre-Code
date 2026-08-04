@@ -23,6 +23,9 @@ import (
 	"github.com/vigilagent/vigilagent/pkg/validation"
 )
 
+// taskSemaphore limits concurrent task goroutines to prevent resource exhaustion.
+var taskSemaphore = make(chan struct{}, 50) // max 50 concurrent tasks
+
 func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
@@ -72,6 +75,16 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 		input.MaxIterations = 50
 	}
 
+	// Acquire a slot in the task semaphore before creating the task.
+	// This prevents orphaned DB rows when at capacity.
+	select {
+	case taskSemaphore <- struct{}{}:
+		defer func() { <-taskSemaphore }()
+	default:
+		response.JSON(w, http.StatusTooManyRequests, apperrors.New(apperrors.ErrRateLimited, "too many concurrent tasks"))
+		return
+	}
+
 	task := &repository.Task{
 		ProjectID:     input.ProjectID,
 		UserID:        claims.UserID,
@@ -95,7 +108,6 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 	// Capture start time for TaskDuration metric
 	taskStartTime := time.Now()
 
-	// Start agent execution in background using a fresh context
 	go func() {
 		defer func() {
 			if rec := recover(); rec != nil {

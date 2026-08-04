@@ -166,24 +166,19 @@ func (h *Health) Summary() map[string]interface{} {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	statuses := make(map[string]int)
-	hasUnhealthy := false
+	overall := StatusHealthy
 	for _, c := range h.components {
 		statuses[string(c.Status)]++
-		if c.Status == StatusUnhealthy {
-			return map[string]interface{}{
-				"overall":  string(StatusUnhealthy),
-				"total":    len(h.components),
-				"statuses": statuses,
+		switch c.Status {
+		case StatusUnhealthy:
+			overall = StatusUnhealthy
+		case StatusDegraded:
+			if overall != StatusUnhealthy {
+				overall = StatusDegraded
 			}
 		}
-		if c.Status == StatusDegraded {
-			hasUnhealthy = true
-		}
 	}
-	overall := StatusHealthy
-	if hasUnhealthy {
-		overall = StatusDegraded
-	} else if len(h.components) == 0 {
+	if len(h.components) == 0 {
 		overall = StatusUnknown
 	}
 	return map[string]interface{}{

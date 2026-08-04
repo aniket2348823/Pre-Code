@@ -96,6 +96,10 @@ func New(cfg *config.Config) (*Server, error) {
 			db.Close()
 			return nil, fmt.Errorf("database migration failed: %w", err)
 		}
+		// Recover stuck tasks from previous crash
+		if err := recoverStuckTasks(context.Background(), db); err != nil {
+			slog.Warn("failed to recover stuck tasks", "error", err)
+		}
 	}
 
 	// Connect to Redis with retry
@@ -445,6 +449,28 @@ func New(cfg *config.Config) (*Server, error) {
 	go hotReload.Start(context.Background())
 	srv.hotReload = hotReload
 
+	// Start background API key expiry cleanup (run once at startup, then hourly)
+	if conn != nil {
+		// Run immediately on startup
+		go func() {
+			n, err := apiKeyRepo.CleanupExpiredKeys(context.Background())
+			if err != nil {
+				slog.Warn("apikey cleanup (startup) failed", "error", err)
+			} else if n > 0 {
+				slog.Info("apikey cleanup (startup)", "cleaned", n)
+			}
+		}()
+		// Then hourly
+		keyCancel := apiKeyRepo.StartExpiredKeyCleanup(context.Background(), 1*time.Hour)
+		oldCleanup2 := srv.cleanup
+		srv.cleanup = func() {
+			keyCancel()
+			if oldCleanup2 != nil {
+				oldCleanup2()
+			}
+		}
+	}
+
 	// NOTE: pg_trgm extension should be created via migrations or manually.
 	// CREATE EXTENSION requires superuser and hangs through connection poolers.
 
@@ -560,5 +586,29 @@ func (a *memoryAdapter) Recall(ctx context.Context, query string, limit int) ([]
 
 func (a *memoryAdapter) StoreEpisode(ctx context.Context, userID, episodeType, title, content string, importance float64) error {
 	return a.mgr.StoreEpisode(ctx, userID, episodeType, title, content, importance)
+}
+
+// recoverStuckTasks marks tasks stuck in non-terminal states for > 5 minutes
+// as failed. This handles tasks that were interrupted by a server crash.
+func recoverStuckTasks(ctx context.Context, db *database.Postgres) error {
+	if db == nil || db.Pool == nil {
+		return nil
+	}
+	query := `
+		UPDATE tasks
+		SET status = 'failed',
+		    error = 'task was running when server restarted',
+		    updated_at = NOW()
+		WHERE status IN ('executing', 'planning', 'waiting_hitl', 'pending')
+		  AND updated_at < NOW() - INTERVAL '5 minutes'
+	`
+	tag, err := db.Pool.Exec(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to update stuck tasks: %w", err)
+	}
+	if n := tag.RowsAffected(); n > 0 {
+		slog.Info("recovered stuck tasks", "count", n)
+	}
+	return nil
 }
 

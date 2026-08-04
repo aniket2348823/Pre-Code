@@ -17,9 +17,6 @@ type TaskSSEEvent struct {
 }
 
 // handleWebSocket handles WebSocket upgrade requests.
-// Since this project uses SSE (Server-Sent Events) for real-time streaming
-// (see streamTaskHandler), this endpoint returns guidance directing clients
-// to the SSE endpoints instead.
 func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
@@ -42,8 +39,13 @@ func (r *Router) handleWebSocket(w http.ResponseWriter, req *http.Request) {
 		defer r.wsManager.UnregisterConnection(claims.UserID)
 	}
 
-	// The project uses SSE for real-time streaming, not WebSocket.
-	// Return a simple message directing clients to the SSE endpoint.
+	// Delegate to the WebSocket handler for real upgrade
+	if r.wsHandler != nil {
+		r.wsHandler.ServeHTTP(w, req)
+		return
+	}
+
+	// Fallback: return guidance directing clients to the SSE endpoint
 	response.JSON(w, http.StatusOK, map[string]interface{}{
 		"message": "VigilAgent uses SSE for real-time streaming, not WebSocket.",
 		"sse_endpoint": "/api/v1/tasks/{taskID}/stream",

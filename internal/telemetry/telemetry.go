@@ -130,6 +130,47 @@ var (
 		},
 		[]string{"status"},
 	)
+	// HTTPRequestsTotal tracks total HTTP requests by method, path, and status.
+	HTTPRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "vigilagent",
+			Subsystem: "http",
+			Name:      "requests_total",
+			Help:      "Total HTTP requests by method, path, and status code.",
+		},
+		[]string{"method", "path", "status"},
+	)
+	// HTTPRequestDurationSeconds tracks HTTP request latency histogram.
+	HTTPRequestDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "vigilagent",
+			Subsystem: "http",
+			Name:      "request_duration_seconds",
+			Help:      "HTTP request duration in seconds.",
+			Buckets:   prometheus.DefBuckets,
+		},
+		[]string{"method", "path", "status"},
+	)
+	// AuthFailuresTotal tracks authentication failure count by reason.
+	AuthFailuresTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "vigilagent",
+			Subsystem: "auth",
+			Name:      "failures_total",
+			Help:      "Total authentication failures by reason (missing_token, invalid_token, expired_token, invalid_api_key).",
+		},
+		[]string{"reason"},
+	)
+	// SlowQueryDuration tracks duration of slow database queries.
+	SlowQueryDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "vigilagent",
+			Subsystem: "db",
+			Name:      "slow_query_seconds",
+			Help:      "Duration of slow database queries in seconds.",
+			Buckets:   []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+		},
+	)
 )
 
 // setupDone tracks whether Setup() has been called.

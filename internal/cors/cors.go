@@ -2,6 +2,7 @@
 package cors
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -42,11 +43,37 @@ func ProductionConfig(allowedOrigins []string) Config {
 }
 
 // isOriginAllowed checks if the origin is in the allow list.
+// Supports exact matches and subdomain patterns (e.g., *.example.com).
 func (c Config) isOriginAllowed(origin string) bool {
 	for _, allowed := range c.AllowOrigins {
-		if allowed == "*" || allowed == origin {
+		if allowed == "*" {
 			return true
 		}
+		if matchOrigin(allowed, origin) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchOrigin checks if origin matches an allowed pattern.
+// Supports exact match and wildcard subdomain patterns like *.example.com.
+func matchOrigin(pattern, origin string) bool {
+	if pattern == origin {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := pattern[1:] // ".example.com"
+		idx := strings.Index(origin, "://")
+		if idx == -1 {
+			return false
+		}
+		host := origin[idx+3:]
+		// Strip port
+		if portIdx := strings.LastIndex(host, ":"); portIdx != -1 {
+			host = host[:portIdx]
+		}
+		return strings.HasSuffix(host, suffix)
 	}
 	return false
 }
@@ -60,8 +87,13 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 		if r.Method == http.MethodOptions {
 			if origin != "" && c.isOriginAllowed(origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
 			} else if len(c.AllowOrigins) == 1 && c.AllowOrigins[0] == "*" {
 				w.Header().Set("Access-Control-Allow-Origin", "*")
+			} else {
+				slog.Warn("cors: preflight rejected", "origin", origin, "allowed", c.AllowOrigins)
+				w.WriteHeader(http.StatusNoContent)
+				return
 			}
 			w.Header().Set("Access-Control-Allow-Methods", strings.Join(c.AllowMethods, ", "))
 			w.Header().Set("Access-Control-Allow-Headers", strings.Join(c.AllowHeaders, ", "))
@@ -76,8 +108,11 @@ func (c Config) Middleware(next http.Handler) http.Handler {
 		// Handle regular requests
 		if origin != "" && c.isOriginAllowed(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
 		} else if len(c.AllowOrigins) == 1 && c.AllowOrigins[0] == "*" {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" {
+			slog.Warn("cors: origin rejected", "origin", origin, "allowed", c.AllowOrigins)
 		}
 		if len(c.ExposeHeaders) > 0 {
 			w.Header().Set("Access-Control-Expose-Headers", strings.Join(c.ExposeHeaders, ", "))

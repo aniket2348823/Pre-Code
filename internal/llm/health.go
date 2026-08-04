@@ -168,14 +168,18 @@ func (h *HealthMonitor) RecordSuccess(name string, latency time.Duration) {
 func (h *HealthMonitor) CheckHealth(ctx context.Context, name string) {
 	h.mu.RLock()
 	health, ok := h.providers[name]
+	var provider Provider
+	if ok && health != nil {
+		provider = health.Provider
+	}
 	h.mu.RUnlock()
 
-	if !ok || health == nil {
+	if provider == nil {
 		return
 	}
 
 	start := time.Now()
-	err := health.Provider.HealthCheck(ctx)
+	err := provider.HealthCheck(ctx)
 	latency := time.Since(start)
 
 	if err != nil {
@@ -190,9 +194,12 @@ func (h *HealthMonitor) RunPeriodicChecks(ctx context.Context, interval time.Dur
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	var wg sync.WaitGroup
+
 	for {
 		select {
 		case <-ctx.Done():
+			wg.Wait()
 			return
 		case <-ticker.C:
 			h.mu.RLock()
@@ -203,7 +210,11 @@ func (h *HealthMonitor) RunPeriodicChecks(ctx context.Context, interval time.Dur
 			h.mu.RUnlock()
 
 			for _, name := range names {
-				go h.CheckHealth(ctx, name)
+				wg.Add(1)
+				go func(n string) {
+					defer wg.Done()
+					h.CheckHealth(ctx, n)
+				}(name)
 			}
 		}
 	}

@@ -13,7 +13,7 @@ import (
 // validateCommand checks a command against security policy.
 func validateCommand(command string, security *CommandSecurityConfig) error {
 	if security == nil {
-		return nil
+		return fmt.Errorf("command validation: no security config configured")
 	}
 
 	command = strings.TrimSpace(command)

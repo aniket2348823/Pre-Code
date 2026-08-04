@@ -288,7 +288,9 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 		if retryCount < e.maxRetry {
 			delay := time.Duration(1<<uint(retryCount)) * time.Second
 			time.AfterFunc(delay, func() {
-				e.deliver(ctx, ep, event, retryCount+1)
+				retryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				e.deliver(retryCtx, ep, event, retryCount+1)
 			})
 		}
 		return
@@ -306,7 +308,9 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 		if retryCount < e.maxRetry {
 			delay := time.Duration(1<<uint(retryCount)) * time.Second
 			time.AfterFunc(delay, func() {
-				e.deliver(ctx, ep, event, retryCount+1)
+				retryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				e.deliver(retryCtx, ep, event, retryCount+1)
 			})
 		}
 	}

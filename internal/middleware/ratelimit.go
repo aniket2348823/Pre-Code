@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
@@ -60,15 +62,19 @@ func (rl *RateLimiter) Middleware(keyFunc func(r *http.Request) string) func(htt
 			key := "ratelimit:" + keyFunc(r)
 			now := time.Now().Unix()
 
-			result, err := rateLimitScript.Run(ctx, rl.client, []string{key},
-				int64(rl.window.Seconds()),
-				rl.limit,
-				now,
-			).Int64Slice()
-			if err != nil {
-				next.ServeHTTP(w, r)
-				return
-			}
+		result, err := rateLimitScript.Run(ctx, rl.client, []string{key},
+			int64(rl.window.Seconds()),
+			rl.limit,
+			now,
+		).Int64Slice()
+		if err != nil {
+			// Fail-open strategy: when Redis is unreachable or the script fails,
+			// allow the request through rather than blocking all traffic.
+			// This preserves availability during Redis outages at the cost of
+			// temporarily losing rate limit enforcement.
+			next.ServeHTTP(w, r)
+			return
+		}
 
 			count := result[0]
 			retryAfter := result[1]
@@ -78,6 +84,7 @@ func (rl *RateLimiter) Middleware(keyFunc func(r *http.Request) string) func(htt
 			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(now+int64(rl.window.Seconds()), 10))
 
 			if count > rl.limit {
+				slog.Warn("rate limit exceeded", "key", key, "limit", rl.limit, "remote", r.RemoteAddr)
 				if retryAfter > 0 {
 					w.Header().Set("Retry-After", strconv.FormatInt(retryAfter, 10))
 				}
@@ -102,29 +109,20 @@ func RateLimitByKey(client *redis.Client, key string, limit int, window time.Dur
 }
 
 // RateLimitByIP rate limits by client IP address.
+// Uses only r.RemoteAddr to prevent header spoofing attacks.
 func RateLimitByIP(client *redis.Client, limit int, window time.Duration) func(http.Handler) http.Handler {
 	limiter := NewRateLimiter(client, limit, window)
-	return limiter.Middleware(func(r *http.Request) string {
-		ip := r.Header.Get("X-Forwarded-For")
-		if ip == "" {
-			ip = r.Header.Get("X-Real-IP")
-		}
-		if ip == "" {
-			ip = r.RemoteAddr
-		}
-		return "ip:" + ip
-	})
+	return limiter.Middleware(RateLimitByIPKey)
 }
 
 // RateLimitByUser rate limits by authenticated user ID.
 func RateLimitByUser(client *redis.Client, limit int, window time.Duration) func(http.Handler) http.Handler {
 	limiter := NewRateLimiter(client, limit, window)
 	return limiter.Middleware(func(r *http.Request) string {
-		userID := r.Header.Get("X-User-ID")
-		if userID == "" {
-			userID = r.RemoteAddr
+		if claims, ok := auth.ClaimsFromContext(r.Context()); ok && claims != nil {
+			return "user:" + claims.UserID
 		}
-		return "user:" + userID
+		return RateLimitByIPKey(r)
 	})
 }
 
@@ -133,10 +131,17 @@ func RateLimitByUser(client *redis.Client, limit int, window time.Duration) func
 func RateLimitByIPKey(r *http.Request) string {
 	ip := r.RemoteAddr
 	if strings.HasPrefix(ip, "[") {
+		// IPv6 with port: [::1]:8080 → ::1
 		if idx := strings.LastIndex(ip, "]:"); idx != -1 {
 			ip = ip[1:idx]
+		} else {
+			// IPv6 without port: [::1] → ::1
+			ip = strings.Trim(ip, "[]")
 		}
+	} else if strings.Count(ip, ":") > 1 {
+		// IPv6 without brackets and no port: ::1 stays as ::1
 	} else {
+		// IPv4: strip port
 		if idx := strings.LastIndex(ip, ":"); idx != -1 {
 			ip = ip[:idx]
 		}
@@ -203,8 +208,12 @@ func (rl *RateLimitHeadersMiddleware) Middleware(keyFunc func(*http.Request) str
 			now := time.Now()
 			if !exists || now.Sub(sw.windowStart) > rl.window {
 				rl.mu.Lock()
-				sw = &slidingWindow{windowStart: now}
-				rl.counters[key] = sw
+				// Re-check after acquiring write lock (another goroutine may have created it)
+				sw, exists = rl.counters[key]
+				if !exists || now.Sub(sw.windowStart) > rl.window {
+					sw = &slidingWindow{windowStart: now}
+					rl.counters[key] = sw
+				}
 				rl.mu.Unlock()
 			}
 

@@ -31,6 +31,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/scanner"
 	"github.com/vigilagent/vigilagent/internal/schema"
 	"github.com/vigilagent/vigilagent/internal/webhook"
+	"github.com/vigilagent/vigilagent/internal/websocket"
 )
 
 // Options holds all dependencies for the Router.
@@ -122,6 +123,12 @@ type Options struct {
 
 	// Skill marketplace RAG engine
 	SkillRAG *skills.RAGEngine
+
+	// Login rate limiter (per-IP + per-email progressive lockout)
+	LoginRateLimiter *mw.LoginRateLimiter
+
+	// API key creation rate limiter (per-user)
+	APIKeyCreateRateLimiter *mw.APIKeyCreateRateLimiter
 }
 
 // Router holds all HTTP handlers and dependencies.
@@ -178,15 +185,26 @@ type Router struct {
 	lockoutCancel       context.CancelFunc
 
 	// Security middleware
-	blacklist   *mw.JWTBlacklist
-	auditLogger *mw.AuditLogger
-	csrf        *mw.CSRFMiddleware
-	idempotency *mw.IdempotencyMiddleware
+	blacklist     *mw.JWTBlacklist
+	auditLogger   *mw.AuditLogger
+	csrf          *mw.CSRFMiddleware
+	idempotency   *mw.IdempotencyMiddleware
+	responseCache *mw.ResponseCache
+
+	// Login rate limiter (per-IP + per-email progressive lockout)
+	loginRateLimiter *mw.LoginRateLimiter
+
+	// API key creation rate limiter (per-user)
+	apiKeyCreateRateLimiter *mw.APIKeyCreateRateLimiter
 
 	// Email + Feature Flags + RAG
 	email        *email.VerificationService
 	featureFlags *featureflags.Manager
 	skillRAG     *skills.RAGEngine
+
+	// WebSocket
+	wsHub     *websocket.Hub
+	wsHandler *websocket.Handler
 
 	requirementsHandlerFn http.HandlerFunc
 	validateHandlerFn     http.HandlerFunc
@@ -257,6 +275,8 @@ func newRouter(opts Options) *Router {
 		email:       opts.Email,
 		featureFlags: opts.FeatureFlags,
 		skillRAG:    opts.SkillRAG,
+		loginRateLimiter:         opts.LoginRateLimiter,
+		apiKeyCreateRateLimiter:  opts.APIKeyCreateRateLimiter,
 	}
 }
 
@@ -280,8 +300,33 @@ func New(opts Options) *Router {
 	}
 	r.idempotency = mw.NewIdempotencyMiddleware(10 * time.Minute)
 
+	// Initialize login rate limiter if not provided
+	if r.loginRateLimiter == nil {
+		r.loginRateLimiter = mw.NewLoginRateLimiter(nil, mw.DefaultLoginRateLimiterConfig())
+	}
+
+	// Initialize API key creation rate limiter if not provided
+	if r.apiKeyCreateRateLimiter == nil {
+		r.apiKeyCreateRateLimiter = mw.NewAPIKeyCreateRateLimiter(nil, mw.DefaultAPIKeyCreateRateLimiterConfig())
+	}
+
 	r.initHandlers()
 	r.setupMiddleware()
+
+	// Initialize WebSocket hub and handler
+	r.wsHub = websocket.NewHub(100)
+	go r.wsHub.Run()
+	r.wsHandler = websocket.NewHandler(r.wsHub, func(token string) (string, bool) {
+		if r.auth == nil {
+			return "", false
+		}
+		claims, err := r.auth.ValidateToken(token)
+		if err != nil {
+			return "", false
+		}
+		return claims.UserID, true
+	})
+
 	r.setupRoutes()
 	return r
 }
@@ -361,5 +406,8 @@ func (r *Router) Shutdown() {
 	}
 	if r.hitlQueue != nil {
 		r.hitlQueue.Close()
+	}
+	if r.wsHub != nil {
+		r.wsHub.Stop()
 	}
 }

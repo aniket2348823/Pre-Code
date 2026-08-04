@@ -10,6 +10,14 @@ DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 
 DROP FUNCTION IF EXISTS update_updated_at_column();
 
+DROP TABLE IF EXISTS feature_flags;
+DROP TABLE IF EXISTS skill_embeddings;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS webhook_deliveries;
+DROP TABLE IF EXISTS webhook_endpoints;
+DROP TABLE IF EXISTS budget_usage;
+DROP TABLE IF EXISTS memory_patterns;
+DROP TABLE IF EXISTS memory_episodes;
 DROP TABLE IF EXISTS api_keys;
 DROP TABLE IF EXISTS skill_installs;
 DROP TABLE IF EXISTS subscriptions;
@@ -17,6 +25,7 @@ DROP TABLE IF EXISTS invoices;
 DROP TABLE IF EXISTS alerts;
 DROP TABLE IF EXISTS skill_ratings;
 DROP TABLE IF EXISTS skills;
+DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS events;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS agents;

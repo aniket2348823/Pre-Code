@@ -174,8 +174,8 @@ func TestConfigureSSL_Require(t *testing.T) {
 	if poolCfg.ConnConfig.TLSConfig.ServerName != "db.example.com" {
 		t.Errorf("ServerName = %q, want %q", poolCfg.ConnConfig.TLSConfig.ServerName, "db.example.com")
 	}
-	if !poolCfg.ConnConfig.TLSConfig.InsecureSkipVerify {
-		t.Error("require should set InsecureSkipVerify=true")
+	if poolCfg.ConnConfig.TLSConfig.InsecureSkipVerify {
+		t.Error("require should set InsecureSkipVerify=false to verify server certificate")
 	}
 }
 

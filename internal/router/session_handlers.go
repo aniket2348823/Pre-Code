@@ -91,5 +91,9 @@ func (r *Router) listActiveSessionsHandler(w http.ResponseWriter, req *http.Requ
 		activeSessions = []repository.Session{}
 	}
 
-	response.JSON(w, http.StatusOK, activeSessions)
+	filter, sortVal := query.Parse(req)
+	pag := pagination.ParseRequest(req)
+	processed, meta := query.ProcessList(activeSessions, filter, sortVal, pag)
+
+	response.SuccessWithMeta(w, req, http.StatusOK, processed, meta)
 }

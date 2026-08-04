@@ -247,13 +247,8 @@ func TestAnthropic_Chat_Cost(t *testing.T) {
 func TestAnthropic_Stream_ChatChunkFinish(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		events := []map[string]interface{}{
-			{"type": "content_block_delta", "delta": map[string]string{"text": "Hi"}},
-			{"type": "message_stop"},
-		}
-		for _, e := range events {
-			json.NewEncoder(w).Encode(e)
-		}
+		w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hi\"}}\n\n"))
+		w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 	}))
 	defer srv.Close()
 

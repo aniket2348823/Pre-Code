@@ -117,3 +117,47 @@ func TestNewRateLimitHeadersMiddleware(t *testing.T) {
 	assert.Equal(t, 100, rlm.limit)
 	assert.Equal(t, 30*time.Second, rlm.window)
 }
+
+func TestRateLimitByIPKey_IgnoresHeaders(t *testing.T) {
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.1:9999"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req.Header.Set("X-Real-IP", "5.6.7.8")
+	req.Header.Set("X-Forwarded-Host", "spoofed.com")
+
+	got := RateLimitByIPKey(req)
+	assert.Equal(t, "ip:10.0.0.1", got, "must use RemoteAddr, not proxy headers")
+}
+
+func TestRateLimitByUser_UsesXUserID(t *testing.T) {
+	keyFunc := func(r *http.Request) string {
+		userID := r.Header.Get("X-User-ID")
+		if userID == "" {
+			userID = r.RemoteAddr
+		}
+		return "user:" + userID
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:8080"
+	req.Header.Set("X-User-ID", "user-42")
+
+	got := keyFunc(req)
+	assert.Equal(t, "user:user-42", got, "should extract user from X-User-ID header")
+}
+
+func TestRateLimitByUser_FallsBackToRemoteAddr(t *testing.T) {
+	keyFunc := func(r *http.Request) string {
+		userID := r.Header.Get("X-User-ID")
+		if userID == "" {
+			userID = r.RemoteAddr
+		}
+		return "user:" + userID
+	}
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "192.168.1.1:5000"
+
+	got := keyFunc(req)
+	assert.Equal(t, "user:192.168.1.1:5000", got, "should fall back to RemoteAddr when no X-User-ID")
+}

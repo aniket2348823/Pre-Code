@@ -35,6 +35,7 @@ type EpisodicMemory struct {
 	Embedding  pgvector.Vector `json:"-"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	Similarity  float64       `json:"similarity,omitempty"`
 }
 
 // Store saves a new episodic memory.
@@ -72,7 +73,7 @@ func (s *EpisodicStore) Search(ctx context.Context, userID string, embedding pgv
 		var mem EpisodicMemory
 		if err := rows.Scan(&mem.ID, &mem.UserID, &mem.ProjectID, &mem.EpisodeType,
 			&mem.Title, &mem.Content, &mem.Summary, &mem.Importance,
-			&mem.AccessCount, &mem.Tags, &mem.CreatedAt); err != nil {
+			&mem.AccessCount, &mem.Tags, &mem.CreatedAt, &mem.Similarity); err != nil {
 			continue
 		}
 		results = append(results, mem)

@@ -3,6 +3,7 @@ package llm
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,7 +27,7 @@ type CircuitBreaker struct {
 	lastFailure    time.Time
 	threshold      int
 	timeout        time.Duration
-	halfOpenProbes int // tracks probe requests in HalfOpen state
+	halfOpenProbes atomic.Int32 // tracks probe requests in HalfOpen state
 	mu             sync.RWMutex
 }
 
@@ -48,7 +49,7 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 	if cb.state == CircuitOpen {
 		if time.Since(cb.lastFailure) > cb.timeout {
 			cb.state = CircuitHalfOpen
-			cb.halfOpenProbes = 0
+			cb.halfOpenProbes.Store(0)
 		} else {
 			cb.mu.Unlock()
 			return ErrCircuitOpen
@@ -57,11 +58,10 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 
 	// In HalfOpen, allow only 1 probe request to avoid overloading recovering provider.
 	if cb.state == CircuitHalfOpen {
-		if cb.halfOpenProbes >= 1 {
+		if !cb.halfOpenProbes.CompareAndSwap(0, 1) {
 			cb.mu.Unlock()
 			return ErrCircuitOpen
 		}
-		cb.halfOpenProbes++
 	}
 
 	// Release lock during fn() to avoid blocking other goroutines on slow network calls.
