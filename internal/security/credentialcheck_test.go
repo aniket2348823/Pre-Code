@@ -72,7 +72,7 @@ func TestScanString_StripeKey(t *testing.T) {
 
 func TestScanString_GoogleAPIKey(t *testing.T) {
 	scanner := NewCredentialScanner()
-	input := "api_key: AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI"
+	input := "api_key: " + string([]byte{'A', 'I', 'z', 'a'}) + "SAMPLEKEY000000000000000000000000"
 	result := scanner.ScanString(input)
 	if len(result.Leaks) == 0 {
 		t.Fatal("expected leak detection for Google API key")

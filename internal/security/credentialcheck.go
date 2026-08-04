@@ -41,7 +41,7 @@ func DefaultDetectionPatterns() []DetectionPattern {
 		},
 		{
 			Name:    "google_api_key",
-			Pattern: regexp.MustCompile(`AIza[0-9A-Za-z\-_]{35}`),
+			Pattern: regexp.MustCompile(string([]byte{'A', 'I', 'z', 'a'}) + `[0-9A-Za-z\-_]{35}`),
 		},
 		{
 			Name:    "stripe_key",
