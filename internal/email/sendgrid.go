@@ -14,12 +14,12 @@ import (
 
 // SendGridConfig holds SendGrid API configuration.
 type SendGridConfig struct {
-	APIKey      string
-	FromEmail   string
-	FromName    string
-	Templates   map[string]string // template_id → template name
-	MaxRetries  int
-	RetryDelay  time.Duration
+	APIKey     string
+	FromEmail  string
+	FromName   string
+	Templates  map[string]string // template_id → template name
+	MaxRetries int
+	RetryDelay time.Duration
 }
 
 // SendGridSender implements Sender using the SendGrid API v3.
@@ -158,4 +158,3 @@ func (s *SendGridSender) send(ctx context.Context, to []string, subject, body, h
 	respBody, _ := io.ReadAll(resp.Body)
 	return fmt.Errorf("sendgrid API error (status %d): %s", resp.StatusCode, strings.ReplaceAll(string(respBody), s.cfg.APIKey, maskAPIKey(s.cfg.APIKey)))
 }
-

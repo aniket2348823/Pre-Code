@@ -1,0 +1,47 @@
+# VigilAgent CODEOWNERS
+# Each line is a file pattern followed by one or more owners.
+# Order matters: later rules take precedence over earlier ones.
+
+# Default: all code requires review from the core team
+* @vigilagent/core
+
+# API layer
+/internal/router/ @vigilagent/api-team
+/internal/api/ @vigilagent/api-team
+/internal/middleware/ @vigilagent/api-team
+/cmd/api/ @vigilagent/api-team
+
+# Agent & LLM
+/internal/agent/ @vigilagent/ai-team
+/internal/llm/ @vigilagent/ai-team
+/internal/memory/ @vigilagent/ai-team
+/internal/tools/ @vigilagent/ai-team
+/internal/skills/ @vigilagent/ai-team
+
+# Database & Infrastructure
+/internal/database/ @vigilagent/infra-team
+/internal/config/ @vigilagent/infra-team
+/migrations/ @vigilagent/infra-team
+/Dockerfile @vigilagent/infra-team
+/docker-compose*.yml @vigilagent/infra-team
+/k8s/ @vigilagent/infra-team
+
+# Security
+/internal/security/ @vigilagent/security-team
+/internal/webhook/ @vigilagent/security-team
+/internal/secrets/ @vigilagent/security-team
+
+# CI/CD & DevOps
+/.github/ @vigilagent/devops-team
+/Makefile @vigilagent/devops-team
+/scripts/ @vigilagent/devops-team
+
+# Browser Extension
+/browser-extension/ @vigilagent/frontend-team
+
+# VSCode Extension
+/vscode-extension/ @vigilagent/frontend-team
+
+# Documentation
+/docs/ @vigilagent/docs-team
+*.md @vigilagent/docs-team

@@ -167,7 +167,7 @@ func (r *Router) updateAlertHandler(w http.ResponseWriter, req *http.Request) {
 	// Dispatch webhook notification
 	if r.webhookEngine != nil {
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
-			Type: "alert.updated",
+			Type:    "alert.updated",
 			Payload: map[string]interface{}{"alert_id": alertID, "name": name},
 		})
 	}
@@ -198,7 +198,7 @@ func (r *Router) deleteAlertHandler(w http.ResponseWriter, req *http.Request) {
 	// Dispatch webhook notification
 	if r.webhookEngine != nil {
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
-			Type: "alert.deleted",
+			Type:    "alert.deleted",
 			Payload: map[string]interface{}{"alert_id": alertID},
 		})
 	}

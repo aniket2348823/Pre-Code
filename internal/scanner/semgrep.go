@@ -22,7 +22,7 @@ func NewSemgrepAnalyzer(r Runner) *SemgrepAnalyzer {
 	return &SemgrepAnalyzer{runner: r, exists: func() bool { return toolExists("semgrep") }}
 }
 
-func (s *SemgrepAnalyzer) Name() string   { return "semgrep" }
+func (s *SemgrepAnalyzer) Name() string    { return "semgrep" }
 func (s *SemgrepAnalyzer) Available() bool { return s.exists() }
 
 type semgrepOutput struct {

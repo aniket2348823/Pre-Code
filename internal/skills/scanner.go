@@ -84,6 +84,7 @@ func (s *SkillScanner) ScanPackage(ctx context.Context, packageData []byte) (*Sc
 	defer gr.Close()
 
 	tr := tar.NewReader(gr)
+	var totalBytes int64
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -101,6 +102,21 @@ func (s *SkillScanner) ScanPackage(ctx context.Context, packageData []byte) (*Sc
 		data, err := io.ReadAll(io.LimitReader(tr, 1024*1024))
 		if err != nil {
 			continue
+		}
+
+		// Guard against tar bombs: bound the total decompressed size.
+		totalBytes += int64(len(data))
+		if totalBytes > maxTotalExtractSize {
+			result.Passed = false
+			result.Score = 0
+			result.Issues = append(result.Issues, ScanIssue{
+				Severity: "critical",
+				Category: "size",
+				Message:  fmt.Sprintf("Package decompresses beyond the %d byte total limit", maxTotalExtractSize),
+				Fix:      "Reduce package size or split into multiple packages",
+			})
+			result.Duration = time.Since(start)
+			return result, nil
 		}
 
 		s.scanFileContent(header.Name, data, result)

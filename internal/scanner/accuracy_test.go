@@ -62,9 +62,9 @@ func query(db *sql.DB, id int) {
 			minFindings: 0,
 		},
 		{
-			name:     "CWE-89: SQL INSERT with string concat",
-			filename: "dao.go",
-			code:     `q := fmt.Sprintf("INSERT INTO users (name) VALUES ('%s')", name)`,
+			name:        "CWE-89: SQL INSERT with string concat",
+			filename:    "dao.go",
+			code:        `q := fmt.Sprintf("INSERT INTO users (name) VALUES ('%s')", name)`,
 			expectRules: []string{"sql_injection"},
 			minFindings: 1,
 		},
@@ -97,16 +97,16 @@ func run(name string) {
 
 		// ── CWE-79: Cross-Site Scripting ────────────────────────
 		{
-			name:     "CWE-79: XSS via innerHTML assignment with concatenation",
-			filename: "frontend.js",
-			code:     `<script>document.getElementById("output").innerHTML = "<p>" + userInput + "</p>";</script>`,
+			name:        "CWE-79: XSS via innerHTML assignment with concatenation",
+			filename:    "frontend.js",
+			code:        `<script>document.getElementById("output").innerHTML = "<p>" + userInput + "</p>";</script>`,
 			expectRules: []string{"xss_unsafe_js"},
 			minFindings: 1,
 		},
 		{
-			name:     "CWE-79: XSS via outerHTML assignment",
-			filename: "frontend.js",
-			code:     `document.getElementById("target").outerHTML = "<div>" + userInput;`,
+			name:        "CWE-79: XSS via outerHTML assignment",
+			filename:    "frontend.js",
+			code:        `document.getElementById("target").outerHTML = "<div>" + userInput;`,
 			expectRules: []string{"xss_unsafe_js"},
 			minFindings: 1,
 		},
@@ -234,16 +234,16 @@ func hash(data []byte) []byte {
 		{
 			name:     "CWE-330: math/rand import",
 			filename: "utils.go",
-			code:     `package main
+			code: `package main
 import "math/rand"
 func random() int { return rand.Intn(100) }`,
 			expectRules: []string{"weak_random"},
 			minFindings: 1,
 		},
 		{
-			name:     "CWE-330: math/rand.Float64 usage",
-			filename: "utils.go",
-			code:     `n := rand.Float64()`,
+			name:        "CWE-330: math/rand.Float64 usage",
+			filename:    "utils.go",
+			code:        `n := rand.Float64()`,
 			expectRules: []string{"weak_random"},
 			minFindings: 1,
 		},
@@ -350,9 +350,9 @@ func proxy(r *http.Request) {
 
 		// ── JWT Secrets ─────────────────────────────────────────
 		{
-			name:     "JWT signed with hardcoded string literal",
-			filename: "auth.go",
-			code:     `token, _ := jwt.SigningMethodHS256.SignedString("my-super-secret-key")`,
+			name:        "JWT signed with hardcoded string literal",
+			filename:    "auth.go",
+			code:        `token, _ := jwt.SigningMethodHS256.SignedString("my-super-secret-key")`,
 			expectRules: []string{"weak_jwt_secret"},
 			minFindings: 1,
 		},
@@ -426,16 +426,16 @@ func init() {}`,
 			minFindings: 0,
 		},
 		{
-			name:     "FP: Secure parameterized query",
-			filename: "db.go",
-			code: `rows, err := db.Query("SELECT * FROM users WHERE id = $1 AND status = $2", id, status)`,
+			name:        "FP: Secure parameterized query",
+			filename:    "db.go",
+			code:        `rows, err := db.Query("SELECT * FROM users WHERE id = $1 AND status = $2", id, status)`,
 			denyRules:   []string{"sql_injection", "sql_injection_raw_query"},
 			minFindings: 0,
 		},
 		{
-			name:     "FP: crypto/rand.Intn (not math/rand)",
-			filename: "crypto.go",
-			code:     `n, _ := rand.Int(rand.Reader, big.NewInt(100))`,
+			name:        "FP: crypto/rand.Intn (not math/rand)",
+			filename:    "crypto.go",
+			code:        `n, _ := rand.Int(rand.Reader, big.NewInt(100))`,
 			denyRules:   []string{"weak_random"},
 			minFindings: 0,
 		},
@@ -605,9 +605,9 @@ func init() {}`,
 			minFindings: 0,
 		},
 		{
-			name:     "FP: Test fixture file",
-			filename: "testdata/fixture.json",
-			code: `{"password": "hunter2supersecret"}`,
+			name:        "FP: Test fixture file",
+			filename:    "testdata/fixture.json",
+			code:        `{"password": "hunter2supersecret"}`,
 			denyRules:   []string{"hardcoded_password"},
 			minFindings: 0,
 		},
@@ -2205,7 +2205,7 @@ type fakeAnalyzer struct {
 	err       error
 }
 
-func (f fakeAnalyzer) Name() string   { return f.name }
+func (f fakeAnalyzer) Name() string    { return f.name }
 func (f fakeAnalyzer) Available() bool { return f.available }
 func (f fakeAnalyzer) Analyze(ctx context.Context, in Input) ([]Finding, error) {
 	return f.findings, f.err
@@ -2468,7 +2468,7 @@ func TestIntegration_DedupeAcrossAnalyzers(t *testing.T) {
 			RuleID: sharedRule, Analyzers: []string{"builtin"}, Severity: SeverityCritical,
 			Filename: "x.go", Line: 10, Snippet: snippet,
 			Fingerprint: ComputeFingerprint("x.go", 10, snippet, sharedRule),
-			Category: "injection",
+			Category:    "injection",
 		}},
 	}
 	a2 := fakeAnalyzer{
@@ -2477,7 +2477,7 @@ func TestIntegration_DedupeAcrossAnalyzers(t *testing.T) {
 			RuleID: sharedRule, Analyzers: []string{"bandit"}, Severity: SeverityHigh,
 			Filename: "x.go", Line: 10, Snippet: snippet,
 			Fingerprint: ComputeFingerprint("x.go", 10, snippet, sharedRule),
-			Category: "injection",
+			Category:    "injection",
 		}},
 	}
 

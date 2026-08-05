@@ -183,7 +183,7 @@ func (s *CredentialScanner) ScanString(text string) ScanResult {
 // cleanSecrets strips actual secret values from a line for safe logging.
 func cleanSecrets(line string) string {
 	// Replace anything after : or = that looks like a secret.
-	line = regexp.MustCompile(`(?i)(?:password|secret|key|token)\s*[:=]\s*\S+`).ReplaceAllString(line, `$1=[REDACTED]`)
+	line = regexp.MustCompile(`(?i)(password|secret|key|token)\s*[:=]\s*\S+`).ReplaceAllString(line, `$1=[REDACTED]`)
 	return line
 }
 
@@ -220,7 +220,15 @@ func (rw *redactorWriter) Header() http.Header {
 
 func (rw *redactorWriter) Write(b []byte) (int, error) {
 	if rw.wrote {
-		return rw.underlying.Write(b)
+		// After the initial flush, redact each subsequent chunk individually
+		// so header-first or streamed responses never bypass redaction.
+		result := rw.scanner.ScanBytes(b)
+		for _, leak := range result.Leaks {
+			if rw.logFunc != nil {
+				rw.logFunc(leak)
+			}
+		}
+		return rw.underlying.Write([]byte(result.RedactedBody))
 	}
 	rw.buf.Write(b)
 	return len(b), nil

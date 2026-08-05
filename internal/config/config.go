@@ -30,11 +30,11 @@ type Config struct {
 
 // AuditConfig configures audit log retention and cleanup.
 type AuditConfig struct {
-	RetentionDays    int // Delete audit events older than this many days
-	MaxStorageMB     int // Maximum audit log storage in MB before alerting
-	CleanupInterval  time.Duration
+	RetentionDays     int // Delete audit events older than this many days
+	MaxStorageMB      int // Maximum audit log storage in MB before alerting
+	CleanupInterval   time.Duration
 	CompressAfterDays int // Compress events older than this many days
-	AlertThresholdMB int // Alert when storage exceeds this threshold
+	AlertThresholdMB  int // Alert when storage exceeds this threshold
 }
 
 // IPAnomalyConfig configures IP-based anomaly detection.
@@ -66,23 +66,24 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Host                string
-	Port                int
-	User                string
-	Password            string
-	Name                string
-	SSLMode             string
-	MaxOpenConns        int
-	MaxIdleConns        int
-	MaxLifetime         time.Duration
-	ConnIdleTime        time.Duration // MaxConnIdleTime — how long idle connections stay open (default 5min)
-	PoolMaxOpen         int           // explicit pool max open (default 25, overrides MaxOpenConns if > 0)
-	PoolMaxIdle         int           // explicit pool max idle (default 5)
-	PoolMaxLifetime     time.Duration // explicit pool max connection lifetime (default 5m)
-	PoolMaxIdleTime     time.Duration // explicit pool max idle time (default 3m)
-	SlowQueryThreshold  time.Duration // log queries slower than this (default 100ms)
-	RetryMaxAttempts    int           // max retry attempts for transient errors (default 3)
-	PoolStatsInterval   time.Duration // interval for periodic pool stats logging (default 30s)
+	Host               string
+	Port               int
+	User               string
+	Password           string
+	Name               string
+	SSLMode            string
+	MaxOpenConns       int
+	MaxIdleConns       int
+	MaxLifetime        time.Duration
+	ConnIdleTime       time.Duration // MaxConnIdleTime — how long idle connections stay open (default 5min)
+	PoolMaxOpen        int           // explicit pool max open (default 25, overrides MaxOpenConns if > 0)
+	PoolMaxIdle        int           // explicit pool max idle (default 5)
+	PoolMaxLifetime    time.Duration // explicit pool max connection lifetime (default 5m)
+	PoolMaxIdleTime    time.Duration // explicit pool max idle time (default 3m)
+	SlowQueryThreshold time.Duration // log queries slower than this (default 100ms)
+	RetryMaxAttempts   int           // max retry attempts for transient errors (default 3)
+	PoolStatsInterval  time.Duration // interval for periodic pool stats logging (default 30s)
+	StatementTimeout   time.Duration // per-statement timeout applied via SET statement_timeout (0 = disabled)
 }
 
 type RedisConfig struct {
@@ -98,28 +99,28 @@ type NATSConfig struct {
 }
 
 type AuthConfig struct {
-	JWTSecret         string
-	JWTExpiration     time.Duration
-	JWTAudience       string
-	JWTBindToIP       bool
+	JWTSecret          string
+	JWTExpiration      time.Duration
+	JWTAudience        string
+	JWTBindToIP        bool
 	JWTBindToUserAgent bool
-	APIKeyPrefix      string
+	APIKeyPrefix       string
 }
 
 // LLMConfig holds LLM provider API keys and routing config.
 // Each key is optional; providers are only registered when their key is set.
 type LLMConfig struct {
-	OpenAIKey      string
-	AnthropicKey   string
-	GeminiKey      string
-	OpenRouterKey  string
-	MistralKey     string
-	GroqKey        string
-	NVIDIANIMKey   string
-	CohereKey      string
-	DefaultModel   string
-	BudgetPerTask  float64
-	MaxTokens      int
+	OpenAIKey     string
+	AnthropicKey  string
+	GeminiKey     string
+	OpenRouterKey string
+	MistralKey    string
+	GroqKey       string
+	NVIDIANIMKey  string
+	CohereKey     string
+	DefaultModel  string
+	BudgetPerTask float64
+	MaxTokens     int
 }
 
 type StripeConfig struct {
@@ -163,30 +164,30 @@ type SendGridConfig struct {
 
 // SecretsConfig holds secrets management configuration.
 type SecretsConfig struct {
-	Backend                  string // vault, env, file
-	Path                     string // secrets path/prefix
-	RotationDays             int    // default rotation interval (days)
-	CredentialLeakDetection  bool   // enable outbound credential scanning
-	VaultAddress             string // HashiCorp Vault address
-	VaultToken               string // Vault auth token
-	VaultMountPath           string // Vault KV mount path
+	Backend                 string // vault, env, file
+	Path                    string // secrets path/prefix
+	RotationDays            int    // default rotation interval (days)
+	CredentialLeakDetection bool   // enable outbound credential scanning
+	VaultAddress            string // HashiCorp Vault address
+	VaultToken              string // Vault auth token
+	VaultMountPath          string // Vault KV mount path
 }
 
 // SecurityHeadersConfig holds security header middleware configuration.
 type SecurityHeadersConfig struct {
-	Enabled                bool
-	HSTSMaxAge             int
-	HSTSIncludeSubDomains  bool
-	HSTSPreload            bool
-	CSP                    string
-	XContentTypeOptions    bool
-	XFrameOptions          string
-	ReferrerPolicy         string
-	PermissionsPolicy      string
-	XSSProtection          string
-	CacheControlAPI        string
-	CacheControlStatic     string
-	CustomHeaders          map[string]string
+	Enabled               bool
+	HSTSMaxAge            int
+	HSTSIncludeSubDomains bool
+	HSTSPreload           bool
+	CSP                   string
+	XContentTypeOptions   bool
+	XFrameOptions         string
+	ReferrerPolicy        string
+	PermissionsPolicy     string
+	XSSProtection         string
+	CacheControlAPI       string
+	CacheControlStatic    string
+	CustomHeaders         map[string]string
 }
 
 func Load() (*Config, error) {
@@ -393,11 +394,11 @@ func Load() (*Config, error) {
 			FromName:  viper.GetString("sendgrid.from_name"),
 		},
 		CORS: CORSConfig{
-			AllowedOrigins:  viper.GetStringSlice("cors.allowed_origins"),
-			AllowedMethods:  viper.GetStringSlice("cors.allowed_methods"),
-			AllowedHeaders:  viper.GetStringSlice("cors.allowed_headers"),
+			AllowedOrigins:   viper.GetStringSlice("cors.allowed_origins"),
+			AllowedMethods:   viper.GetStringSlice("cors.allowed_methods"),
+			AllowedHeaders:   viper.GetStringSlice("cors.allowed_headers"),
 			AllowCredentials: viper.GetBool("cors.allow_credentials"),
-			MaxAge:          viper.GetInt("cors.max_age"),
+			MaxAge:           viper.GetInt("cors.max_age"),
 		},
 		Log: LogConfig{
 			Level:  viper.GetString("log.level"),
@@ -505,6 +506,14 @@ func (c *Config) Validate() error {
 	if c.Database.SlowQueryThreshold < 0 {
 		return fmt.Errorf("database.slow_query_threshold must be non-negative")
 	}
+	// PoolMaxOpen == 0 means "unset" (default 25 applied in Load()), so only
+	// enforce the invariant when both fields are explicitly configured.
+	if c.Database.PoolMaxOpen > 0 && c.Database.PoolMaxIdle > c.Database.PoolMaxOpen {
+		return fmt.Errorf("database pool min conns (%d) must not exceed max conns (%d)", c.Database.PoolMaxIdle, c.Database.PoolMaxOpen)
+	}
+	if c.Database.StatementTimeout < 0 {
+		return fmt.Errorf("database.statement_timeout must be non-negative")
+	}
 
 	// Redis
 	if c.Redis.Host == "" {
@@ -609,23 +618,21 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Audit
-	if c.Audit.RetentionDays <= 0 {
-		return fmt.Errorf("audit.retention_days must be positive")
-	}
-	if c.Audit.CompressAfterDays <= 0 {
-		return fmt.Errorf("audit.compress_after_days must be positive")
-	}
-	if c.Audit.CompressAfterDays >= c.Audit.RetentionDays {
-		return fmt.Errorf("audit.compress_after_days must be less than retention_days")
+	// Audit — only validated when explicitly configured (defaults are applied in Load()).
+	if c.Audit.RetentionDays > 0 {
+		if c.Audit.CompressAfterDays <= 0 {
+			return fmt.Errorf("audit.compress_after_days must be positive")
+		}
+		if c.Audit.CompressAfterDays >= c.Audit.RetentionDays {
+			return fmt.Errorf("audit.compress_after_days must be less than retention_days")
+		}
 	}
 
-	// IP Anomaly
-	if c.IPAnomaly.BruteForceThreshold <= 0 {
-		return fmt.Errorf("ip_anomaly.brute_force_threshold must be positive")
-	}
-	if c.IPAnomaly.ScoreThreshold < 0 || c.IPAnomaly.ScoreThreshold > 100 {
-		return fmt.Errorf("ip_anomaly.score_threshold must be between 0 and 100")
+	// IP Anomaly — only validated when explicitly configured (defaults applied in Load()).
+	if c.IPAnomaly.BruteForceThreshold > 0 {
+		if c.IPAnomaly.ScoreThreshold < 0 || c.IPAnomaly.ScoreThreshold > 100 {
+			return fmt.Errorf("ip_anomaly.score_threshold must be between 0 and 100")
+		}
 	}
 
 	return nil

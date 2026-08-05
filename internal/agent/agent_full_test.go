@@ -57,8 +57,8 @@ type mockLLMProvider struct {
 	streamFunc func(ctx context.Context, req *llm.ChatRequest) (<-chan *llm.ChatChunk, error)
 }
 
-func (m *mockLLMProvider) Name() string                                     { return "mock-llm" }
-func (m *mockLLMProvider) HealthCheck(_ context.Context) error              { return nil }
+func (m *mockLLMProvider) Name() string                        { return "mock-llm" }
+func (m *mockLLMProvider) HealthCheck(_ context.Context) error { return nil }
 func (m *mockLLMProvider) Chat(ctx context.Context, req *llm.ChatRequest) (*llm.ChatResponse, error) {
 	if m.chatFunc != nil {
 		return m.chatFunc(ctx, req)
@@ -713,9 +713,9 @@ func TestPlanTask_WithMemoryContext(t *testing.T) {
 			for _, m := range req.Messages {
 				if m.Role == "user" && strings.Contains(m.Content, "past memories") {
 					return &llm.ChatResponse{
-						Content:     planJSON("read_file"),
-						Model:       "gpt-4o",
-						Provider:    "openai",
+						Content:  planJSON("read_file"),
+						Model:    "gpt-4o",
+						Provider: "openai",
 					}, nil
 				}
 			}
@@ -817,7 +817,7 @@ func TestReflectOnFailure_Streaming_Error(t *testing.T) {
 
 func TestBuildResult_NoOutputs(t *testing.T) {
 	a := &Agent{}
-	r := 	a.buildResult(context.Background(), "t1", []llm.Message{{Role: "system", Content: "hi"}})
+	r := a.buildResult(context.Background(), "t1", []llm.Message{{Role: "system", Content: "hi"}})
 	if r != "Task completed with no observable output." {
 		t.Errorf("unexpected: %s", r)
 	}
@@ -833,7 +833,7 @@ func TestBuildResult_NonStreaming_Success(t *testing.T) {
 	history := []llm.Message{
 		{Role: "user", Content: "Step result: {\"output\":\"done\"}"},
 	}
-	r := 	a.buildResult(context.Background(), "t1", history)
+	r := a.buildResult(context.Background(), "t1", history)
 	if r != "Summary of work done" {
 		t.Errorf("result = %s", r)
 	}
@@ -849,7 +849,7 @@ func TestBuildResult_NonStreaming_LLMError(t *testing.T) {
 	history := []llm.Message{
 		{Role: "user", Content: "Step result: {\"output\":\"data\"}"},
 	}
-	r := 	a.buildResult(context.Background(), "t1", history)
+	r := a.buildResult(context.Background(), "t1", history)
 	if !strings.Contains(r, "1 steps") {
 		t.Errorf("expected fallback: %s", r)
 	}
@@ -872,7 +872,7 @@ func TestBuildResult_Streaming_Success(t *testing.T) {
 	history := []llm.Message{
 		{Role: "user", Content: "Step result: {\"output\":\"data\"}"},
 	}
-	r := 	a.buildResult(context.Background(), "t1", history)
+	r := a.buildResult(context.Background(), "t1", history)
 	if r != "streamed summary" {
 		t.Errorf("result = %s", r)
 	}
@@ -889,7 +889,7 @@ func TestBuildResult_Streaming_NilResult(t *testing.T) {
 	history := []llm.Message{
 		{Role: "user", Content: "Step result: {\"output\":\"data\"}"},
 	}
-	r := 	a.buildResult(context.Background(), "t1", history)
+	r := a.buildResult(context.Background(), "t1", history)
 	if !strings.Contains(r, "1 steps") {
 		t.Errorf("expected fallback: %s", r)
 	}
@@ -1028,9 +1028,9 @@ func TestExecuteTask_ToolFailure_NoReflection(t *testing.T) {
 			callCount++
 			if callCount == 1 {
 				return &llm.ChatResponse{
-					Content:     planJSON("fail_tool"),
-					Model:       "gpt-4o",
-					Provider:    "openai",
+					Content:  planJSON("fail_tool"),
+					Model:    "gpt-4o",
+					Provider: "openai",
 				}, nil
 			}
 			// Reflection fails
@@ -1065,9 +1065,9 @@ func TestExecuteTask_ToolFailure_ReflectionError_MultiStep(t *testing.T) {
 			if callCount == 1 {
 				// Plan: 2 steps, first will fail
 				return &llm.ChatResponse{
-					Content:     planJSON("fail_tool", "read_file"),
-					Model:       "gpt-4o",
-					Provider:    "openai",
+					Content:  planJSON("fail_tool", "read_file"),
+					Model:    "gpt-4o",
+					Provider: "openai",
 				}, nil
 			}
 			// Reflection call fails
@@ -1106,9 +1106,9 @@ func TestExecuteTask_ToolFailure_ReflectionNil(t *testing.T) {
 			callCount++
 			if callCount == 1 {
 				return &llm.ChatResponse{
-					Content:     planJSON("fail_tool", "read_file"),
-					Model:       "gpt-4o",
-					Provider:    "openai",
+					Content:  planJSON("fail_tool", "read_file"),
+					Model:    "gpt-4o",
+					Provider: "openai",
 				}, nil
 			}
 			// Reflection returns unparseable content → parsePlanFromResponse returns error → buildDefaultPlan used
@@ -1266,9 +1266,9 @@ func TestExecuteTask_WithMemory(t *testing.T) {
 	p := &mockLLMProvider{
 		chatFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			return &llm.ChatResponse{
-				Content:     planJSON("read_file"),
-				Model:       "gpt-4o",
-				Provider:    "openai",
+				Content:  planJSON("read_file"),
+				Model:    "gpt-4o",
+				Provider: "openai",
 			}, nil
 		},
 	}
@@ -1295,9 +1295,9 @@ func TestExecuteTask_WithHITL(t *testing.T) {
 	p := &mockLLMProvider{
 		chatFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			return &llm.ChatResponse{
-				Content:     planJSON("hitl_tool"),
-				Model:       "gpt-4o",
-				Provider:    "openai",
+				Content:  planJSON("hitl_tool"),
+				Model:    "gpt-4o",
+				Provider: "openai",
 			}, nil
 		},
 	}
@@ -1357,9 +1357,9 @@ func TestExecuteTask_StepFailureTransition(t *testing.T) {
 	p := &mockLLMProvider{
 		chatFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			return &llm.ChatResponse{
-				Content:     planJSON("fail_tool"),
-				Model:       "gpt-4o",
-				Provider:    "openai",
+				Content:  planJSON("fail_tool"),
+				Model:    "gpt-4o",
+				Provider: "openai",
 			}, nil
 		},
 	}
@@ -1393,9 +1393,9 @@ func TestExecuteTask_MaxRetriesReached(t *testing.T) {
 	p := &mockLLMProvider{
 		chatFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			return &llm.ChatResponse{
-				Content:     planJSON("fail_tool"),
-				Model:       "gpt-4o",
-				Provider:    "openai",
+				Content:  planJSON("fail_tool"),
+				Model:    "gpt-4o",
+				Provider: "openai",
 			}, nil
 		},
 	}
@@ -1467,9 +1467,9 @@ func TestExecuteTask_StateCallback(t *testing.T) {
 	p := &mockLLMProvider{
 		chatFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			return &llm.ChatResponse{
-				Content:     planJSON("read_file"),
-				Model:       "gpt-4o",
-				Provider:    "openai",
+				Content:  planJSON("read_file"),
+				Model:    "gpt-4o",
+				Provider: "openai",
 			}, nil
 		},
 	}
@@ -1569,9 +1569,9 @@ func TestExecuteTask_BuildResultWithStepOutputs(t *testing.T) {
 			resultCallCount++
 			if resultCallCount == 1 {
 				return &llm.ChatResponse{
-					Content:     planJSON("read_file"),
-					Model:       "gpt-4o",
-					Provider:    "openai",
+					Content:  planJSON("read_file"),
+					Model:    "gpt-4o",
+					Provider: "openai",
 				}, nil
 			}
 			return &llm.ChatResponse{Content: "synthesized result"}, nil
@@ -1815,7 +1815,7 @@ func TestBuildResult_BuildsConversationCorrectly(t *testing.T) {
 		{Role: "assistant", Content: "I executed step 0"},
 		{Role: "user", Content: "Step result: {\"tool\":\"read\",\"status\":\"ok\",\"output\":\"data\"}"},
 	}
-	r := 	a.buildResult(context.Background(), "t1", history)
+	r := a.buildResult(context.Background(), "t1", history)
 	if r != "verified" {
 		t.Errorf("result = %s", r)
 	}
@@ -1828,9 +1828,9 @@ func TestExecuteTask_ExecutesMultipleStepsWithFailures(t *testing.T) {
 			stepIdx++
 			if stepIdx == 1 {
 				return &llm.ChatResponse{
-					Content:     planJSON("fail_tool", "read_file"),
-					Model:       "gpt-4o",
-					Provider:    "openai",
+					Content:  planJSON("fail_tool", "read_file"),
+					Model:    "gpt-4o",
+					Provider: "openai",
 				}, nil
 			}
 			return &llm.ChatResponse{Content: "done"}, nil
@@ -1866,9 +1866,9 @@ func TestExecuteTask_ToolNotFoundInStep(t *testing.T) {
 	p := &mockLLMProvider{
 		chatFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			return &llm.ChatResponse{
-				Content:     planJSON("nonexistent_tool"),
-				Model:       "gpt-4o",
-				Provider:    "openai",
+				Content:  planJSON("nonexistent_tool"),
+				Model:    "gpt-4o",
+				Provider: "openai",
 			}, nil
 		},
 	}
@@ -1908,7 +1908,7 @@ func TestBuildResult_MultipleStepOutputs(t *testing.T) {
 		{Role: "user", Content: "Step result: o2"},
 		{Role: "user", Content: "Step result: o3"},
 	}
-	r := 	a.buildResult(context.Background(), "t1", history)
+	r := a.buildResult(context.Background(), "t1", history)
 	if r != "processed all steps" {
 		t.Errorf("result = %s", r)
 	}
@@ -2003,9 +2003,9 @@ func TestExecuteTask_HITLCheckpointFields(t *testing.T) {
 	p := &mockLLMProvider{
 		chatFunc: func(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
 			return &llm.ChatResponse{
-				Content:     planJSON("hitl_tool"),
-				Model:       "gpt-4o",
-				Provider:    "openai",
+				Content:  planJSON("hitl_tool"),
+				Model:    "gpt-4o",
+				Provider: "openai",
 			}, nil
 		},
 	}
@@ -2048,9 +2048,9 @@ func TestExecuteTask_BuildResultCalledAfterLoop(t *testing.T) {
 			if callCount == 1 {
 				// Plan call
 				return &llm.ChatResponse{
-					Content:     planJSON("read_file"),
-					Model:       "gpt-4o",
-					Provider:    "openai",
+					Content:  planJSON("read_file"),
+					Model:    "gpt-4o",
+					Provider: "openai",
 				}, nil
 			}
 			// Build result call

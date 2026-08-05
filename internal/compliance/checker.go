@@ -35,20 +35,20 @@ type Mapping struct {
 
 // Report is the checker's output for one description.
 type Report struct {
-	Frameworks   []Framework       `json:"frameworks"`
-	Required     []Mapping         `json:"required"`
-	Satisfied    []Mapping         `json:"satisfied"`
-	Missing      []Mapping         `json:"missing"`
+	Frameworks   []Framework        `json:"frameworks"`
+	Required     []Mapping          `json:"required"`
+	Satisfied    []Mapping          `json:"satisfied"`
+	Missing      []Mapping          `json:"missing"`
 	frameworkSet map[Framework]bool // tracks which frameworks were triggered
 }
 
 // entityRule matches an entity by keywords and lists the controls it mandates.
 type entityRule struct {
-	entity    string
-	keywords  []string   // positive keywords — at least one must match
-	excludes  []string   // exclusion keywords — if any match, skip this rule
-	minScore  float64    // minimum keyword match score to trigger (0.0–1.0)
-	controls  []Control
+	entity   string
+	keywords []string // positive keywords — at least one must match
+	excludes []string // exclusion keywords — if any match, skip this rule
+	minScore float64  // minimum keyword match score to trigger (0.0–1.0)
+	controls []Control
 }
 
 // Checker evaluates a description against the built-in compliance rule set.
@@ -117,9 +117,6 @@ func (c *Checker) Check(description string, declared []string) *Report {
 // computeMatchScore returns a score 0.0–1.0 based on how many keywords match,
 // penalized by exclusion keywords. Uses word-boundary detection.
 
-
-
-
 func sortMappings(mappings []Mapping) {
 	sort.SliceStable(mappings, func(i, j int) bool {
 		if len(mappings[i].Controls) == 0 || len(mappings[j].Controls) == 0 {
@@ -143,7 +140,7 @@ func builtinRules() []entityRule {
 			entity:   "payment",
 			keywords: []string{"payment", "card data", "credit card", "checkout", "billing", "transaction"},
 			excludes: []string{"payment method", "payment gateway"}, // exclude generic payment references
-			minScore: 0.15, // at least 15% of keywords must match
+			minScore: 0.15,                                          // at least 15% of keywords must match
 			controls: []Control{
 				{ID: "pci_encrypt", Framework: FrameworkPCIDSS, Title: "PCI-DSS: Encrypt cardholder data", Severity: scanner.SeverityCritical, Description: "Cardholder data must be encrypted in transit and at rest per PCI-DSS Req 3.4 and 4.1."},
 				{ID: "pci_access", Framework: FrameworkPCIDSS, Title: "PCI-DSS: Restrict access to cardholder data", Severity: scanner.SeverityCritical, Description: "Access to cardholder data must be restricted to need-to-know per PCI-DSS Req 7."},
@@ -168,7 +165,7 @@ func builtinRules() []entityRule {
 			entity:   "pii",
 			keywords: []string{"pii", "personal data", "personal information", "customer data", "user profile", "email address", "phone number", "patient data", "health data", "medical record", "patient health"},
 			excludes: []string{"pii compliance"}, // exclude meta-references about PII policy itself
-			minScore: 0.09, // at least ~1 of 11 keywords
+			minScore: 0.09,                       // at least ~1 of 11 keywords
 			controls: []Control{
 				{ID: "gdpr_consent", Framework: FrameworkGDPR, Title: "GDPR: Explicit consent", Severity: scanner.SeverityHigh, Description: "Explicit consent required for PII processing per GDPR Art. 6."},
 				{ID: "gdpr_minimize", Framework: FrameworkGDPR, Title: "GDPR: Data minimization", Severity: scanner.SeverityHigh, Description: "Collect only necessary PII per GDPR Art. 5(1)(c)."},

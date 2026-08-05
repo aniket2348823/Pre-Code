@@ -12,9 +12,9 @@ import (
 
 // RedisTokenStore persists verification tokens in Redis for durability across restarts.
 type RedisTokenStore struct {
-	client     *redis.Client
-	prefix     string
-	tokenTTL   time.Duration
+	client   *redis.Client
+	prefix   string
+	tokenTTL time.Duration
 }
 
 // NewRedisTokenStore creates a Redis-backed token store.

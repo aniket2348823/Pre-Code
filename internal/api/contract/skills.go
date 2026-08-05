@@ -41,16 +41,16 @@ type ListSkillsResponse struct {
 
 // Skill is the public skill entity.
 type Skill struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Author      string   `json:"author"`
-	Version     string   `json:"version"`
-	Downloads   int      `json:"downloads"`
-	Rating      float64  `json:"rating"`
-	Category    string   `json:"category,omitempty"`
-	Permissions []string `json:"permissions,omitempty"`
-	Verified    bool     `json:"verified"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Author      string    `json:"author"`
+	Version     string    `json:"version"`
+	Downloads   int       `json:"downloads"`
+	Rating      float64   `json:"rating"`
+	Category    string    `json:"category,omitempty"`
+	Permissions []string  `json:"permissions,omitempty"`
+	Verified    bool      `json:"verified"`
 	CreatedAt   Timestamp `json:"created_at"`
 	UpdatedAt   Timestamp `json:"updated_at"`
 }

@@ -44,20 +44,20 @@ type Requirements struct {
 
 // Skill represents a registered skill.
 type Skill struct {
-	ID           string    `json:"id"`
-	AuthorID     string    `json:"author_id"`
-	Manifest     Manifest  `json:"manifest"`
-	PackageURL   string    `json:"package_url"`
-	PackageSize  int       `json:"package_size"`
-	Checksum     string    `json:"checksum"`
-	IsVerified   bool      `json:"is_verified"`
-	IsFeatured   bool      `json:"is_featured"`
-	IsPublished  bool      `json:"is_published"`
-	InstallCount int       `json:"install_count"`
-	RatingAvg    float64   `json:"rating_avg"`
-	RatingCount  int       `json:"rating_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string     `json:"id"`
+	AuthorID     string     `json:"author_id"`
+	Manifest     Manifest   `json:"manifest"`
+	PackageURL   string     `json:"package_url"`
+	PackageSize  int        `json:"package_size"`
+	Checksum     string     `json:"checksum"`
+	IsVerified   bool       `json:"is_verified"`
+	IsFeatured   bool       `json:"is_featured"`
+	IsPublished  bool       `json:"is_published"`
+	InstallCount int        `json:"install_count"`
+	RatingAvg    float64    `json:"rating_avg"`
+	RatingCount  int        `json:"rating_count"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 	PublishedAt  *time.Time `json:"published_at,omitempty"`
 }
 
@@ -131,7 +131,7 @@ func (r *Registry) Search(query string, limit int) []*Skill {
 	var result []*Skill
 	queryLower := strings.ToLower(query)
 	for _, skill := range r.skills {
-		if len(result) >= limit {
+		if limit > 0 && len(result) >= limit {
 			break
 		}
 		if !skill.IsPublished {

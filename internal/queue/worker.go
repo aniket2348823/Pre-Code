@@ -27,11 +27,11 @@ type TaskHandler func(ctx context.Context, payload TaskPayload) error
 
 // TaskWorker consumes tasks from NATS JetStream with retry and dead-letter support.
 type TaskWorker struct {
-	nats      *NATS
-	consumer  jetstream.Consumer
-	stream    string
-	subject   string
-	handler   TaskHandler
+	nats       *NATS
+	consumer   jetstream.Consumer
+	stream     string
+	subject    string
+	handler    TaskHandler
 	maxRetries int
 }
 
@@ -74,10 +74,10 @@ func NewTaskWorker(natsConn *NATS, cfg WorkerConfig, handler TaskHandler) (*Task
 
 	// Create consumer
 	consumer, err := natsConn.JS.CreateOrUpdateConsumer(ctx, cfg.Stream, jetstream.ConsumerConfig{
-		Durable:   "task-worker",
-		AckPolicy: jetstream.AckExplicitPolicy,
-		AckWait:   cfg.AckWait,
-		MaxDeliver: cfg.MaxDeliver,
+		Durable:       "task-worker",
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       cfg.AckWait,
+		MaxDeliver:    cfg.MaxDeliver,
 		FilterSubject: cfg.Stream + "." + cfg.Subject,
 	})
 	if err != nil {

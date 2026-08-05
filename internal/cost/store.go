@@ -2,6 +2,7 @@ package cost
 
 import (
 	"context"
+
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 

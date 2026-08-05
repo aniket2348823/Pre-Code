@@ -21,7 +21,7 @@ func NewBanditAnalyzer(r Runner) *BanditAnalyzer {
 	return &BanditAnalyzer{runner: r, exists: func() bool { return toolExists("bandit") }}
 }
 
-func (b *BanditAnalyzer) Name() string   { return "bandit" }
+func (b *BanditAnalyzer) Name() string    { return "bandit" }
 func (b *BanditAnalyzer) Available() bool { return b.exists() }
 
 type banditOutput struct {

@@ -30,12 +30,12 @@ type Skill struct {
 
 // SkillInstallation represents an installed skill.
 type SkillInstallation struct {
-	ID        string    `json:"id"`
-	SkillID   string    `json:"skill_id"`
-	UserID    string    `json:"user_id"`
-	ProjectID string    `json:"project_id,omitempty"`
-	Status    string    `json:"status"`
-	Config    []byte    `json:"-"`
+	ID          string    `json:"id"`
+	SkillID     string    `json:"skill_id"`
+	UserID      string    `json:"user_id"`
+	ProjectID   string    `json:"project_id,omitempty"`
+	Status      string    `json:"status"`
+	Config      []byte    `json:"-"`
 	InstalledAt time.Time `json:"installed_at"`
 }
 
@@ -259,7 +259,7 @@ func (r *SkillRepository) ListRatings(ctx context.Context, skillID string, offse
 		}
 		ratings = append(ratings, sr)
 	}
-	return ratings, total, nil
+	return ratings, total, rows.Err()
 }
 
 // Install creates a skill installation record.

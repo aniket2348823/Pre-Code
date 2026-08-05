@@ -211,7 +211,7 @@ func TestNVIDIANIM_Chat_WithTemperature(t *testing.T) {
 		}),
 	}
 	_, err := n.Chat(context.Background(), &ChatRequest{
-		Model: "nvidia/llama-3.1-405b-instruct",
+		Model:       "nvidia/llama-3.1-405b-instruct",
 		Messages:    []Message{{Role: "user", Content: "hi"}},
 		MaxTokens:   200,
 		Temperature: 0.7,

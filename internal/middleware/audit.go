@@ -155,14 +155,18 @@ func extractResource(path string) string {
 
 // AuditCleanup handles periodic cleanup and compression of old audit logs.
 type AuditCleanup struct {
-	pool   *database.Conn
-	config config.AuditConfig
-	stop   chan struct{}
-	wg     sync.WaitGroup
+	pool      *database.Conn
+	config    config.AuditConfig
+	stop      chan struct{}
+	wg        sync.WaitGroup
+	startOnce sync.Once
 }
 
 // NewAuditCleanup creates a new audit cleanup manager.
 func NewAuditCleanup(pool *database.Conn, cfg config.AuditConfig) *AuditCleanup {
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = time.Hour
+	}
 	return &AuditCleanup{
 		pool:   pool,
 		config: cfg,
@@ -172,30 +176,40 @@ func NewAuditCleanup(pool *database.Conn, cfg config.AuditConfig) *AuditCleanup 
 
 // Start begins the periodic cleanup job.
 func (ac *AuditCleanup) Start() {
-	ac.wg.Add(1)
-	go func() {
-		defer ac.wg.Done()
-		ticker := time.NewTicker(ac.config.CleanupInterval)
-		defer ticker.Stop()
+	ac.startOnce.Do(func() {
+		ac.wg.Add(1)
+		go func() {
+			defer ac.wg.Done()
+			ticker := time.NewTicker(ac.config.CleanupInterval)
+			defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				ac.runCleanup()
-			case <-ac.stop:
-				return
+			for {
+				select {
+				case <-ticker.C:
+					ac.runCleanup()
+				case <-ac.stop:
+					return
+				}
 			}
-		}
-	}()
-	slog.Info("audit cleanup started",
-		"interval", ac.config.CleanupInterval,
-		"retention_days", ac.config.RetentionDays,
-	)
+		}()
+		slog.Info("audit cleanup started",
+			"interval", ac.config.CleanupInterval,
+			"retention_days", ac.config.RetentionDays,
+		)
+	})
 }
 
 // Stop signals the cleanup goroutine to stop and waits for it.
+// Safe to call multiple times.
 func (ac *AuditCleanup) Stop() {
-	close(ac.stop)
+	if ac.stop != nil {
+		select {
+		case <-ac.stop:
+			// already closed
+		default:
+			close(ac.stop)
+		}
+	}
 	ac.wg.Wait()
 }
 

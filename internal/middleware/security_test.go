@@ -1,11 +1,16 @@
 package middleware
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestSanitizeInput(t *testing.T) {
@@ -74,7 +79,9 @@ func TestDetectXSS(t *testing.T) {
 func TestSanitizeMiddleware(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	tests := []struct {
-		name string; path string; code int
+		name string
+		path string
+		code int
 	}{
 		{"normal", "/api/users", http.StatusOK},
 		{"encoded-traversal", "/api/%2e%2e%2fetc%2fpasswd", http.StatusBadRequest},
@@ -327,8 +334,6 @@ func TestCSRFProtect_EmptyHeader(t *testing.T) {
 		t.Errorf("empty header should be 403, got %d", rec.Code)
 	}
 }
-
-// --- Security Headers Tests ---
 
 func TestDefaultSecurityHeadersConfig(t *testing.T) {
 	cfg := DefaultSecurityHeadersConfig()
@@ -645,7 +650,7 @@ func TestSecurityHeaders_AllHeadersPresent(t *testing.T) {
 		"X-Frame-Options":           "DENY",
 		"Referrer-Policy":           "strict-origin-when-cross-origin",
 		"Permissions-Policy":        cfg.PermissionsPolicy,
-		"X-XSS-Protection":         "1; mode=block",
+		"X-XSS-Protection":          "1; mode=block",
 	}
 
 	for name, want := range expected {
@@ -672,4 +677,520 @@ func TestSecurityHeaders_PassesToNext(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", rec.Code)
 	}
+}
+
+func TestBodySizeLimiter_AllowsGET(t *testing.T) {
+	cfg := BodySizeConfig{MaxBodySize: 1024}
+	handler := BodySizeLimiter(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestBodySizeLimiter_AllowsDELETE(t *testing.T) {
+	cfg := BodySizeConfig{MaxBodySize: 1024}
+	handler := BodySizeLimiter(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("DELETE", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestBodySizeLimiter_LimitsPOST(t *testing.T) {
+	cfg := BodySizeConfig{MaxBodySize: 10}
+	handler := BodySizeLimiter(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 100)
+		n, err := r.Body.Read(buf)
+		if n > 0 && err != nil {
+			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	body := strings.NewReader("this body is definitely larger than 10 bytes for sure")
+	req := httptest.NewRequest("POST", "/", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.NotEqual(t, http.StatusOK, w.Code)
+}
+
+func TestBodySizeLimiter_LimitsPUT(t *testing.T) {
+	cfg := BodySizeConfig{MaxBodySize: 10}
+	handler := BodySizeLimiter(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 100)
+		n, err := r.Body.Read(buf)
+		if n > 0 && err != nil {
+			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	body := strings.NewReader("this body is definitely larger than 10 bytes")
+	req := httptest.NewRequest("PUT", "/", body)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.NotEqual(t, http.StatusOK, w.Code)
+}
+
+func TestBodySizeLimiter_LimitsPATCH(t *testing.T) {
+	cfg := BodySizeConfig{MaxBodySize: 10}
+	handler := BodySizeLimiter(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 100)
+		n, err := r.Body.Read(buf)
+		if n > 0 && err != nil {
+			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	body := strings.NewReader("this body is definitely larger than 10 bytes")
+	req := httptest.NewRequest("PATCH", "/", body)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.NotEqual(t, http.StatusOK, w.Code)
+}
+
+func TestBodySizeLimiter_SmallBodyAllowed(t *testing.T) {
+	cfg := BodySizeConfig{MaxBodySize: 1024}
+	handler := BodySizeLimiter(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 100)
+		n, err := r.Body.Read(buf)
+		if err != nil && err.Error() != "EOF" {
+			http.Error(w, "error", http.StatusBadRequest)
+			return
+		}
+		_ = n
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	body := strings.NewReader(`{"email":"test@example.com"}`)
+	req := httptest.NewRequest("POST", "/", body)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestBodySizeLimiter_DefaultConfig(t *testing.T) {
+	cfg := DefaultBodySizeConfig()
+	assert.Equal(t, int64(10<<20), cfg.MaxBodySize)
+}
+
+func TestBodySizeLimiter_NegativeConfigUsesDefault(t *testing.T) {
+	cfg := BodySizeConfig{MaxBodySize: -1}
+	handler := BodySizeLimiter(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	body := strings.NewReader("small")
+	req := httptest.NewRequest("POST", "/", body)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestBodySizeLimiter_NilBody(t *testing.T) {
+	cfg := BodySizeConfig{MaxBodySize: 1024}
+	handler := BodySizeLimiter(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandleMaxBytesError_NilError(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/", nil)
+	handled := HandleMaxBytesError(w, req, nil)
+	assert.False(t, handled)
+}
+
+func TestHandleMaxBytesError_OtherError(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/", nil)
+	handled := HandleMaxBytesError(w, req, errors.New("some other error"))
+	assert.False(t, handled)
+}
+
+func TestHandleMaxBytesError_MaxBytesError(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/", nil)
+	handled := HandleMaxBytesError(w, req, errors.New("http: request body too large"))
+	assert.True(t, handled)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+}
+
+func newCSRF() *CSRFMiddleware {
+	return NewCSRFMiddleware([]byte("test-secret-key-for-csrf-testing-1234"))
+}
+
+func csrfRequest(method, path string) *http.Request {
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("Authorization", "Bearer header.payload.signature")
+	return req
+}
+
+func setCSRFCookie(req *http.Request, token string) {
+	req.AddCookie(&http.Cookie{Name: "_csrf", Value: token})
+}
+
+func extractCSRFToken(w *httptest.ResponseRecorder) string {
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "_csrf" {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+func TestCSRF_GeneratesAndValidatesToken(t *testing.T) {
+	m := newCSRF()
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := csrfRequest("POST", "/api/v1/agents")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("first POST: want 403, got %d", w.Code)
+	}
+	token := extractCSRFToken(w)
+	if token == "" {
+		t.Fatal("expected CSRF cookie to be set even on 403")
+	}
+
+	req2 := csrfRequest("POST", "/api/v1/agents")
+	setCSRFCookie(req2, token)
+	req2.Header.Set("X-CSRF-Token", token)
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second POST: want 200, got %d", w2.Code)
+	}
+}
+
+func TestCSRF_HttpOnlyCookieFlag(t *testing.T) {
+	m := newCSRF()
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := csrfRequest("POST", "/test")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "_csrf" {
+			if !c.HttpOnly {
+				t.Error("CSRF cookie must have HttpOnly=true")
+			}
+			return
+		}
+	}
+	t.Error("no _csrf cookie found")
+}
+
+func TestCSRF_SameSiteStrict(t *testing.T) {
+	m := newCSRF()
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := csrfRequest("POST", "/test")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "_csrf" {
+			if c.SameSite != http.SameSiteStrictMode {
+				t.Errorf("SameSite = %v, want SameSiteStrictMode", c.SameSite)
+			}
+			return
+		}
+	}
+	t.Error("no _csrf cookie found")
+}
+
+func TestCSRF_TamperedSignatureFails(t *testing.T) {
+	m := newCSRF()
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := csrfRequest("POST", "/test")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	validToken := extractCSRFToken(w)
+
+	parts := strings.SplitN(validToken, ".", 2)
+	tampered := parts[0] + ".0000000000000000000000000000000000000000000000000000000000000000"
+
+	req2 := csrfRequest("POST", "/test")
+	setCSRFCookie(req2, validToken)
+	req2.Header.Set("X-CSRF-Token", tampered)
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusForbidden {
+		t.Errorf("tampered token: want 403, got %d", w2.Code)
+	}
+}
+
+func TestCSRF_MissingTokenReturns403(t *testing.T) {
+	m := newCSRF()
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := csrfRequest("POST", "/test")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("missing token: want 403, got %d", w.Code)
+	}
+}
+
+func TestCSRF_SafeMethodsSkipValidation(t *testing.T) {
+	m := newCSRF()
+	called := false
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, method := range []string{"GET", "HEAD", "OPTIONS"} {
+		called = false
+		req := csrfRequest(method, "/test")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if !called {
+			t.Errorf("%s should skip CSRF validation", method)
+		}
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: want 200, got %d", method, w.Code)
+		}
+	}
+}
+
+func TestCSRF_ExcludedPathsSkipValidation(t *testing.T) {
+	m := newCSRF()
+	called := false
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, path := range []string{"/api/v1/health", "/api/v1/ready", "/api/v1/metrics"} {
+		called = false
+		req := csrfRequest("POST", path)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if !called {
+			t.Errorf("path %s should skip CSRF validation", path)
+		}
+	}
+}
+
+func TestCSRF_APIKeyRequestSkipsValidation(t *testing.T) {
+	m := newCSRF()
+	called := false
+	handler := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/test", nil)
+	req.Header.Set("X-API-Key", "va_test_key_123")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if !called {
+		t.Error("API key request should skip CSRF validation")
+	}
+}
+
+func TestCSRF_FormValueFallback(t *testing.T) {
+	m := newCSRF()
+
+	req := csrfRequest("POST", "/test")
+	w := httptest.NewRecorder()
+	m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(w, req)
+	token := extractCSRFToken(w)
+
+	req2 := csrfRequest("POST", "/test")
+	setCSRFCookie(req2, token)
+	req2.Form = nil
+	req2.Header.Del("X-CSRF-Token")
+
+	req2.Body = io.NopCloser(strings.NewReader("csrf_token=" + token))
+	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w2 := httptest.NewRecorder()
+	m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Errorf("form value fallback: want 200, got %d", w2.Code)
+	}
+}
+
+func TestCSRF_SetToken(t *testing.T) {
+	m := newCSRF()
+	w := httptest.NewRecorder()
+	req := csrfRequest("GET", "/")
+
+	m.SetToken(w, req)
+
+	token := w.Header().Get("X-CSRF-Token")
+	if token == "" {
+		t.Error("SetToken should set X-CSRF-Token header")
+	}
+
+	found := false
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "_csrf" && c.Value == token {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("SetToken should set matching cookie")
+	}
+}
+
+func TestCSRF_VerifyToken_InvalidFormat(t *testing.T) {
+	m := newCSRF()
+	if m.verifyToken("noseparator") {
+		t.Error("token without dot should fail")
+	}
+	if m.verifyToken(".") {
+		t.Error("empty token should fail")
+	}
+}
+
+func TestRedactValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		value    string
+		expected string
+	}{
+		{"password redacted", "password", "secret123", "***REDACTED***"},
+		{"password_hash redacted", "password_hash", "abc", "***REDACTED***"},
+		{"api_key redacted", "api_key", "key123", "***REDACTED***"},
+		{"api-key redacted", "api-key", "key123", "***REDACTED***"},
+		{"x-api-key redacted", "x-api-key", "key123", "***REDACTED***"},
+		{"authorization redacted", "authorization", "Bearer tok", "***REDACTED***"},
+		{"token redacted", "token", "val", "***REDACTED***"},
+		{"access_token redacted", "access_token", "val", "***REDACTED***"},
+		{"refresh_token redacted", "refresh_token", "val", "***REDACTED***"},
+		{"secret redacted", "secret", "val", "***REDACTED***"},
+		{"secret_key redacted", "secret_key", "val", "***REDACTED***"},
+		{"jwt_secret redacted", "jwt_secret", "val", "***REDACTED***"},
+		{"credit_card redacted", "credit_card", "4111", "***REDACTED***"},
+		{"ssn redacted", "ssn", "123-45-6789", "***REDACTED***"},
+		{"pin redacted", "pin", "1234", "***REDACTED***"},
+		{"case insensitive password", "Password", "val", "***REDACTED***"},
+		{"case insensitive Authorization", "Authorization", "Bearer tok", "***REDACTED***"},
+		{"non-sensitive passthrough", "username", "admin", "admin"},
+		{"non-sensitive Content-Type", "Content-Type", "application/json", "application/json"},
+		{"empty value passthrough", "password", "", ""},
+		{"empty key passthrough", "", "value", "value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RedactValue(tt.key, tt.value)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestRedactHeaders(t *testing.T) {
+	headers := map[string][]string{
+		"Authorization": {"Bearer secret-token"},
+		"Content-Type":  {"application/json"},
+		"X-API-Key":     {"va_abc123"},
+		"X-Custom":      {"custom-value"},
+		"Password":      {"hunter2"},
+		"Empty-Header":  {},
+	}
+
+	result := RedactHeaders(headers)
+
+	assert.Equal(t, "***REDACTED***", result["Authorization"])
+	assert.Equal(t, "application/json", result["Content-Type"])
+	assert.Equal(t, "***REDACTED***", result["X-API-Key"])
+	assert.Equal(t, "custom-value", result["X-Custom"])
+	assert.Equal(t, "***REDACTED***", result["Password"])
+	_, hasEmpty := result["Empty-Header"]
+	assert.False(t, hasEmpty, "empty header should not appear in result")
+}
+
+func TestRedactHeaders_Empty(t *testing.T) {
+	result := RedactHeaders(map[string][]string{})
+	assert.Empty(t, result)
+}
+
+func TestRedactLogger_CallsNext(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := RedactLogger(next)
+	req := httptest.NewRequest("GET", "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-API-Key", "va_secret_key")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.True(t, called, "RedactLogger must call next handler")
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestRedactLogger_DoesNotLeakAuthHeaders(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := RedactLogger(next)
+	req := httptest.NewRequest("GET", "/api/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer super-secret-token")
+	req.Header.Set("X-API-Key", "va_secret_api_key")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
 }

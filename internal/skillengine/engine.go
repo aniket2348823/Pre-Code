@@ -31,13 +31,13 @@ type Skill struct {
 
 // Finding is a validated security finding that can become a skill.
 type Finding struct {
-	Severity  string   `json:"severity"`
-	Message   string   `json:"message"`
-	Filename  string   `json:"filename"`
-	Line      int      `json:"line"`
-	Fix       string   `json:"fix"`
-	Analyzers []string `json:"analyzers"`
-	Confidence float64 `json:"confidence"`
+	Severity   string   `json:"severity"`
+	Message    string   `json:"message"`
+	Filename   string   `json:"filename"`
+	Line       int      `json:"line"`
+	Fix        string   `json:"fix"`
+	Analyzers  []string `json:"analyzers"`
+	Confidence float64  `json:"confidence"`
 }
 
 // SkillRank holds ranking metrics for a skill.

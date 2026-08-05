@@ -18,13 +18,13 @@ const (
 
 // Limiter enforces rate limits on requests.
 type Limiter struct {
-	mu         sync.Mutex
-	algorithm  Algorithm
-	limit      int
-	window     time.Duration
-	maxTokens  float64
-	refillRate float64
-	buckets    map[string]*windowBucket
+	mu          sync.Mutex
+	algorithm   Algorithm
+	limit       int
+	window      time.Duration
+	maxTokens   float64
+	refillRate  float64
+	buckets     map[string]*windowBucket
 	stopCleanup chan struct{}
 }
 

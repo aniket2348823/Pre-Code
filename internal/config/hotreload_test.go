@@ -49,6 +49,10 @@ func TestHotReloader_StartAndStop(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Start did not return after context cancel")
 	}
+
+	// Reset viper's global state so the OnConfigChange handler registered by
+	// Start does not fire during later tests (viper is a package-level singleton).
+	viper.Reset()
 }
 
 func TestHotReloader_WithOnChangeCallback(t *testing.T) {
@@ -145,11 +149,11 @@ server:
 func TestHotReloader_StartCallbackOnFileChange(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.yaml")
-  validYAML := "server:\n  host: 0.0.0.0\n  port: 8080\n  env: development\n  read_timeout: 10s\n  write_timeout: 10s\ndatabase:\n  host: localhost\n  port: 5432\n  user: u\n  name: n\n  max_open_conns: 10\nredis:\n  host: localhost\n  port: 6379\nnats:\n  url: nats://x\n  stream: s\nauth:\n  jwt_secret: test-secret-32-chars-long-ok!!!!\n  jwt_expiration: 24h\nllm:\n  default_model: m\n"
+	validYAML := "server:\n  host: 0.0.0.0\n  port: 8080\n  env: development\n  read_timeout: 10s\n  write_timeout: 10s\ndatabase:\n  host: localhost\n  port: 5432\n  user: u\n  name: n\n  max_open_conns: 10\nredis:\n  host: localhost\n  port: 6379\nnats:\n  url: nats://x\n  stream: s\nauth:\n  jwt_secret: test-secret-32-chars-long-ok!!!!\n  jwt_expiration: 24h\nllm:\n  default_model: m\n"
 	os.WriteFile(cfgFile, []byte(validYAML), 0644)
 
 	// Point viper at the temp config
- oldEnv := os.Getenv("VIGILAGENT_CONFIG_PATH")
+	oldEnv := os.Getenv("VIGILAGENT_CONFIG_PATH")
 	os.Setenv("VIGILAGENT_CONFIG_PATH", cfgFile)
 	defer func() {
 		if oldEnv == "" {
@@ -169,7 +173,7 @@ func TestHotReloader_StartCallbackOnFileChange(t *testing.T) {
 	cfg := &Config{Server: ServerConfig{Host: "old"}}
 	hr := NewHotReloader(cfg)
 
- callbackCh := make(chan *Config, 1)
+	callbackCh := make(chan *Config, 1)
 	hr.OnChange(func(newCfg *Config) {
 		callbackCh <- newCfg
 	})
@@ -197,7 +201,7 @@ func TestHotReloader_StartCallbackOnFileChange(t *testing.T) {
 		t.Fatal("callback not triggered after config file change")
 	}
 
- cancel()
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -211,7 +215,7 @@ func TestHotReloader_StartValidationFailureOnReload(t *testing.T) {
 	initialContent := []byte("server:\n  host: 0.0.0.0\n  port: 8080\n  env: development\n  read_timeout: 10s\n  write_timeout: 10s\n")
 	os.WriteFile(cfgFile, initialContent, 0644)
 
- oldEnv := os.Getenv("VIGILAGENT_CONFIG_PATH")
+	oldEnv := os.Getenv("VIGILAGENT_CONFIG_PATH")
 	os.Setenv("VIGILAGENT_CONFIG_PATH", cfgFile)
 	defer func() {
 		if oldEnv == "" {
@@ -230,7 +234,7 @@ func TestHotReloader_StartValidationFailureOnReload(t *testing.T) {
 	cfg := &Config{Server: ServerConfig{Host: "old"}}
 	hr := NewHotReloader(cfg)
 
- callbackCh := make(chan *Config, 1)
+	callbackCh := make(chan *Config, 1)
 	hr.OnChange(func(newCfg *Config) {
 		callbackCh <- newCfg
 	})
@@ -262,7 +266,7 @@ func TestHotReloader_StartValidationFailureOnReload(t *testing.T) {
 		t.Errorf("expected old config preserved, got host %q", hr.Config().Server.Host)
 	}
 
- cancel()
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):

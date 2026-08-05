@@ -11,17 +11,17 @@ import (
 
 // Alert represents an alert record in the database.
 type Alert struct {
-	ID         string                 `json:"id"`
-	UserID     string                 `json:"user_id"`
-	OrgID      string                 `json:"org_id,omitempty"`
-	Name       string                 `json:"name"`
-	Type       string                 `json:"type"`
-	Condition  map[string]interface{} `json:"condition,omitempty"`
-	Channel    string                 `json:"channel"`
-	IsActive   bool                   `json:"is_active"`
-	LastFired  *time.Time             `json:"last_fired,omitempty"`
-	CreatedAt  time.Time              `json:"created_at"`
-	UpdatedAt  time.Time              `json:"updated_at"`
+	ID        string                 `json:"id"`
+	UserID    string                 `json:"user_id"`
+	OrgID     string                 `json:"org_id,omitempty"`
+	Name      string                 `json:"name"`
+	Type      string                 `json:"type"`
+	Condition map[string]interface{} `json:"condition,omitempty"`
+	Channel   string                 `json:"channel"`
+	IsActive  bool                   `json:"is_active"`
+	LastFired *time.Time             `json:"last_fired,omitempty"`
+	CreatedAt time.Time              `json:"created_at"`
+	UpdatedAt time.Time              `json:"updated_at"`
 }
 
 // AlertRepository handles database operations for alerts.
@@ -96,7 +96,7 @@ func (r *AlertRepository) ListByUser(ctx context.Context, userID string) ([]Aler
 	if alerts == nil {
 		alerts = []Alert{}
 	}
-	return alerts, nil
+	return alerts, rows.Err()
 }
 
 // Update updates an alert.

@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"bufio"
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 
 	"go.opentelemetry.io/otel"
@@ -48,6 +51,27 @@ type tracingRecorder struct {
 func (r *tracingRecorder) WriteHeader(code int) {
 	r.statusCode = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap exposes the underlying ResponseWriter so http.ResponseController and
+// downstream middleware can reach the real writer (Hijacker/Flusher support).
+func (r *tracingRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
+// Flush forwards to the underlying Flusher (SSE streaming support).
+func (r *tracingRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack forwards to the underlying Hijacker (WebSocket upgrade support).
+func (r *tracingRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := r.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not implement http.Hijacker")
 }
 
 // StartSpan starts a new span in the given context.

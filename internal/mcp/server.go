@@ -639,5 +639,3 @@ func formatDualEngineSummary(resp interface{}) string {
 	out += "\n---\nPowered by VigilAgent Dual-Engine Analysis"
 	return out
 }
-
-

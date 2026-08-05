@@ -75,11 +75,11 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 		input.MaxIterations = 50
 	}
 
-	// Acquire a slot in the task semaphore before creating the task.
-	// This prevents orphaned DB rows when at capacity.
+	// Check capacity BEFORE creating the DB row so we never orphan a task
+	// when at max concurrent capacity.
 	select {
 	case taskSemaphore <- struct{}{}:
-		defer func() { <-taskSemaphore }()
+		// Slot acquired — released when the background goroutine finishes.
 	default:
 		response.JSON(w, http.StatusTooManyRequests, apperrors.New(apperrors.ErrRateLimited, "too many concurrent tasks"))
 		return
@@ -94,6 +94,8 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 		MaxIterations: input.MaxIterations,
 	}
 	if err := r.tasks.Create(req.Context(), task); err != nil {
+		// Release the concurrency slot — the background goroutine never started.
+		<-taskSemaphore
 		response.JSON(w, http.StatusInternalServerError, apperrors.New(apperrors.ErrDBError, "failed to create task"))
 		return
 	}
@@ -109,6 +111,9 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 	taskStartTime := time.Now()
 
 	go func() {
+		// Release the concurrency slot when the task finishes (success,
+		// failure, or panic) so it actually bounds concurrent execution.
+		defer func() { <-taskSemaphore }()
 		defer func() {
 			if rec := recover(); rec != nil {
 				slog.Error("panic in task execution goroutine", "panic", rec, "task_id", task.ID)
@@ -205,10 +210,10 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 				})
 			}
 
-		result, err := r.agentExec.ExecuteTask(bgCtx, agentTask)
-		taskDuration := time.Since(taskStartTime)
-		telemetry.TaskDuration.Observe(taskDuration.Seconds())
-		if err != nil {
+			result, err := r.agentExec.ExecuteTask(bgCtx, agentTask)
+			taskDuration := time.Since(taskStartTime)
+			telemetry.TaskDuration.Observe(taskDuration.Seconds())
+			if err != nil {
 				if err := r.tasks.UpdateStatus(bgCtx, task.ID, "failed"); err != nil {
 					slog.Error("failed to update task status to failed", "error", err, "task_id", task.ID)
 				}
@@ -216,10 +221,10 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 					r.webhookEngine.Dispatch(bgCtx, webhook.Event{
 						Type: "task.failed",
 						Payload: map[string]interface{}{
-							"task_id":   task.ID,
-							"user_id":   task.UserID,
+							"task_id":    task.ID,
+							"user_id":    task.UserID,
 							"project_id": task.ProjectID,
-							"error":     err.Error(),
+							"error":      err.Error(),
 						},
 					})
 				}
@@ -232,11 +237,11 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 					r.webhookEngine.Dispatch(bgCtx, webhook.Event{
 						Type: "task.completed",
 						Payload: map[string]interface{}{
-							"task_id":   task.ID,
-							"user_id":   task.UserID,
+							"task_id":    task.ID,
+							"user_id":    task.UserID,
 							"project_id": task.ProjectID,
-							"cost":      result.Cost,
-							"tokens":    result.TokensUsed,
+							"cost":       result.Cost,
+							"tokens":     result.TokensUsed,
 						},
 					})
 				}
@@ -250,8 +255,8 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 				r.webhookEngine.Dispatch(bgCtx, webhook.Event{
 					Type: "task.completed",
 					Payload: map[string]interface{}{
-						"task_id":   task.ID,
-						"user_id":   task.UserID,
+						"task_id":    task.ID,
+						"user_id":    task.UserID,
 						"project_id": task.ProjectID,
 					},
 				})
@@ -264,11 +269,11 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
 			Type: "task.created",
 			Payload: map[string]interface{}{
-				"task_id":   task.ID,
+				"task_id":    task.ID,
 				"project_id": task.ProjectID,
-				"user_id":   claims.UserID,
-				"prompt":    task.Prompt,
-				"status":    task.Status,
+				"user_id":    claims.UserID,
+				"prompt":     task.Prompt,
+				"status":     task.Status,
 			},
 		})
 	}
@@ -330,7 +335,7 @@ func (r *Router) listTasksHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	filter, sortVal := query.Parse(req)
-	
+
 	// Support page-based query as fallback, cursor-based as primary
 	cursor := req.URL.Query().Get("cursor")
 	if cursor == "" && req.URL.Query().Get("page") != "" {
@@ -343,10 +348,10 @@ func (r *Router) listTasksHandler(w http.ResponseWriter, req *http.Request) {
 		if pageSize < 1 || pageSize > 100 {
 			pageSize = 20
 		}
-		
+
 		// First filter and sort all tasks
 		allProcessed, _ := query.ProcessList(tasks, filter, sortVal, pagination.Params{Limit: 100000})
-		
+
 		total := len(allProcessed)
 		offset := (page - 1) * pageSize
 		end := offset + pageSize
@@ -357,7 +362,7 @@ func (r *Router) listTasksHandler(w http.ResponseWriter, req *http.Request) {
 			end = total
 		}
 		paginated := allProcessed[offset:end]
-		
+
 		response.SuccessWithMeta(w, req, http.StatusOK, paginated, &response.Meta{
 			Total:   total,
 			Limit:   pageSize,

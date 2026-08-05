@@ -48,10 +48,10 @@ type Processor struct {
 // NewProcessor creates a new batch processor.
 func NewProcessor(processFn func(ctx context.Context, batch *Batch) error, opts ...Option) *Processor {
 	p := &Processor{
-		batches:     make(map[string]*Batch),
-		processFn:   processFn,
+		batches:      make(map[string]*Batch),
+		processFn:    processFn,
 		maxBatchSize: 32,
-		batchWindow: 100 * time.Millisecond,
+		batchWindow:  100 * time.Millisecond,
 	}
 	for _, opt := range opts {
 		opt(p)

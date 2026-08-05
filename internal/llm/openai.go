@@ -29,8 +29,8 @@ func (o *OpenAIAdapter) Name() string { return "openai" }
 func (o *OpenAIAdapter) HealthCheck(ctx context.Context) error {
 	// Use a minimal request to check connectivity
 	_, err := o.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:    openai.GPT4oMini,
-		Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "ping"}},
+		Model:     openai.GPT4oMini,
+		Messages:  []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "ping"}},
 		MaxTokens: 1,
 	})
 	if err != nil {

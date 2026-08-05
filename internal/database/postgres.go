@@ -6,17 +6,24 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"math/rand/v2"
+	"net"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/vigilagent/vigilagent/internal/telemetry"
+
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/vigilagent/vigilagent/internal/config"
 )
 
+// Content from postgres.go
 // ErrDBCircuitOpen is returned when the DB circuit breaker is open.
 var ErrDBCircuitOpen = errors.New("database circuit breaker is open")
 
@@ -30,8 +37,8 @@ var dbCircuitBreaker = &struct {
 	threshold    int
 	resetTimeout time.Duration
 }{
-	state:       "closed",
-	threshold:   5,
+	state:        "closed",
+	threshold:    5,
 	resetTimeout: 30 * time.Second,
 }
 
@@ -82,7 +89,7 @@ func recordDBSuccess() {
 
 // Postgres holds the pgxpool connection pool.
 type Postgres struct {
-	Pool       *pgxpool.Pool
+	Pool        *pgxpool.Pool
 	cancelStats context.CancelFunc
 }
 
@@ -245,7 +252,7 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 	case "verify-ca", "verify-full":
 		poolCfg.ConnConfig.TLSConfig = &tls.Config{
 			ServerName:         cfg.Host,
-			InsecureSkipVerify: mode == "verify-ca",
+			InsecureSkipVerify: false, // InsecureSkipVerify=true would skip ALL cert validation, not just hostname
 			MinVersion:         tls.VersionTLS12,
 		}
 	case "prefer":
@@ -466,17 +473,17 @@ func (p *Postgres) PoolHealthCheck(ctx context.Context) (map[string]any, error) 
 	}
 
 	result := map[string]any{
-		"status":                "healthy",
-		"ping":                  "ok",
-		"total_conns":           stat.TotalConns(),
-		"acquired_conns":        stat.AcquiredConns(),
-		"max_conns":             maxConns,
-		"constructing_conns":    stat.ConstructingConns(),
-		"empty_acquire_count":   stat.EmptyAcquireCount(),
-		"acquire_duration_ms":   stat.AcquireDuration().Milliseconds(),
-		"max_idle_destroy":      stat.MaxIdleDestroyCount(),
-		"max_lifetime_destroy":  stat.MaxLifetimeDestroyCount(),
-		"utilization":           fmt.Sprintf("%.2f%%", utilization*100),
+		"status":               "healthy",
+		"ping":                 "ok",
+		"total_conns":          stat.TotalConns(),
+		"acquired_conns":       stat.AcquiredConns(),
+		"max_conns":            maxConns,
+		"constructing_conns":   stat.ConstructingConns(),
+		"empty_acquire_count":  stat.EmptyAcquireCount(),
+		"acquire_duration_ms":  stat.AcquireDuration().Milliseconds(),
+		"max_idle_destroy":     stat.MaxIdleDestroyCount(),
+		"max_lifetime_destroy": stat.MaxLifetimeDestroyCount(),
+		"utilization":          fmt.Sprintf("%.2f%%", utilization*100),
 	}
 
 	if utilization >= 0.8 {
@@ -487,4 +494,461 @@ func (p *Postgres) PoolHealthCheck(ctx context.Context) (map[string]any, error) 
 	return result, nil
 }
 
+// Content from conn.go
+// Package database provides context-aware database access for RLS support.
+// The Conn type wraps pgxpool.Pool and checks request context for a dedicated
+// connection or transaction. This ensures that session variables set by the
+// auth middleware (app.current_user_id) are visible to all queries in the
+// same request, because they execute on the same database connection.
 
+// Conn wraps a pgxpool.Pool and provides context-aware query methods.
+// When a dedicated connection or transaction is stored in context (via
+// WithConn or WithTx), queries execute on that connection. Otherwise,
+// they fall back to the shared pool.
+type Conn struct {
+	pool               *pgxpool.Pool
+	slowQueryThreshold time.Duration
+}
+
+// NewConn creates a context-aware connection wrapper around the pool.
+func NewConn(pool *pgxpool.Pool) *Conn {
+	return &Conn{pool: pool, slowQueryThreshold: 100 * time.Millisecond}
+}
+
+// NewConnWithThreshold creates a connection wrapper with a custom slow query threshold.
+func NewConnWithThreshold(pool *pgxpool.Pool, threshold time.Duration) *Conn {
+	if threshold <= 0 {
+		threshold = 100 * time.Millisecond
+	}
+	return &Conn{pool: pool, slowQueryThreshold: threshold}
+}
+
+// Pool returns the underlying pgxpool.Pool for operations that require
+// direct pool access (e.g., Acquire for middleware, Begin for transactions).
+func (c *Conn) Pool() *pgxpool.Pool {
+	return c.pool
+}
+
+// QueryRow executes a single-row query using the connection/transaction from
+// context, falling back to the pool. Checks the DB circuit breaker before
+// pool access — returns an error row if the breaker is open.
+func (c *Conn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	start := time.Now()
+	var row pgx.Row
+	if tx, ok := TxFromContext(ctx); ok {
+		row = tx.QueryRow(ctx, sql, args...)
+	} else if conn, ok := ConnFromContext(ctx); ok {
+		row = conn.QueryRow(ctx, sql, args...)
+	} else {
+		dbCircuitBreaker.mu.Lock()
+		cbState := dbCircuitBreaker.state
+		dbCircuitBreaker.mu.Unlock()
+		if cbState == "open" {
+			recordDBFailure()
+			return &errRow{err: ErrDBCircuitOpen}
+		}
+		row = c.pool.QueryRow(ctx, sql, args...)
+	}
+	if dur := time.Since(start); dur > c.slowQueryThreshold {
+		slog.Warn("slow query",
+			"duration_ms", dur.Milliseconds(),
+			"query", sql,
+			"rows", 1,
+		)
+		telemetry.SlowQueryDuration.Observe(dur.Seconds())
+	}
+	return row
+}
+
+// errRow implements pgx.Row and always returns an error.
+type errRow struct{ err error }
+
+func (r *errRow) Scan(dest ...any) error { return r.err }
+func (r *errRow) Conn() *pgx.Conn        { return nil }
+
+// Query executes a multi-row query using the connection/transaction from
+// context, falling back to the pool. Checks the DB circuit breaker before
+// pool access.
+func (c *Conn) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	start := time.Now()
+	var rows pgx.Rows
+	var err error
+	if tx, ok := TxFromContext(ctx); ok {
+		rows, err = tx.Query(ctx, sql, args...)
+	} else if conn, ok := ConnFromContext(ctx); ok {
+		rows, err = conn.Query(ctx, sql, args...)
+	} else {
+		dbCircuitBreaker.mu.Lock()
+		cbState := dbCircuitBreaker.state
+		dbCircuitBreaker.mu.Unlock()
+		if cbState == "open" {
+			recordDBFailure()
+			return nil, ErrDBCircuitOpen
+		}
+		rows, err = c.pool.Query(ctx, sql, args...)
+		if err != nil {
+			recordDBFailure()
+		} else {
+			recordDBSuccess()
+		}
+	}
+	if dur := time.Since(start); dur > c.slowQueryThreshold {
+		var rowCount int
+		if rows != nil {
+			rowCount = -1 // unknown until consumed
+		}
+		slog.Warn("slow query",
+			"duration_ms", dur.Milliseconds(),
+			"query", sql,
+			"rows", rowCount,
+		)
+		telemetry.SlowQueryDuration.Observe(dur.Seconds())
+	}
+	return rows, err
+}
+
+// Exec executes a command using the connection/transaction from context,
+// falling back to the pool. Checks the DB circuit breaker before pool access.
+func (c *Conn) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	start := time.Now()
+	var tag pgconn.CommandTag
+	var err error
+	if tx, ok := TxFromContext(ctx); ok {
+		tag, err = tx.Exec(ctx, sql, args...)
+	} else if conn, ok := ConnFromContext(ctx); ok {
+		tag, err = conn.Exec(ctx, sql, args...)
+	} else {
+		dbCircuitBreaker.mu.Lock()
+		cbState := dbCircuitBreaker.state
+		dbCircuitBreaker.mu.Unlock()
+		if cbState == "open" {
+			recordDBFailure()
+			return pgconn.CommandTag{}, ErrDBCircuitOpen
+		}
+		tag, err = c.pool.Exec(ctx, sql, args...)
+		if err != nil {
+			recordDBFailure()
+		} else {
+			recordDBSuccess()
+		}
+	}
+	if dur := time.Since(start); dur > c.slowQueryThreshold {
+		rowsAffected := int64(-1)
+		if err == nil {
+			rowsAffected = tag.RowsAffected()
+		}
+		slog.Warn("slow query",
+			"duration_ms", dur.Milliseconds(),
+			"query", sql,
+			"rows_affected", rowsAffected,
+		)
+		telemetry.SlowQueryDuration.Observe(dur.Seconds())
+	}
+	return tag, err
+}
+
+type ctxSavepointCounter struct{}
+
+// Begin starts a new transaction. When a transaction already exists in
+// context, it creates a SAVEPOINT on it for nested transaction support.
+func (c *Conn) Begin(ctx context.Context) (pgx.Tx, error) {
+	if tx, ok := TxFromContext(ctx); ok {
+		counter := 0
+		if v := ctx.Value(ctxSavepointCounter{}); v != nil {
+			counter = v.(int)
+		}
+		counter++
+		name := fmt.Sprintf("sp_%d", counter)
+		ctx = context.WithValue(ctx, ctxSavepointCounter{}, counter)
+		if _, err := tx.Exec(ctx, "SAVEPOINT "+name); err != nil {
+			return nil, err
+		}
+		return &savepointTx{Tx: tx, name: name, counter: counter}, nil
+	}
+	return c.pool.Begin(ctx)
+}
+
+// HealthCheck pings the underlying pool.
+func (c *Conn) HealthCheck(ctx context.Context) error {
+	return c.pool.Ping(ctx)
+}
+
+// Close closes the underlying pool.
+func (c *Conn) Close() {
+	c.pool.Close()
+}
+
+// savepointTx wraps a pgx.Tx and manages a SAVEPOINT for nested transactions.
+// Commit releases the savepoint (not the underlying transaction).
+// Rollback rolls back to the savepoint (not the entire transaction).
+// All other pgx.Tx methods are delegated to the underlying transaction.
+type savepointTx struct {
+	pgx.Tx
+	name    string
+	counter int
+}
+
+// Commit releases the savepoint, allowing the outer transaction to continue.
+func (s *savepointTx) Commit(ctx context.Context) error {
+	_, err := s.Tx.Exec(ctx, "RELEASE SAVEPOINT "+s.name)
+	return err
+}
+
+// Rollback rolls back to the savepoint, discarding changes since Begin.
+func (s *savepointTx) Rollback(ctx context.Context) error {
+	_, err := s.Tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+s.name)
+	return err
+}
+
+// Begin starts a nested savepoint within the same transaction.
+func (s *savepointTx) Begin(ctx context.Context) (pgx.Tx, error) {
+	s.counter++
+	name := fmt.Sprintf("%s_%d", s.name, s.counter)
+	if _, err := s.Tx.Exec(ctx, "SAVEPOINT "+name); err != nil {
+		return nil, err
+	}
+	return &savepointTx{Tx: s.Tx, name: name, counter: s.counter}, nil
+}
+
+// Content from retry.go
+// RetryConfig configures the retry behavior for database operations.
+type RetryConfig struct {
+	MaxAttempts int           // maximum number of attempts (including first). Default 3.
+	BaseDelay   time.Duration // base delay for exponential backoff. Default 100ms.
+	MaxDelay    time.Duration // cap on backoff delay. Default 5s.
+	JitterRatio float64       // ± jitter as a fraction [0, 1). Default 0.2 (±20%).
+}
+
+// DefaultRetryConfig returns the standard retry configuration.
+func DefaultRetryConfig() RetryConfig {
+	return RetryConfig{
+		MaxAttempts: 3,
+		BaseDelay:   100 * time.Millisecond,
+		MaxDelay:    5 * time.Second,
+		JitterRatio: 0.2,
+	}
+}
+
+// retryableError returns true if the error is a transient failure that
+// should be retried. Constraint violations, data errors, and syntax errors
+// are NOT retried.
+func retryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Connection refused / network errors
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	// dns errors
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	// pgconn.PgError for PostgreSQL-specific transient errors
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		// Class 08 — Connection Exception
+		case "08000", "08001", "08003", "08006", "08007":
+			return true
+		// Class 40 — Transaction Rollback (serialization, deadlock, statement timeout)
+		case "40001", "40P01":
+			return true
+		// Class 25 — Invalid Transaction State (transient)
+		case "25006":
+			return true
+		// Class 57 — Operator Intervention (query canceled, admin shutdown)
+		case "57014", "57P01", "57P02", "57P03":
+			return true
+		// Class 53 — Insufficient Resources
+		case "53100", "53200", "53300":
+			return true
+		// Class 54 — Program Limit Exceeded (sort/memory — transient under load)
+		case "54000", "54001":
+			return true
+		}
+	}
+
+	// Context deadline exceeded (timeout)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// String-based fallback for common transient error messages
+	msg := err.Error()
+	transientKeywords := []string{
+		"connection refused",
+		"connection reset",
+		"connection timed out",
+		"timeout",
+		"serialization failure",
+		"deadlock detected",
+		"query canceled",
+		"admin shutdown",
+		"too many clients",
+		"pool timeout",
+		"i/o timeout",
+		"broken pipe",
+		"bad connection",
+	}
+	lower := strings.ToLower(msg)
+	for _, kw := range transientKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// retryDelay computes the delay for the given attempt number using exponential
+// backoff with jitter.
+func retryDelay(attempt int, cfg RetryConfig) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+	// exponential: base * 2^(attempt-1)
+	delay := float64(cfg.BaseDelay) * math.Pow(2, float64(attempt-1))
+	if delay > float64(cfg.MaxDelay) {
+		delay = float64(cfg.MaxDelay)
+	}
+	// apply jitter: delay * (1 + random(-jitter, +jitter))
+	jitter := cfg.JitterRatio
+	if jitter <= 0 {
+		return time.Duration(delay)
+	}
+	jitterRange := delay * jitter
+	// rand.Float64 returns [0, 1), so shift to [-jitterRange, +jitterRange]
+	offset := (rand.Float64()*2 - 1) * jitterRange
+	delay += offset
+	if delay < 0 {
+		delay = 0
+	}
+	return time.Duration(delay)
+}
+
+// RetryQueryRow wraps a function that returns a pgx.Row with retry logic.
+// The function fn is re-invoked on each retry attempt.
+func RetryQueryRow(ctx context.Context, cfg RetryConfig, fn func(ctx context.Context) pgx.Row) pgx.Row {
+	if cfg.MaxAttempts <= 0 {
+		cfg = DefaultRetryConfig()
+	}
+	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
+		row := fn(ctx)
+		// We can't know if the row has an error without scanning, so we wrap
+		// the row with a retry-aware wrapper that only retries on Scan.
+		return &retryRow{row: row, fn: fn, cfg: cfg, attempt: attempt}
+	}
+	return &errRow{err: errors.New("retry: no attempts configured")}
+}
+
+// retryRow wraps a pgx.Row and retries on Scan if the error is retryable.
+type retryRow struct {
+	row     pgx.Row
+	fn      func(ctx context.Context) pgx.Row
+	cfg     RetryConfig
+	attempt int
+}
+
+func (r *retryRow) Scan(dest ...any) error {
+	err := r.row.Scan(dest...)
+	if err != nil && retryableError(err) && r.attempt < r.cfg.MaxAttempts {
+		delay := retryDelay(r.attempt, r.cfg)
+		slog.Warn("retryable query error, retrying",
+			"attempt", r.attempt,
+			"max_attempts", r.cfg.MaxAttempts,
+			"delay", delay,
+			"error", err,
+		)
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-r.ctx().Done():
+			timer.Stop()
+			return r.ctx().Err()
+		}
+		next := r.attempt + 1
+		newRow := r.fn(r.ctx())
+		return (&retryRow{row: newRow, fn: r.fn, cfg: r.cfg, attempt: next}).Scan(dest...)
+	}
+	return err
+}
+
+func (r *retryRow) ctx() context.Context {
+	return context.Background()
+}
+
+// RetryQuery wraps a function that returns (pgx.Rows, error) with retry logic.
+func RetryQuery(ctx context.Context, cfg RetryConfig, fn func(ctx context.Context) (pgx.Rows, error)) (pgx.Rows, error) {
+	if cfg.MaxAttempts <= 0 {
+		cfg = DefaultRetryConfig()
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
+		rows, err := fn(ctx)
+		if err == nil {
+			return rows, nil
+		}
+		lastErr = err
+		if !retryableError(err) || attempt >= cfg.MaxAttempts {
+			return nil, err
+		}
+		delay := retryDelay(attempt, cfg)
+		slog.Warn("retryable query error, retrying",
+			"attempt", attempt,
+			"max_attempts", cfg.MaxAttempts,
+			"delay", delay,
+			"error", err,
+		)
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+// RetryExec wraps a function that returns (pgconn.CommandTag, error) with retry logic.
+func RetryExec(ctx context.Context, cfg RetryConfig, fn func(ctx context.Context) (pgconn.CommandTag, error)) (pgconn.CommandTag, error) {
+	if cfg.MaxAttempts <= 0 {
+		cfg = DefaultRetryConfig()
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
+		tag, err := fn(ctx)
+		if err == nil {
+			return tag, nil
+		}
+		lastErr = err
+		if !retryableError(err) || attempt >= cfg.MaxAttempts {
+			return pgconn.CommandTag{}, err
+		}
+		delay := retryDelay(attempt, cfg)
+		slog.Warn("retryable exec error, retrying",
+			"attempt", attempt,
+			"max_attempts", cfg.MaxAttempts,
+			"delay", delay,
+			"error", err,
+		)
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return pgconn.CommandTag{}, ctx.Err()
+		}
+	}
+	return pgconn.CommandTag{}, lastErr
+}

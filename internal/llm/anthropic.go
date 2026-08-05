@@ -54,10 +54,10 @@ func (a *AnthropicAdapter) HealthCheck(ctx context.Context) error {
 }
 
 type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	System    string              `json:"system,omitempty"`
-	Messages  []anthropicMessage  `json:"messages"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    string             `json:"system,omitempty"`
+	Messages  []anthropicMessage `json:"messages"`
 }
 
 type anthropicMessage struct {
@@ -66,11 +66,11 @@ type anthropicMessage struct {
 }
 
 type anthropicResponse struct {
-	ID         string `json:"id"`
-	Role       string `json:"role"`
+	ID         string                  `json:"id"`
+	Role       string                  `json:"role"`
 	Content    []anthropicContentBlock `json:"content"`
-	Model      string `json:"model"`
-	StopReason string `json:"stop_reason"`
+	Model      string                  `json:"model"`
+	StopReason string                  `json:"stop_reason"`
 	Usage      struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
@@ -78,25 +78,25 @@ type anthropicResponse struct {
 }
 
 type anthropicContentBlock struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name,omitempty"`
+	Type  string                 `json:"type"`
+	Text  string                 `json:"text,omitempty"`
+	ID    string                 `json:"id,omitempty"`
+	Name  string                 `json:"name,omitempty"`
 	Input map[string]interface{} `json:"input,omitempty"`
 }
 
 type anthropicStreamEvent struct {
-	Type  string `json:"type"`
+	Type  string               `json:"type"`
 	Delta anthropicStreamDelta `json:"delta"`
 }
 
 type anthropicStreamDelta struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Input map[string]interface{} `json:"input,omitempty"`
-	PartialJSON string `json:"partial_json,omitempty"`
+	Type        string                 `json:"type"`
+	Text        string                 `json:"text,omitempty"`
+	ID          string                 `json:"id,omitempty"`
+	Name        string                 `json:"name,omitempty"`
+	Input       map[string]interface{} `json:"input,omitempty"`
+	PartialJSON string                 `json:"partial_json,omitempty"`
 }
 
 func (a *AnthropicAdapter) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {

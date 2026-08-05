@@ -43,45 +43,100 @@ func (hr *HotReloader) OnChange(fn OnConfigChangeFunc) {
 
 // readFromViper reads all config fields from viper into a new Config struct.
 // This avoids the redundant ReadInConfig call that Load() would trigger.
-func readFromViper() *Config {
-	cfg := &Config{
-		Server: ServerConfig{
-			Host:              viper.GetString("server.host"),
-			Port:              viper.GetInt("server.port"),
-			Env:               viper.GetString("server.env"),
-			ReadTimeout:       viper.GetDuration("server.read_timeout"),
-			ReadHeaderTimeout: viper.GetDuration("server.read_header_timeout"),
-			WriteTimeout:      viper.GetDuration("server.write_timeout"),
-			IdleTimeout:       viper.GetDuration("server.idle_timeout"),
-		},
-		Database: DatabaseConfig{
-			Host:         viper.GetString("database.host"),
-			Port:         viper.GetInt("database.port"),
-			User:         viper.GetString("database.user"),
-			Password:     viper.GetString("database.password"),
-			Name:         viper.GetString("database.name"),
-			SSLMode:      viper.GetString("database.sslmode"),
-			MaxOpenConns: viper.GetInt("database.max_open_conns"),
-			MaxIdleConns: viper.GetInt("database.max_idle_conns"),
-			MaxLifetime:  viper.GetDuration("database.max_lifetime"),
-			ConnIdleTime: viper.GetDuration("database.conn_idle_time"),
-		},
-		Redis: RedisConfig{
-			Host:     viper.GetString("redis.host"),
-			Port:     viper.GetInt("redis.port"),
-			Password: viper.GetString("redis.password"),
-			DB:       viper.GetInt("redis.db"),
-		},
-		NATS: NATSConfig{
-			URL:    viper.GetString("nats.url"),
-			Stream: viper.GetString("nats.stream"),
-		},
-		Auth: AuthConfig{
-			JWTSecret:     viper.GetString("auth.jwt_secret"),
-			JWTExpiration: viper.GetDuration("auth.jwt_expiration"),
-			APIKeyPrefix:  viper.GetString("auth.api_key_prefix"),
-		},
-		LLM: LLMConfig{
+func readFromViper() *Config {		cfg := &Config{
+			Server: ServerConfig{
+				Host:              viper.GetString("server.host"),
+				Port:              viper.GetInt("server.port"),
+				Env:               viper.GetString("server.env"),
+				BaseURL:           viper.GetString("server.base_url"),
+				RateLimitPerMin:   viper.GetInt("server.rate_limit_per_min"),
+				ReadTimeout:       viper.GetDuration("server.read_timeout"),
+				ReadHeaderTimeout: viper.GetDuration("server.read_header_timeout"),
+				WriteTimeout:      viper.GetDuration("server.write_timeout"),
+				IdleTimeout:       viper.GetDuration("server.idle_timeout"),
+			},
+			Database: DatabaseConfig{
+				Host:               viper.GetString("database.host"),
+				Port:               viper.GetInt("database.port"),
+				User:               viper.GetString("database.user"),
+				Password:           viper.GetString("database.password"),
+				Name:               viper.GetString("database.name"),
+				SSLMode:            viper.GetString("database.sslmode"),
+				MaxOpenConns:       viper.GetInt("database.max_open_conns"),
+				MaxIdleConns:       viper.GetInt("database.max_idle_conns"),
+				MaxLifetime:        viper.GetDuration("database.max_lifetime"),
+				ConnIdleTime:       viper.GetDuration("database.conn_idle_time"),
+				PoolMaxOpen:        viper.GetInt("database.pool_max_open"),
+				PoolMaxIdle:        viper.GetInt("database.pool_max_idle"),
+				PoolMaxLifetime:    viper.GetDuration("database.pool_max_lifetime"),
+				PoolMaxIdleTime:    viper.GetDuration("database.pool_max_idle_time"),
+				SlowQueryThreshold: viper.GetDuration("database.slow_query_threshold"),
+				RetryMaxAttempts:   viper.GetInt("database.retry_max_attempts"),
+				PoolStatsInterval:  viper.GetDuration("database.pool_stats_interval"),
+				StatementTimeout:   viper.GetDuration("database.statement_timeout"),
+			},
+			Redis: RedisConfig{
+				Host:     viper.GetString("redis.host"),
+				Port:     viper.GetInt("redis.port"),
+				Password: viper.GetString("redis.password"),
+				DB:       viper.GetInt("redis.db"),
+			},
+			NATS: NATSConfig{
+				URL:    viper.GetString("nats.url"),
+				Stream: viper.GetString("nats.stream"),
+			},
+			Auth: AuthConfig{
+				JWTSecret:          viper.GetString("auth.jwt_secret"),
+				JWTExpiration:      viper.GetDuration("auth.jwt_expiration"),
+				JWTAudience:        viper.GetString("auth.jwt_audience"),
+				JWTBindToIP:        viper.GetBool("auth.jwt_bind_to_ip"),
+				JWTBindToUserAgent: viper.GetBool("auth.jwt_bind_to_user_agent"),
+				APIKeyPrefix:       viper.GetString("auth.api_key_prefix"),
+			},
+			BodySize: BodySizeConfig{
+				MaxBodySize: viper.GetInt64("body_size.max_body_size"),
+			},
+			SecurityHeaders: SecurityHeadersConfig{
+				Enabled:               viper.GetBool("security_headers.enabled"),
+				HSTSMaxAge:            viper.GetInt("security_headers.hsts_max_age"),
+				HSTSIncludeSubDomains: viper.GetBool("security_headers.hsts_include_subdomains"),
+				HSTSPreload:           viper.GetBool("security_headers.hsts_preload"),
+				CSP:                   viper.GetString("security_headers.csp"),
+				XContentTypeOptions:   viper.GetBool("security_headers.x_content_type_options"),
+				XFrameOptions:         viper.GetString("security_headers.x_frame_options"),
+				ReferrerPolicy:        viper.GetString("security_headers.referrer_policy"),
+				PermissionsPolicy:     viper.GetString("security_headers.permissions_policy"),
+				XSSProtection:         viper.GetString("security_headers.xss_protection"),
+				CacheControlAPI:       viper.GetString("security_headers.cache_control_api"),
+				CacheControlStatic:    viper.GetString("security_headers.cache_control_static"),
+				CustomHeaders:         viper.GetStringMapString("security_headers.custom_headers"),
+			},
+			Secrets: SecretsConfig{
+				Backend:                 viper.GetString("secrets.backend"),
+				Path:                    viper.GetString("secrets.path"),
+				RotationDays:            viper.GetInt("secrets.rotation_days"),
+				CredentialLeakDetection: viper.GetBool("secrets.credential_leak_detection"),
+				VaultAddress:            viper.GetString("secrets.vault_address"),
+				VaultToken:              viper.GetString("secrets.vault_token"),
+				VaultMountPath:          viper.GetString("secrets.vault_mount_path"),
+			},
+			Audit: AuditConfig{
+				RetentionDays:     viper.GetInt("audit.retention_days"),
+				MaxStorageMB:      viper.GetInt("audit.max_storage_mb"),
+				CleanupInterval:   viper.GetDuration("audit.cleanup_interval"),
+				CompressAfterDays: viper.GetInt("audit.compress_after_days"),
+				AlertThresholdMB:  viper.GetInt("audit.alert_threshold_mb"),
+			},
+			IPAnomaly: IPAnomalyConfig{
+				Enabled:              viper.GetBool("ip_anomaly.enabled"),
+				BruteForceThreshold:  viper.GetInt("ip_anomaly.brute_force_threshold"),
+				PortScanThreshold:    viper.GetInt("ip_anomaly.port_scan_threshold"),
+				CredentialStufThresh: viper.GetInt("ip_anomaly.credential_stuf_thresh"),
+				ScoreThreshold:       viper.GetInt("ip_anomaly.score_threshold"),
+				BlockDuration:        viper.GetDuration("ip_anomaly.block_duration"),
+				TrackingWindow:       viper.GetDuration("ip_anomaly.tracking_window"),
+			},
+			LLM: LLMConfig{
 			OpenAIKey:     viper.GetString("llm.openai_key"),
 			AnthropicKey:  viper.GetString("llm.anthropic_key"),
 			GeminiKey:     viper.GetString("llm.gemini_key"),
@@ -114,11 +169,11 @@ func readFromViper() *Config {
 			FromName:  viper.GetString("sendgrid.from_name"),
 		},
 		CORS: CORSConfig{
-			AllowedOrigins:  viper.GetStringSlice("cors.allowed_origins"),
-			AllowedMethods:  viper.GetStringSlice("cors.allowed_methods"),
-			AllowedHeaders:  viper.GetStringSlice("cors.allowed_headers"),
+			AllowedOrigins:   viper.GetStringSlice("cors.allowed_origins"),
+			AllowedMethods:   viper.GetStringSlice("cors.allowed_methods"),
+			AllowedHeaders:   viper.GetStringSlice("cors.allowed_headers"),
 			AllowCredentials: viper.GetBool("cors.allow_credentials"),
-			MaxAge:          viper.GetInt("cors.max_age"),
+			MaxAge:           viper.GetInt("cors.max_age"),
 		},
 		Log: LogConfig{
 			Level:  viper.GetString("log.level"),
@@ -168,6 +223,10 @@ func (hr *HotReloader) Start(ctx context.Context) {
 				debounceTimer.Stop()
 			}
 			debounceTimer = time.AfterFunc(debounce, func() {
+				// Force a fresh read so the reload does not race with viper's
+				// internal auto-reload (which can be reordered relative to
+				// externally registered OnConfigChange handlers).
+				_ = viper.ReadInConfig()
 				newCfg := readFromViper()
 
 				if err := newCfg.Validate(); err != nil {

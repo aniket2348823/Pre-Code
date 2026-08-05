@@ -129,7 +129,7 @@ func TestEngine_MergeCopiesFixFromSecondAnalyzer(t *testing.T) {
 			RuleID: "r", Analyzers: []string{"a1"}, Severity: SeverityMedium,
 			Filename: "x.go", Line: 1, Snippet: "code",
 			Fingerprint: ComputeFingerprint("x.go", 1, "code", "r"),
-			Fix: "",
+			Fix:         "",
 		}},
 	}
 	a2 := fakeAnalyzer{
@@ -138,7 +138,7 @@ func TestEngine_MergeCopiesFixFromSecondAnalyzer(t *testing.T) {
 			RuleID: "r", Analyzers: []string{"a2"}, Severity: SeverityMedium,
 			Filename: "x.go", Line: 1, Snippet: "code",
 			Fingerprint: ComputeFingerprint("x.go", 1, "code", "r"),
-			Fix: "use parameterized queries",
+			Fix:         "use parameterized queries",
 		}},
 	}
 	eng := NewEngine(a1, a2)
@@ -154,7 +154,7 @@ func TestEngine_MergeCopiesMessageFromSecondAnalyzer(t *testing.T) {
 			RuleID: "r", Analyzers: []string{"a1"}, Severity: SeverityMedium,
 			Filename: "x.go", Line: 1, Snippet: "code",
 			Fingerprint: ComputeFingerprint("x.go", 1, "code", "r"),
-			Message: "",
+			Message:     "",
 		}},
 	}
 	a2 := fakeAnalyzer{
@@ -163,7 +163,7 @@ func TestEngine_MergeCopiesMessageFromSecondAnalyzer(t *testing.T) {
 			RuleID: "r", Analyzers: []string{"a2"}, Severity: SeverityMedium,
 			Filename: "x.go", Line: 1, Snippet: "code",
 			Fingerprint: ComputeFingerprint("x.go", 1, "code", "r"),
-			Message: "detected SQL injection",
+			Message:     "detected SQL injection",
 		}},
 	}
 	eng := NewEngine(a1, a2)

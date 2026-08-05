@@ -9,23 +9,23 @@ import (
 
 // EndpointRule defines rate limit for a specific endpoint pattern.
 type EndpointRule struct {
-	Pattern   string        // e.g. "/api/v1/scan"
-	Limit     int           // max requests per window
-	Window    time.Duration // sliding window duration
-	Burst     int           // optional burst allowance (0 = no burst)
+	Pattern string        // e.g. "/api/v1/scan"
+	Limit   int           // max requests per window
+	Window  time.Duration // sliding window duration
+	Burst   int           // optional burst allowance (0 = no burst)
 }
 
 // EndpointConfig holds the full endpoint rate limit configuration.
 type EndpointConfig struct {
-	Rules      []EndpointRule
-	DefaultLimit int
+	Rules         []EndpointRule
+	DefaultLimit  int
 	DefaultWindow time.Duration
 }
 
 // DefaultEndpointConfig returns reasonable defaults.
 func DefaultEndpointConfig() EndpointConfig {
 	return EndpointConfig{
-		DefaultLimit: 100,
+		DefaultLimit:  100,
 		DefaultWindow: time.Minute,
 		Rules: []EndpointRule{
 			{Pattern: "/api/v1/scan", Limit: 10, Window: time.Minute, Burst: 2},
@@ -42,10 +42,10 @@ type windowEntry struct {
 
 // EndpointLimiter enforces per-endpoint rate limits.
 type EndpointLimiter struct {
-	mu       sync.Mutex
-	config   EndpointConfig
-	windows  map[string]*windowEntry
-	keyFunc  func(r *http.Request) string
+	mu      sync.Mutex
+	config  EndpointConfig
+	windows map[string]*windowEntry
+	keyFunc func(r *http.Request) string
 }
 
 // NewEndpointLimiter creates a new endpoint rate limiter.

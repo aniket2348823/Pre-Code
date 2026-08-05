@@ -9,44 +9,44 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/vigilagent/vigilagent/internal/agent"
+	"github.com/vigilagent/vigilagent/internal/attackgraph"
+	"github.com/vigilagent/vigilagent/internal/audit"
 	"github.com/vigilagent/vigilagent/internal/auth"
+	"github.com/vigilagent/vigilagent/internal/compliance"
+	"github.com/vigilagent/vigilagent/internal/confidence"
 	"github.com/vigilagent/vigilagent/internal/config"
+	"github.com/vigilagent/vigilagent/internal/cors"
 	"github.com/vigilagent/vigilagent/internal/cost"
 	"github.com/vigilagent/vigilagent/internal/costintel"
 	"github.com/vigilagent/vigilagent/internal/database"
-	"github.com/vigilagent/vigilagent/internal/llm"
-	mw "github.com/vigilagent/vigilagent/internal/middleware"
-	"github.com/vigilagent/vigilagent/internal/memory"
-	"github.com/vigilagent/vigilagent/internal/queue"
-	"github.com/vigilagent/vigilagent/internal/repository"
-	"github.com/vigilagent/vigilagent/internal/router"
-	"github.com/vigilagent/vigilagent/internal/attackgraph"
-	"github.com/vigilagent/vigilagent/internal/audit"
-	"github.com/vigilagent/vigilagent/internal/compliance"
-	"github.com/vigilagent/vigilagent/internal/confidence"
 	"github.com/vigilagent/vigilagent/internal/email"
 	"github.com/vigilagent/vigilagent/internal/featureflags"
 	"github.com/vigilagent/vigilagent/internal/knowledge"
+	"github.com/vigilagent/vigilagent/internal/llm"
+	"github.com/vigilagent/vigilagent/internal/memory"
+	mw "github.com/vigilagent/vigilagent/internal/middleware"
+	"github.com/vigilagent/vigilagent/internal/queue"
+	"github.com/vigilagent/vigilagent/internal/repository"
 	"github.com/vigilagent/vigilagent/internal/requirements"
+	"github.com/vigilagent/vigilagent/internal/router"
 	"github.com/vigilagent/vigilagent/internal/scanner"
-	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/internal/schema"
 	"github.com/vigilagent/vigilagent/internal/skillengine"
 	"github.com/vigilagent/vigilagent/internal/skills"
-	"github.com/vigilagent/vigilagent/internal/cors"
 	"github.com/vigilagent/vigilagent/internal/telemetry"
 	"github.com/vigilagent/vigilagent/internal/tools"
+	"github.com/vigilagent/vigilagent/internal/webhook"
 )
 
 type Server struct {
-	cfg          *config.Config
-	router       *router.Router
-	db           *database.Postgres
-	redis        *database.Redis
-	nats         *queue.NATS
-	cleanup      func()
-	hotReload    *config.HotReloader
-	shutdownCtx  context.Context
+	cfg            *config.Config
+	router         *router.Router
+	db             *database.Postgres
+	redis          *database.Redis
+	nats           *queue.NATS
+	cleanup        func()
+	hotReload      *config.HotReloader
+	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 }
 
@@ -352,47 +352,47 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	opts := router.Options{
-		Config:     cfg,
-		DB:         db,
-		Redis:      rds,
-		NATS:       natsConn,
-		JWT:        jwtSvc,
-		APIKeys:    apiKeySvc,
-		APIAuth:    apiKeyAuth,
-		RateLimit:     rl,
-		AuthRateLimit: authRL,
-		Users:      userRepo,
-		Orgs:       orgRepo,
-		Projects:   projectRepo,
-		Agents:     agentRepo,
-		Sessions:   sessionRepo,
-		Events:     eventRepo,
-		APIKeyRepo: apiKeyRepo,
-		Tasks:      taskRepo,
-		Skills:     skillRepo,
-		Alerts:     alertRepo,
-		AgentExec:  agentExec,
-		LLMRouter:  modelRouter,
-		Memory:     memMgr,
-		Engine:       scanner.NewEngine(scanner.NewBuiltinAnalyzer()),
-		Requirements: requirements.NewResolver(),
-		Validator:    schema.NewValidator(),
-		Compliance:   compliance.NewChecker(),
-		Knowledge:    knowledge.NewGraph(),
-		HITLQueue:    mw.NewHITLQueue(redisClient, 5*time.Minute), // shared with agent via hitlAdapter below
+		Config:          cfg,
+		DB:              db,
+		Redis:           rds,
+		NATS:            natsConn,
+		JWT:             jwtSvc,
+		APIKeys:         apiKeySvc,
+		APIAuth:         apiKeyAuth,
+		RateLimit:       rl,
+		AuthRateLimit:   authRL,
+		Users:           userRepo,
+		Orgs:            orgRepo,
+		Projects:        projectRepo,
+		Agents:          agentRepo,
+		Sessions:        sessionRepo,
+		Events:          eventRepo,
+		APIKeyRepo:      apiKeyRepo,
+		Tasks:           taskRepo,
+		Skills:          skillRepo,
+		Alerts:          alertRepo,
+		AgentExec:       agentExec,
+		LLMRouter:       modelRouter,
+		Memory:          memMgr,
+		Engine:          scanner.NewEngine(scanner.NewBuiltinAnalyzer()),
+		Requirements:    requirements.NewResolver(),
+		Validator:       schema.NewValidator(),
+		Compliance:      compliance.NewChecker(),
+		Knowledge:       knowledge.NewGraph(),
+		HITLQueue:       mw.NewHITLQueue(redisClient, 5*time.Minute), // shared with agent via hitlAdapter below
 		PlanRateLimiter: mw.NewPlanAwareRateLimiter(redisClient),
-		UsageMetering: mw.NewUsageMeteringMiddleware(redisClient),
-		QuotaEnforcer:  mw.NewQuotaEnforcer(redisClient),
-		SkillEngine:  skillengine.NewEngine(),
-		Confidence:   confidence.NewEngine(),
-		AttackGraph:  attackgraph.NewEngine(),
-		Audit:        audit.NewEngine(audit.NewMemoryStore()),
-		Budget:       budgetMgr,
-		Webhook:      webhookEngine,
-		CostIntel:    costintel.NewEngine(),
-		Email:        verificationSvc,
-		FeatureFlags: featureFlagMgr,
-		SkillRAG:     skillRAG,
+		UsageMetering:   mw.NewUsageMeteringMiddleware(redisClient),
+		QuotaEnforcer:   mw.NewQuotaEnforcer(redisClient),
+		SkillEngine:     skillengine.NewEngine(),
+		Confidence:      confidence.NewEngine(),
+		AttackGraph:     attackgraph.NewEngine(),
+		Audit:           audit.NewEngine(audit.NewMemoryStore()),
+		Budget:          budgetMgr,
+		Webhook:         webhookEngine,
+		CostIntel:       costintel.NewEngine(),
+		Email:           verificationSvc,
+		FeatureFlags:    featureFlagMgr,
+		SkillRAG:        skillRAG,
 	}
 
 	var r *router.Router
@@ -432,7 +432,7 @@ func New(cfg *config.Config) (*Server, error) {
 		sessCancel := sessionRepo.StartStaleSessionCleanup(context.Background(), 30*time.Minute, 5*time.Minute)
 		sessOldCleanup := srv.cleanup
 		srv.cleanup = func() {
-			sessCancel() // stop session cleanup
+			sessCancel()     // stop session cleanup
 			sessOldCleanup() // stop event purger + telemetry
 		}
 	}
@@ -611,4 +611,3 @@ func recoverStuckTasks(ctx context.Context, db *database.Postgres) error {
 	}
 	return nil
 }
-

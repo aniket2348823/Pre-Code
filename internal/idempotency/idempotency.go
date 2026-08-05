@@ -10,9 +10,9 @@ import (
 
 // Config holds idempotency configuration.
 type Config struct {
-	KeyHeader   string        // header name for idempotency key
-	MaxAge      time.Duration // how long to cache responses
-	MaxEntries  int           // max cached entries
+	KeyHeader  string        // header name for idempotency key
+	MaxAge     time.Duration // how long to cache responses
+	MaxEntries int           // max cached entries
 }
 
 // DefaultConfig returns sensible defaults.

@@ -59,12 +59,12 @@ func (m *mockMsg) Headers() nats.Header {
 	defer m.mu.Unlock()
 	return m.headers
 }
-func (m *mockMsg) Subject() string                       { return "test.subject" }
-func (m *mockMsg) Reply() string                         { return "test.reply" }
-func (m *mockMsg) DoubleAck(context.Context) error       { return nil }
-func (m *mockMsg) InProgress() error                     { return nil }
-func (m *mockMsg) Term() error                           { return nil }
-func (m *mockMsg) TermWithReason(string) error           { return nil }
+func (m *mockMsg) Subject() string                 { return "test.subject" }
+func (m *mockMsg) Reply() string                   { return "test.reply" }
+func (m *mockMsg) DoubleAck(context.Context) error { return nil }
+func (m *mockMsg) InProgress() error               { return nil }
+func (m *mockMsg) Term() error                     { return nil }
+func (m *mockMsg) TermWithReason(string) error     { return nil }
 
 func (m *mockMsg) Ack() error {
 	m.mu.Lock()
@@ -112,7 +112,7 @@ type mockMessageBatch struct {
 }
 
 func (b *mockMessageBatch) Messages() <-chan jetstream.Msg { return b.msgs }
-func (b *mockMessageBatch) Error() error                  { return b.err }
+func (b *mockMessageBatch) Error() error                   { return b.err }
 
 type mockConsumer struct {
 	fetchFunc func(batch int, opts ...jetstream.FetchOpt) (jetstream.MessageBatch, error)
@@ -1094,6 +1094,20 @@ func TestNATS_DrainSuccess(t *testing.T) {
 	}
 }
 
+// waitForNak polls until the mock message has been nacked, failing after a
+// timeout. Used by Start tests whose nak happens in a background goroutine.
+func waitForNak(t *testing.T, msg *mockMsg) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if msg.isNaked() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("message was not nacked within timeout")
+}
+
 func TestTaskHandlerType(t *testing.T) {
 	var h TaskHandler = func(ctx context.Context, p TaskPayload) error {
 		return nil
@@ -1209,13 +1223,13 @@ func TestStartHandlerContextCancelled(t *testing.T) {
 		},
 	}
 
-	var handlerCalled bool
+	handlerCalled := make(chan struct{})
 	w := &TaskWorker{
 		consumer: consumer,
 		stream:   "test",
 		subject:  "test.sub",
 		handler: func(ctx context.Context, p TaskPayload) error {
-			handlerCalled = true
+			close(handlerCalled)
 			return nil
 		},
 		maxRetries: 3,
@@ -1227,12 +1241,17 @@ func TestStartHandlerContextCancelled(t *testing.T) {
 		done <- w.Start(ctx)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait deterministically for the handler to run, then cancel and assert
+	// the worker exits cleanly. No sleeps — immune to scheduler load.
+	select {
+	case <-handlerCalled:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("handler was not called within timeout")
+	}
 	cancel()
-	<-done
-
-	if !handlerCalled {
-		t.Error("expected handler to be called")
+	if err := <-done; err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1315,12 +1334,12 @@ func TestStart_HandlerErrorNaksMessage(t *testing.T) {
 		done <- w.Start(ctx)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the background processMessage goroutine to nak the message
+	// before cancelling, so the worker is guaranteed to have fetched it.
+	waitForNak(t, msg)
 	cancel()
-	<-done
-
-	if !msg.isNaked() {
-		t.Error("expected message to be nacked on handler error")
+	if err := <-done; err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1354,12 +1373,12 @@ func TestStart_PanicMessageAcked(t *testing.T) {
 		done <- w.Start(ctx)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the background processMessage goroutine to nak the message
+	// before cancelling, so the worker is guaranteed to have fetched it.
+	waitForNak(t, msg)
 	cancel()
-	<-done
-
-	if !msg.isNaked() {
-		t.Error("expected panic message to be nacked")
+	if err := <-done; err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

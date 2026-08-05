@@ -151,9 +151,9 @@ func computeDepth(m map[string]any) int {
 func builtinRules() map[string]Rule {
 	return map[string]Rule{
 		"architecture": {
-			Entity:         "architecture",
-			RequiredFields: []string{"components", "risks"},
-			MaxDepth:       5,
+			Entity:          "architecture",
+			RequiredFields:  []string{"components", "risks"},
+			MaxDepth:        5,
 			AllowedTopLevel: []string{"components", "risks", "controls", "threats", "description", "diagram"},
 		},
 		"finding": {
@@ -169,13 +169,13 @@ func builtinRules() map[string]Rule {
 			RequiredFields: []string{"components"},
 		},
 		"security_review": {
-			Entity:         "security_review",
-			RequiredFields: []string{"findings", "summary"},
+			Entity:          "security_review",
+			RequiredFields:  []string{"findings", "summary"},
 			AllowedTopLevel: []string{"findings", "summary", "recommendations", "risk_level"},
 		},
 		"vulnerability_report": {
-			Entity:         "vulnerability_report",
-			RequiredFields: []string{"vulnerabilities", "summary"},
+			Entity:          "vulnerability_report",
+			RequiredFields:  []string{"vulnerabilities", "summary"},
 			AllowedTopLevel: []string{"vulnerabilities", "summary", "risk_score", "remediations"},
 		},
 	}

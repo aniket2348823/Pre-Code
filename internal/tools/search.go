@@ -11,8 +11,8 @@ import (
 // SearchCodeTool searches code using ripgrep.
 type SearchCodeTool struct{}
 
-func (t *SearchCodeTool) Name() string        { return "search_code" }
-func (t *SearchCodeTool) Description() string  { return "Search for patterns in the codebase" }
+func (t *SearchCodeTool) Name() string                                    { return "search_code" }
+func (t *SearchCodeTool) Description() string                             { return "Search for patterns in the codebase" }
 func (t *SearchCodeTool) RequiresHITL(params map[string]interface{}) bool { return false }
 
 func (t *SearchCodeTool) Parameters() map[string]interface{} {
@@ -63,8 +63,8 @@ func (t *SearchCodeTool) Execute(ctx context.Context, params map[string]interfac
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
-		// rg returns exit code 1 when no matches found
-		if strings.Contains(string(output), "no matches") || strings.Contains(string(output), "0 matches") {
+		// rg returns exit code 1 with empty output when no matches found
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return &ToolResult{
 				Output:   "No matches found",
 				Success:  true,

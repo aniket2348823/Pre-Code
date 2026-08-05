@@ -1,0 +1,67 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    "group:allNonMajor"
+  ],
+  "labels": ["dependencies", "automated"],
+  "automerge": false,
+  "platformAutomerge": true,
+  "schedule": ["before 6am on Monday"],
+  "timezone": "UTC",
+  "packageRules": [
+    {
+      "description": "Go modules",
+      "matchManagers": ["gomod"],
+      "groupName": "go modules",
+      "automerge": false,
+      "prPriority": 1
+    },
+    {
+      "description": "Docker images",
+      "matchManagers": ["dockerfile"],
+      "groupName": "docker images",
+      "automerge": false,
+      "prPriority": 2
+    },
+    {
+      "description": "GitHub Actions",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "automerge": true,
+      "automergeType": "pr"
+    },
+    {
+      "description": "Security updates",
+      "matchUpdateTypes": ["digest", "pin", "patch"],
+      "groupName": "security updates",
+      "automerge": true,
+      "automergeType": "pr",
+      "matchCurrentVersion": ">=1.0.0"
+    },
+    {
+      "description": "Major updates require manual review",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["breaking-change", "needs-review"]
+    },
+    {
+      "description": "Go minor updates",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": false,
+      "prPriority": 3
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security", "vulnerability"]
+  },
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/vendor/**",
+    "**/testdata/**"
+  ]
+}

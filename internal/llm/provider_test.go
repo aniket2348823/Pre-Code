@@ -1,19 +1,18 @@
 package llm
 
 import (
-"bytes"
-"context"
-"encoding/json"
-"errors"
-"fmt"
-"io"
-"net/http"
-"net/http/httptest"
-"strings"
-"sync"
-"testing"
-"time"
-openai "github.com/sashabaranov/go-openai"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 )
 
 func TestPriceTable(t *testing.T) {
@@ -38,10 +37,10 @@ func TestClassifyComplexity(t *testing.T) {
 	router := NewModelRouter(nil)
 
 	tests := []struct {
-		name      string
-		task      *Task
-		minScore  float64
-		maxScore  float64
+		name     string
+		task     *Task
+		minScore float64
+		maxScore float64
 	}{
 		{
 			name:     "formatting is very low complexity",
@@ -276,29 +275,6 @@ func TestRoute_MinimalComplexity(t *testing.T) {
 	}
 	if decision == nil {
 		t.Fatal("expected decision")
-	}
-}
-
-func TestExecuteWithFailover_AllFail(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai", err: errProviderDown})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-	_, err := r.ExecuteWithFailover(context.Background(), simpleTask())
-	if err == nil {
-		t.Error("expected error when all providers fail")
-	}
-}
-
-func TestExecuteWithFailover_ContextCancel(t *testing.T) {
-	r := NewModelRouter(nil)
-	// Use a provider that respects context cancellation
-	r.RegisterProvider("openai", &contextAwareProvider{name: "openai", resp: &ChatResponse{Content: "ok", Cost: 0.01}})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
-	_, err := r.ExecuteWithFailover(ctx, simpleTask())
-	if err == nil {
-		t.Error("expected error with cancelled context")
 	}
 }
 
@@ -590,32 +566,6 @@ func anthropicResponseBody(content string, promptTokens, completionTokens int) [
 	}
 	b, _ := json.Marshal(resp)
 	return b
-}
-
-func openAISSEEvents(parts []string) []byte {
-	var buf bytes.Buffer
-	for _, p := range parts {
-		ev := map[string]interface{}{
-			"choices": []map[string]interface{}{
-				{
-					"delta": map[string]string{"content": p},
-				},
-			},
-		}
-		b, _ := json.Marshal(ev)
-		buf.Write(b)
-	}
-	finish := map[string]interface{}{
-		"choices": []map[string]interface{}{
-			{
-				"delta":          map[string]string{},
-				"finish_reason": "stop",
-			},
-		},
-	}
-	b, _ := json.Marshal(finish)
-	buf.Write(b)
-	return buf.Bytes()
 }
 
 // --- Models catalog ---
@@ -1375,56 +1325,6 @@ func TestSafeReadBody_Empty(t *testing.T) {
 
 // --- Circuit Breaker extras ---
 
-func TestCircuitBreaker_Reset(t *testing.T) {
-	cb := NewCircuitBreaker(2, time.Hour)
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	if !cb.IsOpen() {
-		t.Fatal("circuit should be open")
-	}
-	cb.Reset()
-	if cb.IsOpen() {
-		t.Fatal("circuit should be closed after reset")
-	}
-}
-
-func TestCircuitBreaker_HalfOpenRecovery(t *testing.T) {
-	cb := NewCircuitBreaker(2, 10*time.Millisecond)
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	time.Sleep(20 * time.Millisecond)
-	err := cb.Execute(func() error { return nil })
-	if err != nil {
-		t.Fatalf("half-open should succeed, got: %v", err)
-	}
-	if cb.IsOpen() {
-		t.Fatal("circuit should be closed after recovery")
-	}
-}
-
-func TestCircuitBreaker_HalfOpenFailure(t *testing.T) {
-	cb := NewCircuitBreaker(2, 10*time.Millisecond)
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	time.Sleep(20 * time.Millisecond)
-	cb.Execute(func() error { return fmt.Errorf("fail again") })
-	if !cb.IsOpen() {
-		t.Fatal("circuit should re-open after half-open failure")
-	}
-}
-
-func TestCircuitBreaker_SuccessInClosed(t *testing.T) {
-	cb := NewCircuitBreaker(3, time.Hour)
-	for i := 0; i < 2; i++ {
-		cb.Execute(func() error { return nil })
-	}
-	if cb.IsOpen() {
-		t.Fatal("circuit should stay closed")
-	}
-}
-
-// --- provider.go extras ---
-
 func TestSetPrice_Global(t *testing.T) {
 	SetPrice("test-model-set", ModelInfo{Name: "test-model-set", Provider: "test", InputCostPer1K: 0.01, OutputCostPer1K: 0.02})
 	info, ok := LookupPrice("test-model-set")
@@ -1595,51 +1495,7 @@ func TestParseOpenAIStyleSSE_EmptyChoices(t *testing.T) {
 
 // --- StreamWithFailover + streamAttempt ---
 
-func TestStreamWithFailover_Success(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-
-	ch := make(chan *ChatChunk, 2)
-	ch <- &ChatChunk{Content: "hello", Finish: false}
-	ch <- &ChatChunk{Finish: true}
-	close(ch)
-
-	sp := &streamProvider{name: "openai", ch: ch}
-	r.providers["openai"] = sp
-
-	result, err := r.StreamWithFailover(context.Background(), &Task{
-		ID: "t1", Type: "formatting", Messages: []Message{{Role: "user", Content: "hi"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Model == "" {
-		t.Error("expected model")
-	}
-	for range result.Ch {
-	}
-}
-
-func TestStreamWithFailover_AllFail(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &errStreamProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-
-	_, err := r.StreamWithFailover(context.Background(), &Task{
-		ID: "t1", Type: "formatting", Messages: []Message{{Role: "user", Content: "hi"}},
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-type streamProvider struct {
-	name string
-	ch   <-chan *ChatChunk
-}
-
-func (p *streamProvider) Name() string        { return p.name }
+func (p *streamProvider) Name() string { return p.name }
 func (p *streamProvider) Chat(_ context.Context, _ *ChatRequest) (*ChatResponse, error) {
 	return &ChatResponse{Content: "mock"}, nil
 }
@@ -1652,7 +1508,7 @@ type errStreamProvider struct {
 	name string
 }
 
-func (p *errStreamProvider) Name() string        { return p.name }
+func (p *errStreamProvider) Name() string { return p.name }
 func (p *errStreamProvider) Chat(_ context.Context, _ *ChatRequest) (*ChatResponse, error) {
 	return nil, fmt.Errorf("fail")
 }
@@ -1662,211 +1518,6 @@ func (p *errStreamProvider) Stream(_ context.Context, _ *ChatRequest) (<-chan *C
 func (p *errStreamProvider) HealthCheck(_ context.Context) error { return nil }
 
 // --- Attempt with circuit breaker ---
-
-func TestAttempt_CircuitBreakerOpen(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai", resp: &ChatResponse{Content: "ok"}})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-
-	cb := NewCircuitBreaker(2, time.Hour)
-	r.circuitBreakers["openai"] = cb
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-
-	_, err := r.attempt(context.Background(), simpleTask(), FallbackOption{
-		Provider: "openai", Model: "gpt-4o-mini", EstCost: 0.001,
-	})
-	if err == nil {
-		t.Fatal("expected circuit breaker error")
-	}
-}
-
-func TestAttempt_UnregisteredProvider(t *testing.T) {
-	r := NewModelRouter(nil)
-	_, err := r.attempt(context.Background(), simpleTask(), FallbackOption{
-		Provider: "nonexistent", Model: "gpt-4o-mini", EstCost: 0.001,
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestStreamAttempt_CircuitBreakerOpen(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-
-	cb := NewCircuitBreaker(2, time.Hour)
-	r.circuitBreakers["openai"] = cb
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-
-	_, err := r.streamAttempt(context.Background(), simpleTask(), FallbackOption{
-		Provider: "openai", Model: "gpt-4o-mini", EstCost: 0.001,
-	})
-	if err == nil {
-		t.Fatal("expected circuit breaker error")
-	}
-}
-
-func TestStreamAttempt_UnregisteredProvider(t *testing.T) {
-	r := NewModelRouter(nil)
-	_, err := r.streamAttempt(context.Background(), simpleTask(), FallbackOption{
-		Provider: "nonexistent", Model: "gpt-4o-mini", EstCost: 0.001,
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestStreamAttempt_BudgetBlocked(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-	r.SetBudgetGuard(&fakeBudget{reject: fmt.Errorf("over budget")})
-
-	_, err := r.streamAttempt(context.Background(), simpleTask(), FallbackOption{
-		Provider: "openai", Model: "gpt-4o-mini", EstCost: 0.001,
-	})
-	if err == nil {
-		t.Fatal("expected budget error")
-	}
-}
-
-func TestStreamAttempt_ProviderError(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &errStreamProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-
-	_, err := r.streamAttempt(context.Background(), simpleTask(), FallbackOption{
-		Provider: "openai", Model: "gpt-4o-mini", EstCost: 0.001,
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestExecuteWithFailover_FallbackToSecond(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai", err: fmt.Errorf("fail")})
-	r.RegisterProvider("anthropic", &countingProvider{name: "anthropic", resp: &ChatResponse{Content: "ok", Cost: 0.01}})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-	r.healthMonitor.RecordSuccess("anthropic", time.Millisecond)
-
-	resp, err := r.ExecuteWithFailover(context.Background(), &Task{
-		ID: "t1", Type: "formatting", Messages: []Message{{Role: "user", Content: "hi"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Content != "ok" {
-		t.Errorf("wrong content: %q", resp.Content)
-	}
-}
-
-func TestExecuteWithFailover_NilCacheNilBudget(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai", resp: &ChatResponse{Content: "ok", Cost: 0.01}})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-	r.cache = nil
-	r.budget = nil
-
-	resp, err := r.ExecuteWithFailover(context.Background(), simpleTask())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Content != "ok" {
-		t.Errorf("wrong content: %q", resp.Content)
-	}
-}
-
-func TestStreamAttempt_WithBudget(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-	b := &fakeBudget{}
-	r.SetBudgetGuard(b)
-
-	ch := make(chan *ChatChunk, 2)
-	ch <- &ChatChunk{Content: "hello"}
-	ch <- &ChatChunk{Finish: true}
-	close(ch)
-
-	sp := &streamProvider{name: "openai", ch: ch}
-	r.providers["openai"] = sp
-
-	_, err := r.streamAttempt(context.Background(), &Task{
-		ID: "t1", OrgID: "o1", Type: "formatting", Messages: []Message{{Role: "user", Content: "hi"}},
-	}, FallbackOption{Provider: "openai", Model: "gpt-4o-mini", EstCost: 0.001})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStreamAttempt_ContextCancellation(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	bp := &blockingStreamProvider{name: "openai"}
-	r.providers["openai"] = bp
-
-	_, err := r.streamAttempt(ctx, &Task{
-		ID: "t1", OrgID: "o1", Type: "formatting", Messages: []Message{{Role: "user", Content: "hi"}},
-	}, FallbackOption{Provider: "openai", Model: "gpt-4o-mini", EstCost: 0.001})
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(100 * time.Millisecond)
-}
-
-func TestStreamAttempt_WithCache(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-	r.SetCache(NewInMemoryCache(time.Minute))
-
-	ch := make(chan *ChatChunk, 1)
-	ch <- &ChatChunk{Content: "cached", Finish: true}
-	close(ch)
-
-	sp := &streamProvider{name: "openai", ch: ch}
-	r.providers["openai"] = sp
-
-	task := &Task{ID: "t1", OrgID: "o1", Type: "formatting", Messages: []Message{{Role: "user", Content: "hi"}}}
-	_, err := r.streamAttempt(context.Background(), task, FallbackOption{Provider: "openai", Model: "gpt-4o-mini", EstCost: 0.001})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStreamAttempt_FinishFalseRecordsFailure(t *testing.T) {
-	r := NewModelRouter(nil)
-	r.RegisterProvider("openai", &countingProvider{name: "openai"})
-	r.healthMonitor.RecordSuccess("openai", time.Millisecond)
-
-	ch := make(chan *ChatChunk, 1)
-	ch <- &ChatChunk{Content: "partial"}
-	close(ch)
-
-	sp := &streamProvider{name: "openai", ch: ch}
-	r.providers["openai"] = sp
-
-	_, err := r.streamAttempt(context.Background(), &Task{
-		ID: "t1", OrgID: "o1", Type: "formatting", Messages: []Message{{Role: "user", Content: "hi"}},
-	}, FallbackOption{Provider: "openai", Model: "gpt-4o-mini", EstCost: 0.001})
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(200 * time.Millisecond)
-}
-
-type blockingStreamProvider struct {
-	name string
-}
 
 func (p *blockingStreamProvider) Name() string { return p.name }
 func (p *blockingStreamProvider) Chat(_ context.Context, _ *ChatRequest) (*ChatResponse, error) {
@@ -1998,49 +1649,6 @@ func TestCalculateNIMCost_AllBranches(t *testing.T) {
 }
 
 // --- Circuit breaker half-open probe limit ---
-
-func TestCircuitBreaker_HalfOpenProbeLimit(t *testing.T) {
-	cb := NewCircuitBreaker(2, time.Hour)
-	// Trip the breaker
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	if !cb.IsOpen() {
-		t.Fatal("circuit should be open")
-	}
-	// Wait for timeout to enter half-open
-	cb.mu.Lock()
-	cb.lastFailure = time.Now().Add(-2 * time.Hour)
-	cb.mu.Unlock()
-
-	// First probe in half-open should succeed
-	err := cb.Execute(func() error { return nil })
-	if err != nil {
-		t.Fatalf("first half-open probe should succeed: %v", err)
-	}
-
-	// Now trip it again for probe-limit test
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	cb.Execute(func() error { return fmt.Errorf("fail") })
-	cb.mu.Lock()
-	cb.lastFailure = time.Now().Add(-2 * time.Hour)
-	cb.mu.Unlock()
-
-	// First probe enters half-open, increments halfOpenProbes
-	cb.Execute(func() error { return nil })
-	// Second call while still half-open should be blocked
-	cb.mu.Lock()
-	cb.state = CircuitHalfOpen
-	cb.halfOpenProbes.Store(1)
-	cb.mu.Unlock()
-	err = cb.Execute(func() error { return nil })
-	if err != ErrCircuitOpen {
-		t.Fatalf("expected ErrCircuitOpen for second half-open probe, got %v", err)
-	}
-}
-
-// --- Gemini buildGeminiContents edge cases ---
-
-// --- HealthCheck error paths ---
 
 func TestGroqHealthCheck_NetworkError(t *testing.T) {
 	g := &GroqAdapter{
@@ -2282,22 +1890,6 @@ func TestCalculateOpenAICost_KnownModel(t *testing.T) {
 }
 
 // --- provider_http_test.go content below ---
-
-// openAIChatResponse builds a minimal OpenAI-compatible chat completion JSON.
-func openAIChatResponse(content string, promptTokens, completionTokens int) []byte {
-	resp := map[string]interface{}{
-		"choices": []map[string]interface{}{
-			{"message": map[string]interface{}{"content": content}, "finish_reason": "stop"},
-		},
-		"usage": map[string]interface{}{
-			"prompt_tokens":     promptTokens,
-			"completion_tokens": completionTokens,
-		},
-		"model": "test-model",
-	}
-	b, _ := json.Marshal(resp)
-	return b
-}
 
 // mockTransport is a custom RoundTripper that redirects all requests to a test server.
 type mockTransport struct {
@@ -3437,11 +3029,4 @@ func TestOpenAI_Chat_ConvertMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-// openaiClientWithBaseURL creates a go-openai client pointing to a custom base URL.
-func openaiClientWithBaseURL(baseURL string) *openai.Client {
-	cfg := openai.DefaultConfig("test-key")
-	cfg.BaseURL = baseURL
-	return openai.NewClientWithConfig(cfg)
 }

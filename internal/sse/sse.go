@@ -23,11 +23,11 @@ const maxStreamLifetime = 5 * time.Minute
 
 // Streamer manages an SSE connection to a client.
 type Streamer struct {
-	w       io.Writer
-	flusher http.Flusher
-	mu      sync.Mutex
-	closed  bool
-	eventID int
+	w         io.Writer
+	flusher   http.Flusher
+	mu        sync.Mutex
+	closed    bool
+	eventID   int
 	createdAt time.Time
 }
 

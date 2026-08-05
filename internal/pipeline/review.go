@@ -77,23 +77,23 @@ type reviewerDef struct {
 
 // ReviewerOutput holds the output from a single specialized reviewer LLM.
 type ReviewerOutput struct {
-	Name    string `json:"name"`    // e.g. "security", "architecture", "cost"
-	Role    string `json:"role"`    // e.g. "Principal Security Architect"
-	Verdict string `json:"verdict"` // "pass", "fail", "warn"
-	Findings []string `json:"findings"` // specific issues found
+	Name        string   `json:"name"`        // e.g. "security", "architecture", "cost"
+	Role        string   `json:"role"`        // e.g. "Principal Security Architect"
+	Verdict     string   `json:"verdict"`     // "pass", "fail", "warn"
+	Findings    []string `json:"findings"`    // specific issues found
 	Suggestions []string `json:"suggestions"` // improvement suggestions
-	RawOutput string `json:"raw_output"` // full LLM response
+	RawOutput   string   `json:"raw_output"`  // full LLM response
 }
 
 // ShiftZeroPipeline is the full review pipeline orchestrator.
 type ShiftZeroPipeline struct {
-	llmRouter    *llm.ModelRouter
-	engine       *scanner.Engine
-	knowledge    *knowledge.Graph
-	skills       *skillengine.Engine
-	attackGraph  *attackgraph.Engine
-	confidence   *confidence.Engine
-	pipeline     *Pipeline
+	llmRouter   *llm.ModelRouter
+	engine      *scanner.Engine
+	knowledge   *knowledge.Graph
+	skills      *skillengine.Engine
+	attackGraph *attackgraph.Engine
+	confidence  *confidence.Engine
+	pipeline    *Pipeline
 	// DeterministicOnly skips all LLM reviewer calls (zero LLM cost).
 	// Only the deterministic scanner + confidence scoring run.
 	DeterministicOnly bool
@@ -422,9 +422,9 @@ func (szp *ShiftZeroPipeline) buildReviewerContext(mainLLM string, findings []sc
 // runReviewersInParallel runs all specialized reviewer LLMs concurrently.
 func (szp *ShiftZeroPipeline) runReviewersInParallel(ctx context.Context, reviewerContext string, prompt string) []ReviewerOutput {
 	defs := []reviewerDef{
-		{		name: "security",
-				role: "Principal Security Architect",
-				instruction: `You are a Principal Security Architect. Review the output above with a red-team mindset.
+		{name: "security",
+			role: "Principal Security Architect",
+			instruction: `You are a Principal Security Architect. Review the output above with a red-team mindset.
 
 Find:
 - Attack vectors and vulnerabilities
@@ -523,9 +523,9 @@ const maxKnowledgeGraphNodes = 20
 func (szp *ShiftZeroPipeline) runSingleReviewer(ctx context.Context, codeContext string, prompt string, def reviewerDef) ReviewerOutput {
 	if szp.llmRouter == nil {
 		return ReviewerOutput{
-			Name:    def.name,
-			Role:    def.role,
-			Verdict: "error",
+			Name:     def.name,
+			Role:     def.role,
+			Verdict:  "error",
 			Findings: []string{"LLM router not configured"},
 		}
 	}
@@ -549,9 +549,9 @@ func (szp *ShiftZeroPipeline) runSingleReviewer(ctx context.Context, codeContext
 
 	if err != nil {
 		return ReviewerOutput{
-			Name:    def.name,
-			Role:    def.role,
-			Verdict: "error",
+			Name:     def.name,
+			Role:     def.role,
+			Verdict:  "error",
 			Findings: []string{err.Error()},
 		}
 	}

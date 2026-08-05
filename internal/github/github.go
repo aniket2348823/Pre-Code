@@ -17,23 +17,23 @@ import (
 
 // Event represents a parsed GitHub webhook event.
 type Event struct {
-	Action      string      `json:"action"`
-	Number      int         `json:"number"`
+	Action      string       `json:"action"`
+	Number      int          `json:"number"`
 	PullRequest *PullRequest `json:"pull_request,omitempty"`
-	Repository  *Repository `json:"repository,omitempty"`
-	Sender      *User       `json:"sender,omitempty"`
+	Repository  *Repository  `json:"repository,omitempty"`
+	Sender      *User        `json:"sender,omitempty"`
 }
 
 // PullRequest represents a GitHub pull request.
 type PullRequest struct {
-	Number   int    `json:"number"`
-	Title    string `json:"title"`
-	Body     string `json:"body"`
-	HTMLURL  string `json:"html_url"`
-	State    string `json:"state"`
-	Head     Ref    `json:"head"`
-	Base     Ref    `json:"base"`
-	DiffURL  string `json:"diff_url"`
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	HTMLURL string `json:"html_url"`
+	State   string `json:"state"`
+	Head    Ref    `json:"head"`
+	Base    Ref    `json:"base"`
+	DiffURL string `json:"diff_url"`
 }
 
 // Ref represents a git ref (branch, commit, etc.).

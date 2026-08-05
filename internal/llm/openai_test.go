@@ -212,8 +212,8 @@ func TestOpenAI_Chat_StopReason(t *testing.T) {
 		resp := map[string]interface{}{
 			"choices": []map[string]interface{}{
 				{
-					"message":        map[string]interface{}{"content": "ok"},
-					"finish_reason":  "length",
+					"message":       map[string]interface{}{"content": "ok"},
+					"finish_reason": "length",
 				},
 			},
 			"usage": map[string]interface{}{"prompt_tokens": 5, "completion_tokens": 5},

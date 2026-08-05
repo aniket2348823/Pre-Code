@@ -10,30 +10,30 @@ import (
 type TaskState string
 
 const (
-	StatePending    TaskState = "pending"
-	StatePlanning   TaskState = "planning"
-	StateExecuting  TaskState = "executing"
+	StatePending     TaskState = "pending"
+	StatePlanning    TaskState = "planning"
+	StateExecuting   TaskState = "executing"
 	StateWaitingHITL TaskState = "waiting_hitl"
-	StateReviewing  TaskState = "reviewing"
-	StateCompleted  TaskState = "completed"
-	StateFailed     TaskState = "failed"
-	StateCancelled  TaskState = "cancelled"
+	StateReviewing   TaskState = "reviewing"
+	StateCompleted   TaskState = "completed"
+	StateFailed      TaskState = "failed"
+	StateCancelled   TaskState = "cancelled"
 )
 
 // Event represents a state transition event.
 type Event string
 
 const (
-	EventStart          Event = "start"
-	EventPlanReady      Event = "plan_ready"
-	EventStepComplete   Event = "step_complete"
-	EventStepFailed     Event = "step_failed"
-	EventHITLRequired   Event = "hitl_required"
-	EventHITLApproved   Event = "hitl_approved"
-	EventHITLRejected   Event = "hitl_rejected"
-	EventReviewPassed   Event = "review_passed"
-	EventReviewFailed   Event = "review_failed"
-	EventCancel         Event = "cancel"
+	EventStart        Event = "start"
+	EventPlanReady    Event = "plan_ready"
+	EventStepComplete Event = "step_complete"
+	EventStepFailed   Event = "step_failed"
+	EventHITLRequired Event = "hitl_required"
+	EventHITLApproved Event = "hitl_approved"
+	EventHITLRejected Event = "hitl_rejected"
+	EventReviewPassed Event = "review_passed"
+	EventReviewFailed Event = "review_failed"
+	EventCancel       Event = "cancel"
 )
 
 // Task represents an agent task with full state.
@@ -89,31 +89,31 @@ type Plan struct {
 
 // PlanStep represents a single step in the plan.
 type PlanStep struct {
-	Index       int    `json:"index"`
-	Tool        string `json:"tool"`
-	Description string `json:"description"`
+	Index       int                    `json:"index"`
+	Tool        string                 `json:"tool"`
+	Description string                 `json:"description"`
 	Params      map[string]interface{} `json:"params,omitempty"`
 }
 
 // StepResult represents the result of executing a step.
 type StepResult struct {
-	Step        int           `json:"step"`
-	Tool        string        `json:"tool"`
-	Status      string        `json:"status"`
-	Result      string        `json:"result,omitempty"`
-	Error       string        `json:"error,omitempty"`
-	DurationMs  int64         `json:"duration_ms"`
-	TokensUsed  int           `json:"tokens_used"`
-	Cost        float64       `json:"cost"`
-	StartedAt   time.Time     `json:"started_at"`
-	CompletedAt *time.Time    `json:"completed_at,omitempty"`
+	Step        int        `json:"step"`
+	Tool        string     `json:"tool"`
+	Status      string     `json:"status"`
+	Result      string     `json:"result,omitempty"`
+	Error       string     `json:"error,omitempty"`
+	DurationMs  int64      `json:"duration_ms"`
+	TokensUsed  int        `json:"tokens_used"`
+	Cost        float64    `json:"cost"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 // HITLCheckpoint represents a human-in-the-loop checkpoint.
 type HITLCheckpoint struct {
-	CheckpointID string   `json:"checkpoint_id"`
-	Description  string   `json:"description"`
-	Options      []string `json:"options"`
+	CheckpointID string    `json:"checkpoint_id"`
+	Description  string    `json:"description"`
+	Options      []string  `json:"options"`
 	WaitingSince time.Time `json:"waiting_since"`
 }
 

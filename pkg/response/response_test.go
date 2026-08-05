@@ -11,6 +11,7 @@ import (
 	"github.com/vigilagent/vigilagent/internal/requestid"
 )
 
+// Content from response_test.go
 // --- Helper ---
 
 func reqWithID(id string) *http.Request {
@@ -759,4 +760,516 @@ func parseInt64(s string) int64 {
 		}
 	}
 	return n
+}
+
+// Content from hateoas_test.go
+// --- Link struct tests ---
+
+func TestLink_MarshalJSON(t *testing.T) {
+	link := Link{Href: "/api/v1/items", Method: "GET", Type: "application/json"}
+	b, err := json.Marshal(link)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if m["href"] != "/api/v1/items" {
+		t.Errorf("expected href=/api/v1/items, got %v", m["href"])
+	}
+	if m["method"] != "GET" {
+		t.Errorf("expected method=GET, got %v", m["method"])
+	}
+	if m["type"] != "application/json" {
+		t.Errorf("expected type=application/json, got %v", m["type"])
+	}
+}
+
+func TestLink_OmitsEmptyFields(t *testing.T) {
+	link := Link{Href: "/foo"}
+	b, err := json.Marshal(link)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if _, ok := m["method"]; ok {
+		t.Error("expected method to be omitted")
+	}
+	if _, ok := m["type"]; ok {
+		t.Error("expected type to be omitted")
+	}
+	if _, ok := m["title"]; ok {
+		t.Error("expected title to be omitted")
+	}
+}
+
+func TestNewLink(t *testing.T) {
+	link := NewLink("/api/test")
+	if link.Href != "/api/test" {
+		t.Errorf("expected href=/api/test, got %s", link.Href)
+	}
+	if link.Method != "" {
+		t.Error("expected empty method")
+	}
+}
+
+func TestNewMethodLink(t *testing.T) {
+	link := NewMethodLink("/api/test", "POST")
+	if link.Href != "/api/test" || link.Method != "POST" {
+		t.Errorf("expected {/api/test POST}, got {%s %s}", link.Href, link.Method)
+	}
+}
+
+func TestNewTypedLink(t *testing.T) {
+	link := NewTypedLink("/api/test", "PUT", "application/json")
+	if link.Href != "/api/test" || link.Method != "PUT" || link.Type != "application/json" {
+		t.Errorf("expected {/api/test PUT application/json}, got {%s %s %s}", link.Href, link.Method, link.Type)
+	}
+}
+
+// --- AddLink tests ---
+
+func TestAddLink_MapData(t *testing.T) {
+	data := map[string]interface{}{
+		"name": "test",
+	}
+	result := AddLink(data, "self", "/api/items/1", "GET")
+
+	links, ok := result.(map[string]interface{})["_links"].(Links)
+	if !ok {
+		t.Fatal("expected _links to be Links type")
+	}
+	if links["self"].Href != "/api/items/1" {
+		t.Errorf("expected href=/api/items/1, got %s", links["self"].Href)
+	}
+	if links["self"].Method != "GET" {
+		t.Errorf("expected method=GET, got %s", links["self"].Method)
+	}
+}
+
+func TestAddLink_PtrMapData(t *testing.T) {
+	data := &map[string]interface{}{
+		"name": "test",
+	}
+	result := AddLink(data, "next", "/api/items?page=2", "GET")
+	_ = result
+
+	links, ok := (*data)["_links"].(Links)
+	if !ok {
+		t.Fatal("expected _links to be Links type on pointer map")
+	}
+	if links["next"].Href != "/api/items?page=2" {
+		t.Errorf("expected href=/api/items?page=2, got %s", links["next"].Href)
+	}
+}
+
+func TestAddLink_MergesExisting(t *testing.T) {
+	data := map[string]interface{}{
+		"_links": Links{
+			"self": NewLink("/api/items"),
+		},
+	}
+	AddLink(data, "next", "/api/items?page=2", "GET")
+
+	links := data["_links"].(Links)
+	if len(links) != 2 {
+		t.Errorf("expected 2 links, got %d", len(links))
+	}
+	if links["self"].Href != "/api/items" {
+		t.Error("existing self link was overwritten")
+	}
+	if links["next"].Href != "/api/items?page=2" {
+		t.Error("next link not added correctly")
+	}
+}
+
+func TestAddLink_NilMap(t *testing.T) {
+	// Initialize the pointer so we can test nil inner map
+	data := new(map[string]interface{})
+	AddLink(data, "self", "/api/test", "GET")
+	if *data == nil {
+		t.Fatal("expected inner map to be initialized")
+	}
+}
+
+func TestAddLink_UnsupportedType(t *testing.T) {
+	data := "not a map"
+	result := AddLink(data, "self", "/test", "GET")
+	if result != "not a map" {
+		t.Error("unsupported type should return original data")
+	}
+}
+
+// --- AddSelfLink tests ---
+
+func TestAddSelfLink(t *testing.T) {
+	data := map[string]interface{}{"id": 1}
+	AddSelfLink(data, "/api/items/1")
+
+	links := data["_links"].(Links)
+	if links["self"].Href != "/api/items/1" {
+		t.Errorf("expected self href=/api/items/1, got %s", links["self"].Href)
+	}
+	if links["self"].Method != "GET" {
+		t.Errorf("expected method=GET, got %s", links["self"].Method)
+	}
+}
+
+// --- AddCollectionLinks tests ---
+
+func TestAddCollectionLinks_MiddlePage(t *testing.T) {
+	data := map[string]interface{}{}
+	AddCollectionLinks(data, "/api/items", 2, 10, 50)
+
+	links := data["_links"].(Links)
+
+	assertLink(t, links, "self", "/api/items?page=2&per_page=10")
+	assertLink(t, links, "first", "/api/items?page=1&per_page=10")
+	assertLink(t, links, "last", "/api/items?page=5&per_page=10")
+	assertLink(t, links, "next", "/api/items?page=3&per_page=10")
+	assertLink(t, links, "prev", "/api/items?page=1&per_page=10")
+}
+
+func TestAddCollectionLinks_FirstPage(t *testing.T) {
+	data := map[string]interface{}{}
+	AddCollectionLinks(data, "/api/items", 1, 10, 50)
+
+	links := data["_links"].(Links)
+
+	assertLink(t, links, "self", "/api/items?page=1&per_page=10")
+	assertLink(t, links, "first", "/api/items?page=1&per_page=10")
+	assertLink(t, links, "last", "/api/items?page=5&per_page=10")
+	assertLink(t, links, "next", "/api/items?page=2&per_page=10")
+
+	if _, ok := links["prev"]; ok {
+		t.Error("first page should not have prev link")
+	}
+}
+
+func TestAddCollectionLinks_LastPage(t *testing.T) {
+	data := map[string]interface{}{}
+	AddCollectionLinks(data, "/api/items", 5, 10, 50)
+
+	links := data["_links"].(Links)
+
+	assertLink(t, links, "self", "/api/items?page=5&per_page=10")
+	assertLink(t, links, "first", "/api/items?page=1&per_page=10")
+	assertLink(t, links, "last", "/api/items?page=5&per_page=10")
+	assertLink(t, links, "prev", "/api/items?page=4&per_page=10")
+
+	if _, ok := links["next"]; ok {
+		t.Error("last page should not have next link")
+	}
+}
+
+func TestAddCollectionLinks_SinglePage(t *testing.T) {
+	data := map[string]interface{}{}
+	AddCollectionLinks(data, "/api/items", 1, 20, 5)
+
+	links := data["_links"].(Links)
+
+	assertLink(t, links, "self", "/api/items?page=1&per_page=20")
+	assertLink(t, links, "first", "/api/items?page=1&per_page=20")
+	assertLink(t, links, "last", "/api/items?page=1&per_page=20")
+
+	if _, ok := links["next"]; ok {
+		t.Error("single page should not have next link")
+	}
+	if _, ok := links["prev"]; ok {
+		t.Error("single page should not have prev link")
+	}
+}
+
+func TestAddCollectionLinks_EmptyResults(t *testing.T) {
+	data := map[string]interface{}{}
+	AddCollectionLinks(data, "/api/items", 1, 10, 0)
+
+	links := data["_links"].(Links)
+	// total=0, perPage=10, ceil(0/10)=0 → clamped to 1
+	assertLink(t, links, "self", "/api/items?page=1&per_page=10")
+	assertLink(t, links, "first", "/api/items?page=1&per_page=10")
+	assertLink(t, links, "last", "/api/items?page=1&per_page=10")
+}
+
+func TestAddCollectionLinks_DefaultsZeroValues(t *testing.T) {
+	data := map[string]interface{}{}
+	AddCollectionLinks(data, "/api/items", 0, 0, 10)
+
+	links := data["_links"].(Links)
+	// page 0 → clamped to 1, perPage 0 → clamped to 20
+	assertLink(t, links, "self", "/api/items?page=1&per_page=20")
+}
+
+func TestAddCollectionLinks_StripsQueryFromBasePath(t *testing.T) {
+	data := map[string]interface{}{}
+	AddCollectionLinks(data, "/api/items?filter=active&page=99", 1, 10, 30)
+
+	links := data["_links"].(Links)
+	// Should strip the existing query params
+	for _, link := range links {
+		if contains(link.Href, "filter=active") {
+			t.Errorf("query params from basePath should be stripped, got %s", link.Href)
+		}
+	}
+}
+
+func TestAddCollectionLinks_PreservesExistingData(t *testing.T) {
+	data := map[string]interface{}{
+		"name": "test-collection",
+	}
+	AddCollectionLinks(data, "/api/items", 1, 10, 20)
+
+	if data["name"] != "test-collection" {
+		t.Error("existing data was modified")
+	}
+}
+
+// --- AddEmbedded tests ---
+
+func TestAddEmbedded(t *testing.T) {
+	data := map[string]interface{}{}
+	resources := []map[string]string{{"id": "1"}, {"id": "2"}}
+	AddEmbedded(data, "items", resources)
+
+	embedded, ok := data["_embedded"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected _embedded to be map")
+	}
+	items, ok := embedded["items"]
+	if !ok {
+		t.Fatal("expected items in _embedded")
+	}
+	itemsList, ok := items.([]map[string]string)
+	if !ok || len(itemsList) != 2 {
+		t.Errorf("expected 2 items, got %v", items)
+	}
+}
+
+func TestAddEmbedded_MergesExisting(t *testing.T) {
+	data := map[string]interface{}{
+		"_embedded": map[string]interface{}{
+			"first": "value1",
+		},
+	}
+	AddEmbedded(data, "second", "value2")
+
+	embedded := data["_embedded"].(map[string]interface{})
+	if embedded["first"] != "value1" {
+		t.Error("existing embedded resource was overwritten")
+	}
+	if embedded["second"] != "value2" {
+		t.Error("second embedded resource not added")
+	}
+}
+
+func TestAddEmbedded_NilEmbedded(t *testing.T) {
+	data := map[string]interface{}{
+		"_embedded": nil,
+	}
+	AddEmbedded(data, "items", []string{"a"})
+
+	embedded, ok := data["_embedded"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected _embedded to be map after nil")
+	}
+	if embedded["items"] == nil {
+		t.Error("expected items to be set")
+	}
+}
+
+func TestAddEmbedded_PtrMap(t *testing.T) {
+	data := &map[string]interface{}{}
+	AddEmbedded(data, "tags", []string{"go", "api"})
+
+	embedded, ok := (*data)["_embedded"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected _embedded on pointer map")
+	}
+	if embedded["tags"] == nil {
+		t.Error("expected tags in _embedded")
+	}
+}
+
+// --- HALDocument tests ---
+
+func TestHALDocument_New(t *testing.T) {
+	doc := NewHALDocument("/api/items")
+	if doc.Links["self"].Href != "/api/items" {
+		t.Errorf("expected self=/api/items, got %s", doc.Links["self"].Href)
+	}
+}
+
+func TestHALDocument_Chaining(t *testing.T) {
+	doc := NewHALDocument("/api/items/1").
+		WithLink("list", "/api/items").
+		WithMethodLink("update", "/api/items/1", "PUT").
+		WithData(map[string]string{"id": "1"}).
+		WithEmbedded("comments", []string{"c1", "c2"})
+
+	if doc.Links["list"].Href != "/api/items" {
+		t.Error("list link not set")
+	}
+	if doc.Links["update"].Method != "PUT" {
+		t.Error("update link not set")
+	}
+	if doc.Data == nil {
+		t.Error("data not set")
+	}
+	if doc.Embedded["comments"] == nil {
+		t.Error("embedded not set")
+	}
+}
+
+func TestHALDocument_MarshalJSON(t *testing.T) {
+	doc := NewHALDocument("/api/items").
+		WithLink("next", "/api/items?page=2").
+		WithData([]string{"a", "b"})
+
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	links, ok := m["_links"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected _links in JSON")
+	}
+	if links["self"] == nil {
+		t.Error("expected self link")
+	}
+	if links["next"] == nil {
+		t.Error("expected next link")
+	}
+	if m["data"] == nil {
+		t.Error("expected data")
+	}
+}
+
+func TestHALDocument_OmitsEmptyFields(t *testing.T) {
+	doc := &HALDocument{}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if _, ok := m["_links"]; ok {
+		t.Error("expected _links to be omitted when empty")
+	}
+	if _, ok := m["_embedded"]; ok {
+		t.Error("expected _embedded to be omitted when empty")
+	}
+	if _, ok := m["data"]; ok {
+		t.Error("expected data to be omitted when nil")
+	}
+}
+
+// --- Integration with APIResponse ---
+
+func TestAPIResponse_WithHALDocument(t *testing.T) {
+	doc := NewHALDocument("/api/items/1").
+		WithLink("collection", "/api/items").
+		WithData(map[string]string{"id": "1", "name": "test"})
+
+	resp := APIResponse{
+		Success: true,
+		Data:    doc,
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	data, ok := m["data"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected data to be object")
+	}
+	links, ok := data["_links"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected _links in data")
+	}
+	if links["self"] == nil {
+		t.Error("expected self link in nested data")
+	}
+}
+
+func TestAPIResponse_WithLinksInData(t *testing.T) {
+	data := map[string]interface{}{
+		"id":   1,
+		"name": "item",
+	}
+	AddSelfLink(data, "/api/items/1")
+	AddLink(data, "delete", "/api/items/1", "DELETE")
+
+	resp := APIResponse{
+		Success: true,
+		Data:    data,
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	d := m["data"].(map[string]interface{})
+	links := d["_links"].(map[string]interface{})
+	if links["self"] == nil {
+		t.Error("expected self link")
+	}
+	if links["delete"] == nil {
+		t.Error("expected delete link")
+	}
+}
+
+// --- Helpers ---
+
+func assertLink(t *testing.T, links Links, rel, expectedHref string) {
+	t.Helper()
+	link, ok := links[rel]
+	if !ok {
+		t.Errorf("expected link rel=%s, not found", rel)
+		return
+	}
+	if link.Href != expectedHref {
+		t.Errorf("expected href=%s for rel=%s, got %s", expectedHref, rel, link.Href)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
+}
+
+func containsSubstr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

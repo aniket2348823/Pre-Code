@@ -18,10 +18,10 @@ type CodeBlock struct {
 }
 
 type AnalysisResult struct {
-	Grade          string `json:"grade"`
-	Score          int    `json:"score"`
-	CriticalIssues int    `json:"critical_issues"`
-	Suggestions    int    `json:"suggestions"`
+	Grade          string            `json:"grade"`
+	Score          int               `json:"score"`
+	CriticalIssues int               `json:"critical_issues"`
+	Suggestions    int               `json:"suggestions"`
 	Reviewers      map[string]string `json:"reviewers"`
 }
 
@@ -63,7 +63,7 @@ func AnalyzeCode(ctx context.Context, client *http.Client, backendURL, apiKey, c
 		"language": language,
 	}
 	bodyBytes, _ := json.Marshal(payload)
-	
+
 	req, err := http.NewRequestWithContext(ctx, "POST", backendURL+"/api/v1/review", bytes.NewBuffer(bodyBytes))
 	if err != nil {
 		return nil, err
@@ -115,12 +115,12 @@ func FormatAnalysisSummary(results []*AnalysisResult) string {
 	}
 
 	res := results[0]
-	
+
 	summary := "---\n"
 	summary += fmt.Sprintf("🛡️ VigilAgent Analysis: %s (%d%%)\n", res.Grade, res.Score)
 	summary += fmt.Sprintf("• %d critical issues\n", res.CriticalIssues)
 	summary += fmt.Sprintf("• %d suggestions\n", res.Suggestions)
-	
+
 	reviewers := "• Reviewers:"
 	for k, v := range res.Reviewers {
 		reviewers += fmt.Sprintf(" %s %s |", k, v)

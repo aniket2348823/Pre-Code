@@ -197,12 +197,12 @@ func (s *ProxyServer) metricsMiddleware(next http.Handler) http.Handler {
 func (s *ProxyServer) rateLimitMiddleware(next http.Handler) http.Handler {
 	// Simple in-memory rate limiter: 100 req/min per IP
 	type clientState struct {
-		count    int
+		count     int
 		resetTime time.Time
 	}
 	var mu sync.Mutex
 	clients := make(map[string]*clientState)
-	
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Use RealIP middleware's result if available, otherwise parse from RemoteAddr
 		ip := r.RemoteAddr
@@ -294,19 +294,19 @@ func (s *ProxyServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"requests_total":     atomic.LoadUint64(&s.reqCount),
-		"errors_total":       atomic.LoadUint64(&s.errCount),
-		"avg_latency_ms":     avgLatency,
-		"p50_latency_ms":     p50Latency,
-		"healthy":            true,
-		"service":            "vigilagent-proxy",
-		"timestamp":          time.Now().Unix(),
+		"requests_total": atomic.LoadUint64(&s.reqCount),
+		"errors_total":   atomic.LoadUint64(&s.errCount),
+		"avg_latency_ms": avgLatency,
+		"p50_latency_ms": p50Latency,
+		"healthy":        true,
+		"service":        "vigilagent-proxy",
+		"timestamp":      time.Now().Unix(),
 		"usage": map[string]interface{}{
-			"tracked_keys": keyCount,
+			"tracked_keys":   keyCount,
 			"total_requests": totalRequests,
-			"total_errors": totalErrors,
-			"total_tokens": totalTokens,
-			"total_cost": totalCost,
+			"total_errors":   totalErrors,
+			"total_tokens":   totalTokens,
+			"total_cost":     totalCost,
 		},
 	})
 }
@@ -446,8 +446,8 @@ func (s *ProxyServer) handleProxyRequest(w http.ResponseWriter, r *http.Request,
 
 	// ── BYOK: Check for user's LLM key via header ──
 	llmKey := r.Header.Get("X-LLM-Key")
-	llmProvider := r.Header.Get("X-LLM-Provider") // optional hint
-	llmModel := r.Header.Get("X-LLM-Model")       // optional override
+	llmProvider := r.Header.Get("X-LLM-Provider")     // optional hint
+	llmModel := r.Header.Get("X-LLM-Model")           // optional override
 	analysisMode := r.Header.Get("X-VigilAgent-Mode") // passthrough | scan | verify | auto
 
 	if llmModel != "" {
@@ -633,8 +633,8 @@ func (s *ProxyServer) buildTask(ctx context.Context, bodyBytes []byte, model str
 // Wires cache and budget guard when available.
 func (s *ProxyServer) buildRouter(llmKey, hintProvider string) *llm.ModelRouter {
 	router := llm.NewModelRouter(&llm.RouterConfig{
-		DefaultModel:       "gpt-4o-mini",
-		BudgetPerTask:      10.00,
+		DefaultModel:        "gpt-4o-mini",
+		BudgetPerTask:       10.00,
 		DefaultOutputTokens: 4096,
 	})
 
@@ -800,8 +800,6 @@ func buildProviderConfig(id llm.ProviderID, model, apiKey string) *ProviderConfi
 func formatFloat(f float64) string {
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", f), "0"), ".")
 }
-
-
 
 // recordUsage tracks per-key usage metrics.
 func (s *ProxyServer) recordUsage(apiKey string, cost float64, tokens int, err bool) {

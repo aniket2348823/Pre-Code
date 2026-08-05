@@ -6,8 +6,8 @@ import (
 
 	"github.com/vigilagent/vigilagent/internal/compliance"
 	"github.com/vigilagent/vigilagent/internal/requirements"
-	"github.com/vigilagent/vigilagent/internal/schema"
 	"github.com/vigilagent/vigilagent/internal/scanner"
+	"github.com/vigilagent/vigilagent/internal/schema"
 )
 
 func newTestPipeline() *Pipeline {

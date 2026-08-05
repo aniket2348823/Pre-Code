@@ -66,8 +66,8 @@ func TestBuildPrompt(t *testing.T) {
 		Files: []File{
 			{Path: "user.go", Content: "package main", Language: "go"},
 		},
-		ProjectType:  "go",
-		GitBranch:    "feature/auth",
+		ProjectType: "go",
+		GitBranch:   "feature/auth",
 		Conventions: []Convention{
 			{Category: "naming", Pattern: "Go conventions"},
 		},
@@ -132,8 +132,8 @@ func TestDetectDependencies(t *testing.T) {
 	b := NewBuilder(nil)
 	files := []File{
 		{
-			Path:    "go.mod",
-			Content: "module example\n\nrequire (\n\tgithub.com/chi/chi/v5 v5.0.0\n\tgithub.com/jackc/pgx/v5 v5.0.0\n)",
+			Path:     "go.mod",
+			Content:  "module example\n\nrequire (\n\tgithub.com/chi/chi/v5 v5.0.0\n\tgithub.com/jackc/pgx/v5 v5.0.0\n)",
 			Language: "go",
 		},
 	}
@@ -168,10 +168,10 @@ func TestBuildRequest(t *testing.T) {
 		Files: []File{
 			{Path: "test.go", Content: "package main", Language: "go"},
 		},
-		OpenTabs:   []string{"test.go"},
-		GitBranch:  "main",
+		OpenTabs:    []string{"test.go"},
+		GitBranch:   "main",
 		ProjectType: "go",
-		Cursor:     &CursorPosition{File: "test.go", Line: 10, Column: 5},
+		Cursor:      &CursorPosition{File: "test.go", Line: 10, Column: 5},
 	}
 
 	if len(req.Files) != 1 {
@@ -430,15 +430,15 @@ func TestBuildPromptWithBudget_MultipleFilesPartialFit(t *testing.T) {
 func TestBuildPrompt_AllSections(t *testing.T) {
 	b := NewBuilder(nil)
 	pc := &ProjectContext{
-		ProjectType:  "go",
-		GitBranch:    "main",
-		Dependencies: []string{"dep1"},
-		Conventions:  []Convention{{Category: "naming", Pattern: "camelCase", Example: "fooBar"}},
-		OpenTabs:     []string{"a.go"},
-		Files:        []File{{Path: "a.go", Content: "pkg", Language: "go"}},
+		ProjectType:      "go",
+		GitBranch:        "main",
+		Dependencies:     []string{"dep1"},
+		Conventions:      []Convention{{Category: "naming", Pattern: "camelCase", Example: "fooBar"}},
+		OpenTabs:         []string{"a.go"},
+		Files:            []File{{Path: "a.go", Content: "pkg", Language: "go"}},
 		GitRecentCommits: []string{"fix: bug"},
-		MemoryContext: []MemorySnippet{{Type: "episodic", Content: "past fix", Score: 0.9}},
-		CursorPosition: &CursorPosition{File: "a.go", Line: 1, Column: 1},
+		MemoryContext:    []MemorySnippet{{Type: "episodic", Content: "past fix", Score: 0.9}},
+		CursorPosition:   &CursorPosition{File: "a.go", Line: 1, Column: 1},
 	}
 	prompt := b.BuildPrompt(pc, "do thing")
 	if prompt == "" {
@@ -557,8 +557,8 @@ func TestDetectDependencies_PackageJSON(t *testing.T) {
 	b := NewBuilder(nil)
 	files := []File{
 		{
-			Path:    "package.json",
-			Content: `{"dependencies": {"react": "^18.0.0"}}`,
+			Path:     "package.json",
+			Content:  `{"dependencies": {"react": "^18.0.0"}}`,
 			Language: "json",
 		},
 	}
@@ -586,8 +586,8 @@ func TestBuildPromptWithBudget_PartialFiles(t *testing.T) {
 func TestBuildPrompt_WithGitHistory(t *testing.T) {
 	b := NewBuilder(nil)
 	pc := &ProjectContext{
-		ProjectType:     "go",
-		GitBranch:       "main",
+		ProjectType:      "go",
+		GitBranch:        "main",
 		GitRecentCommits: []string{"feat: add login", "fix: auth bug"},
 	}
 	prompt := b.BuildPrompt(pc, "fix bug")

@@ -39,6 +39,13 @@ type lockoutState struct {
 
 // NewAccountLockout creates a new in-memory account lockout manager.
 func NewAccountLockout(maxAttempts int, lockoutDuration time.Duration) *AccountLockout {
+	// Guard against time.NewTicker panicking on a non-positive interval.
+	if maxAttempts <= 0 {
+		maxAttempts = 5
+	}
+	if lockoutDuration <= 0 {
+		lockoutDuration = time.Minute
+	}
 	al := &AccountLockout{
 		attempts:        make(map[string]*lockoutState),
 		maxAttempts:     maxAttempts,
@@ -230,8 +237,8 @@ func LockoutMiddleware(lockout Lockout, keyFunc func(*http.Request) string) func
 				remaining := lockout.GetRemainingLockout(ctx, key)
 				w.Header().Set("Retry-After", fmt.Sprintf("%.0f", remaining.Seconds()))
 				response.JSON(w, http.StatusTooManyRequests, map[string]interface{}{
-					"code":       "AUTH_005",
-					"error":      "account locked due to too many failed attempts",
+					"code":        "AUTH_005",
+					"error":       "account locked due to too many failed attempts",
 					"retry_after": remaining.Seconds(),
 				})
 				return

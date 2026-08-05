@@ -697,11 +697,11 @@ func TestGetRecommendations_ModelSelection(t *testing.T) {
 	// Use expensive model many times
 	for i := 0; i < 30; i++ {
 		e.RecordCost(CostRecord{
-			ID:          "r" + string(rune('a'+i%26)),
-			Model:       "claude-opus-4-20250514",
-			InputTokens: 1000,
+			ID:           "r" + string(rune('a'+i%26)),
+			Model:        "claude-opus-4-20250514",
+			InputTokens:  1000,
 			OutputTokens: 500,
-			CostUSD:     1.0,
+			CostUSD:      1.0,
 		})
 	}
 	recs := e.GetRecommendations()

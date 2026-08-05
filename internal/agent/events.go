@@ -9,30 +9,30 @@ import (
 type EventType string
 
 const (
-	WSPlanCreated   EventType = "plan_created"
-	WSStepStarted   EventType = "step_started"
-	WSStepComplete  EventType = "step_complete"
-	WSStepFailed    EventType = "step_failed"
-	WSToken         EventType = "token"
-	WSTaskComplete  EventType = "task_complete"
-	WSTaskFailed    EventType = "task_failed"
-	WSCostUpdate    EventType = "cost_update"
-	WSHITLRequired  EventType = "hitl_required"
-	WSReflection    EventType = "reflection"
+	WSPlanCreated  EventType = "plan_created"
+	WSStepStarted  EventType = "step_started"
+	WSStepComplete EventType = "step_complete"
+	WSStepFailed   EventType = "step_failed"
+	WSToken        EventType = "token"
+	WSTaskComplete EventType = "task_complete"
+	WSTaskFailed   EventType = "task_failed"
+	WSCostUpdate   EventType = "cost_update"
+	WSHITLRequired EventType = "hitl_required"
+	WSReflection   EventType = "reflection"
 )
 
 // AgentEvent represents a real-time event from the agent execution loop.
 type AgentEvent struct {
-	Type      EventType            `json:"type"`
-	TaskID    string               `json:"task_id"`
-	Step      int                  `json:"step,omitempty"`
-	Total     int                  `json:"total,omitempty"`
-	Data      interface{}          `json:"data,omitempty"`
-	Timestamp time.Time            `json:"timestamp"`
-	Cost      float64              `json:"cost,omitempty"`
-	Tokens    int                  `json:"tokens,omitempty"`
-	Model     string               `json:"model,omitempty"`
-	Error     string               `json:"error,omitempty"`
+	Type      EventType              `json:"type"`
+	TaskID    string                 `json:"task_id"`
+	Step      int                    `json:"step,omitempty"`
+	Total     int                    `json:"total,omitempty"`
+	Data      interface{}            `json:"data,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+	Cost      float64                `json:"cost,omitempty"`
+	Tokens    int                    `json:"tokens,omitempty"`
+	Model     string                 `json:"model,omitempty"`
+	Error     string                 `json:"error,omitempty"`
 	Metadata  map[string]interface{} `json:"metadata,omitempty"`
 }
 

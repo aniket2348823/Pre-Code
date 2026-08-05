@@ -144,5 +144,3 @@ func TestReviewHandler_LanguageNormalization(t *testing.T) {
 		})
 	}
 }
-
-

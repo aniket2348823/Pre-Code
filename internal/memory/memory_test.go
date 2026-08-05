@@ -375,17 +375,17 @@ func TestEpisodicMemory_JSON(t *testing.T) {
 
 func TestPattern_JSON(t *testing.T) {
 	p := Pattern{
-		ID:          "p1",
-		UserID:      "u1",
-		ProjectID:   "proj1",
-		PatternType: "arch",
-		Name:        "mvc pattern",
-		Description: "model-view-controller",
-		Confidence:  0.9,
-		Examples:    []string{"a", "b"},
+		ID:           "p1",
+		UserID:       "u1",
+		ProjectID:    "proj1",
+		PatternType:  "arch",
+		Name:         "mvc pattern",
+		Description:  "model-view-controller",
+		Confidence:   0.9,
+		Examples:     []string{"a", "b"},
 		FilePatterns: []string{"*.go"},
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 	data, err := json.Marshal(p)
 	if err != nil {

@@ -141,9 +141,9 @@ func TestAnthropic_Chat_Headers(t *testing.T) {
 
 func TestCalculateAnthropicCost_VariousModels(t *testing.T) {
 	tests := []struct {
-		model         string
-		inputTokens   int
-		outputTokens  int
+		model          string
+		inputTokens    int
+		outputTokens   int
 		expectPositive bool
 	}{
 		{"claude-opus-4", 1000, 500, true},

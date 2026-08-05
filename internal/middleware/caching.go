@@ -19,8 +19,8 @@ type CacheControlConfig struct {
 // DefaultAPICache returns cache config suitable for API responses (short-lived).
 func DefaultAPICache() CacheControlConfig {
 	return CacheControlConfig{
-		MaxAge:    30 * time.Second,
-		IsPrivate: true,
+		MaxAge:     30 * time.Second,
+		IsPrivate:  true,
 		VaryHeader: "Authorization",
 	}
 }
@@ -52,8 +52,10 @@ func CacheControl(cfg CacheControlConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Capture response to compute ETag
-			rec := &cacheRecorder{ResponseWriter: w, statusCode: 200}
+			// Capture response fully (headers, status, body) without writing
+			// through, so we can decide 304 and set Cache-Control before the
+			// response is committed to the client.
+			rec := &cacheRecorder{header: make(http.Header), statusCode: 200}
 			next.ServeHTTP(rec, r)
 
 			// Build Cache-Control header
@@ -73,6 +75,8 @@ func CacheControl(cfg CacheControlConfig) func(http.Handler) http.Handler {
 				directives = append(directives, "immutable")
 			}
 
+			// Copy captured headers to the real response writer
+			copyHeader(w.Header(), rec.header)
 			w.Header().Set("Cache-Control", strings.Join(directives, ", "))
 
 			if cfg.VaryHeader != "" {
@@ -88,27 +92,48 @@ func CacheControl(cfg CacheControlConfig) func(http.Handler) http.Handler {
 				// Check If-None-Match for 304 responses
 				if match := r.Header.Get("If-None-Match"); match == etag {
 					w.WriteHeader(http.StatusNotModified)
-					w.Write(nil)
 					return
 				}
+			}
+
+			w.WriteHeader(rec.statusCode)
+			if len(rec.body) > 0 {
+				w.Write(rec.body)
 			}
 		})
 	}
 }
 
-// cacheRecorder captures the response body for ETag computation.
+// copyHeader copies all headers from src into dst.
+func copyHeader(dst, src http.Header) {
+	for k, vs := range src {
+		for _, v := range vs {
+			dst.Add(k, v)
+		}
+	}
+}
+
+// cacheRecorder captures the full response (headers, status, body) without
+// writing through to the client, so the middleware can decide on 304 and set
+// caching headers before committing the response.
 type cacheRecorder struct {
-	http.ResponseWriter
+	header     http.Header
 	statusCode int
 	body       []byte
 }
 
+func (r *cacheRecorder) Header() http.Header {
+	return r.header
+}
+
 func (r *cacheRecorder) WriteHeader(code int) {
 	r.statusCode = code
-	r.ResponseWriter.WriteHeader(code)
 }
 
 func (r *cacheRecorder) Write(b []byte) (int, error) {
 	r.body = append(r.body, b...)
-	return r.ResponseWriter.Write(b)
+	return len(b), nil
 }
+
+// Unwrap returns nil — this recorder does not wrap a real writer.
+func (r *cacheRecorder) Unwrap() http.ResponseWriter { return nil }

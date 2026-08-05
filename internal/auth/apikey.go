@@ -99,10 +99,10 @@ var ErrAPIKeyExpired = fmt.Errorf("API key has expired")
 
 // RotationResult holds the output of a key rotation operation.
 type RotationResult struct {
-	NewPlaintext string
-	NewHash      string
-	NewPrefix    string
-	OldKeyID     string
+	NewPlaintext      string
+	NewHash           string
+	NewPrefix         string
+	OldKeyID          string
 	RotationTokenHash string
 }
 
@@ -138,4 +138,3 @@ func (s *APIKeyService) RotateKey() (*RotationResult, error) {
 		RotationTokenHash: rotHash,
 	}, nil
 }
-

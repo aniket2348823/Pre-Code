@@ -15,7 +15,7 @@ import (
 
 // Signer creates HMAC signatures for HTTP requests.
 type Signer struct {
-	secret   []byte
+	secret    []byte
 	clockSkew time.Duration
 }
 

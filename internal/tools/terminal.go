@@ -69,8 +69,8 @@ type RunCommandTool struct {
 	Security *CommandSecurityConfig
 }
 
-func (t *RunCommandTool) Name() string        { return "run_command" }
-func (t *RunCommandTool) Description() string  { return "Execute a terminal command and return output" }
+func (t *RunCommandTool) Name() string                                    { return "run_command" }
+func (t *RunCommandTool) Description() string                             { return "Execute a terminal command and return output" }
 func (t *RunCommandTool) RequiresHITL(params map[string]interface{}) bool { return true }
 
 func NewRunCommandTool(sec *CommandSecurityConfig) *RunCommandTool {

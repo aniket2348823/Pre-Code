@@ -69,7 +69,7 @@ type scoredResult struct {
 
 // RAGEngine is a world-class Retrieval-Augmented Generation engine for the skill marketplace.
 type RAGEngine struct {
-	pool    *database.Conn
+	pool     *database.Conn
 	embedder Embedder
 }
 

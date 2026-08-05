@@ -15,11 +15,11 @@ import (
 type ModelPricing struct {
 	Model         string  `json:"model"`
 	Provider      string  `json:"provider"`
-	InputPer1K    float64 `json:"input_per_1k"`    // cost per 1K input tokens
-	OutputPer1K   float64 `json:"output_per_1k"`   // cost per 1K output tokens
-	CachedPer1K   float64 `json:"cached_per_1k"`   // cost per 1K cached tokens
-	ContextWindow int     `json:"context_window"`   // max context tokens
-	RateLimit     int     `json:"rate_limit"`       // requests per minute
+	InputPer1K    float64 `json:"input_per_1k"`   // cost per 1K input tokens
+	OutputPer1K   float64 `json:"output_per_1k"`  // cost per 1K output tokens
+	CachedPer1K   float64 `json:"cached_per_1k"`  // cost per 1K cached tokens
+	ContextWindow int     `json:"context_window"` // max context tokens
+	RateLimit     int     `json:"rate_limit"`     // requests per minute
 }
 
 // CostRecord tracks a single LLM API call cost.
@@ -39,13 +39,13 @@ type CostRecord struct {
 
 // Budget tracks spending against a budget limit.
 type Budget struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	LimitUSD      float64   `json:"limit_usd"`
-	SpentUSD      float64   `json:"spent_usd"`
-	Period        string    `json:"period"` // daily, weekly, monthly
-	ResetAt       time.Time `json:"reset_at"`
-	AlertAt       float64   `json:"alert_at"` // alert when spend reaches this % of limit
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	LimitUSD float64   `json:"limit_usd"`
+	SpentUSD float64   `json:"spent_usd"`
+	Period   string    `json:"period"` // daily, weekly, monthly
+	ResetAt  time.Time `json:"reset_at"`
+	AlertAt  float64   `json:"alert_at"` // alert when spend reaches this % of limit
 }
 
 // CostForecast predicts future spending based on historical data.
@@ -59,7 +59,7 @@ type CostForecast struct {
 
 // OptimizationRecommendation suggests cost reduction strategies.
 type OptimizationRecommendation struct {
-	Category    string  `json:"category"`    // routing, caching, model_selection, batching
+	Category    string  `json:"category"` // routing, caching, model_selection, batching
 	Title       string  `json:"title"`
 	Description string  `json:"description"`
 	SavingsUSD  float64 `json:"savings_usd"` // estimated monthly savings
@@ -69,17 +69,17 @@ type OptimizationRecommendation struct {
 
 // CostAnomaly represents an unusual cost spike.
 type CostAnomaly struct {
-	RecordID    string  `json:"record_id"`
-	Model       string  `json:"model"`
-	CostUSD     float64 `json:"cost_usd"`
-	ExpectedUSD float64 `json:"expected_usd"`
-	Deviation   float64 `json:"deviation"` // standard deviations from mean
-	Severity    string  `json:"severity"`  // warning, critical
+	RecordID    string    `json:"record_id"`
+	Model       string    `json:"model"`
+	CostUSD     float64   `json:"cost_usd"`
+	ExpectedUSD float64   `json:"expected_usd"`
+	Deviation   float64   `json:"deviation"` // standard deviations from mean
+	Severity    string    `json:"severity"`  // warning, critical
 	CreatedAt   time.Time `json:"created_at"`
 }
 
 const (
-	maxRecords  = 10000
+	maxRecords   = 10000
 	maxAnomalies = 1000
 )
 

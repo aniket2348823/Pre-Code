@@ -148,7 +148,7 @@ func (m *MistralAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan *
 
 func calculateMistralCost(model string, inputTokens, outputTokens int) float64 {
 	pricing := map[string]struct{ input, output float64 }{
-		"mistral-large-latest": {0.002, 0.006},
+		"mistral-large-latest":  {0.002, 0.006},
 		"mistral-medium-latest": {0.0027, 0.0081},
 		"mistral-small-latest":  {0.001, 0.003},
 		"open-mixtral-8x22b":    {0.002, 0.006},

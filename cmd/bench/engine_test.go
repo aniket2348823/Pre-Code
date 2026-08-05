@@ -56,7 +56,7 @@ func TestMeasureSplitIdentityAndCache(t *testing.T) {
 	}
 
 	wantBaseline := premS1 + premS1 + premC1 // 0.18
-	wantOptimized := routS1 + routC1          // 0.031 (2nd s1 is a $0 cache hit)
+	wantOptimized := routS1 + routC1         // 0.031 (2nd s1 is a $0 cache hit)
 	wantRouting := (premS1 - routS1) + (premC1 - routC1)
 	wantCache := premS1 // one s1 repeat, valued at premium
 

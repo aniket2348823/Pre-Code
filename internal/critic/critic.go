@@ -19,8 +19,8 @@ import (
 // Dimension represents a single evaluation dimension.
 type Dimension struct {
 	Name        string  `json:"name"`
-	Weight      float64 `json:"weight"`      // 0.0–1.0
-	Score       float64 `json:"score"`       // 0.0–1.0
+	Weight      float64 `json:"weight"` // 0.0–1.0
+	Score       float64 `json:"score"`  // 0.0–1.0
 	Explanation string  `json:"explanation"`
 }
 
@@ -38,9 +38,9 @@ type CritiqueResult struct {
 
 // RetryFeedback is the structured feedback injected into the primary LLM on retry.
 type RetryFeedback struct {
-	OriginalResponse string         `json:"original_response"`
+	OriginalResponse string          `json:"original_response"`
 	Critique         *CritiqueResult `json:"critique"`
-	Suggestions      []string       `json:"suggestions"`
+	Suggestions      []string        `json:"suggestions"`
 }
 
 // Config holds critic pipeline configuration.
@@ -254,7 +254,7 @@ func (p *Pipeline) parseCritique(content string) (*CritiqueResult, error) {
 			Score       float64 `json:"score"`
 			Explanation string  `json:"explanation"`
 		} `json:"dimensions"`
-		Feedback   string   `json:"feedback"`
+		Feedback    string   `json:"feedback"`
 		Suggestions []string `json:"suggestions"`
 	}
 

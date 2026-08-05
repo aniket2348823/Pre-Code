@@ -150,9 +150,9 @@ func (n *NVIDIANIMAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 
 func calculateNIMCost(model string, inputTokens, outputTokens int) float64 {
 	pricing := map[string]struct{ input, output float64 }{
-		"nvidia/llama-3.1-405b-instruct": {0.003, 0.009},
-		"nvidia/llama-3.1-70b-instruct":  {0.00088, 0.00088},
-		"nvidia/llama-3.1-8b-instruct":   {0.00018, 0.00018},
+		"nvidia/llama-3.1-405b-instruct":   {0.003, 0.009},
+		"nvidia/llama-3.1-70b-instruct":    {0.00088, 0.00088},
+		"nvidia/llama-3.1-8b-instruct":     {0.00018, 0.00018},
 		"nvidia/mistral-nemo-12b-instruct": {0.0002, 0.0002},
 	}
 

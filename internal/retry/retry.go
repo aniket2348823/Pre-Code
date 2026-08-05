@@ -13,12 +13,12 @@ import (
 
 // Policy defines retry behavior.
 type Policy struct {
-	MaxRetries  int           `json:"max_retries"`
-	BaseDelay   time.Duration `json:"base_delay"`
-	MaxDelay    time.Duration `json:"max_delay"`
-	Multiplier  float64       `json:"multiplier"`
-	JitterPct   float64       `json:"jitter_pct"` // 0-1, percentage of jitter
-	RetryableFn func(err error) bool `json:"-"`     // custom retryable check
+	MaxRetries  int                  `json:"max_retries"`
+	BaseDelay   time.Duration        `json:"base_delay"`
+	MaxDelay    time.Duration        `json:"max_delay"`
+	Multiplier  float64              `json:"multiplier"`
+	JitterPct   float64              `json:"jitter_pct"` // 0-1, percentage of jitter
+	RetryableFn func(err error) bool `json:"-"`          // custom retryable check
 }
 
 // DefaultPolicy returns a sensible default retry policy.

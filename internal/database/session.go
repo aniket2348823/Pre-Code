@@ -42,5 +42,3 @@ func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
 	tx, ok := ctx.Value(sessionTxKey).(pgx.Tx)
 	return tx, ok
 }
-
-

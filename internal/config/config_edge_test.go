@@ -155,6 +155,11 @@ func TestConfig_VeryLongJWTSecret(t *testing.T) {
 		LLM: LLMConfig{
 			DefaultModel: "m",
 		},
+		Audit: AuditConfig{
+			RetentionDays:     90,
+			MaxStorageMB:      1024,
+			CompressAfterDays: 30,
+		},
 	}
 
 	// Should handle extremely long secrets without panicking
@@ -206,9 +211,9 @@ func TestConfig_VeryLongStringsInFields(t *testing.T) {
 			JWTExpiration: 24 * time.Hour,
 		},
 		LLM: LLMConfig{
-			DefaultModel:  long,
-			OpenAIKey:     long,
-			AnthropicKey:  long,
+			DefaultModel: long,
+			OpenAIKey:    long,
+			AnthropicKey: long,
 		},
 	}
 
@@ -357,12 +362,13 @@ func TestConfig_CORSOriginEdgeCases(t *testing.T) {
 			NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "s"},
 			Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
 			LLM:      LLMConfig{DefaultModel: "m"},
+			Audit:    AuditConfig{RetentionDays: 90, MaxStorageMB: 1024, CompressAfterDays: 30},
 		}
 	}
 
 	tests := []struct {
 		name    string
-	 origins []string
+		origins []string
 		wantErr bool
 	}{
 		{"valid https", []string{"https://app.example.com"}, false},

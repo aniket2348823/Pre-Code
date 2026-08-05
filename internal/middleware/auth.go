@@ -94,7 +94,10 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 	var role string
 	err = a.pool.QueryRow(r.Context(), `SELECT role FROM users WHERE id = $1`, userID).Scan(&role)
 	if err != nil {
-		role = "user"
+		// Fail closed: a DB error while resolving the role must not silently
+		// downgrade (or widen) access. Return the error to reject the request.
+		slog.Warn("api-key: failed to resolve user role", "error", err, "user_id", userID)
+		return nil, err
 	}
 
 	return &auth.Claims{
@@ -172,26 +175,31 @@ func (m *AuthSessionMiddleware) Middleware(next http.Handler) http.Handler {
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
-		}
+		}			poolConn, err := m.conn.Pool().Acquire(r.Context())
+			if err != nil {
+				slog.Warn("auth-session: failed to acquire connection", "error", err)
+				next.ServeHTTP(w, r)
+				return
+			}
 
-		poolConn, err := m.conn.Pool().Acquire(r.Context())
-		if err != nil {
-			slog.Warn("auth-session: failed to acquire connection", "error", err)
-			next.ServeHTTP(w, r)
-			return
-		}
-		defer poolConn.Release()
+			_, err = poolConn.Exec(r.Context(), "SELECT app_auth.set_current_user_id($1)", claims.UserID)
+			if err != nil {
+				poolConn.Release()
+				slog.Warn("auth-session: failed to set user ID", "error", err, "user_id", claims.UserID)
+				next.ServeHTTP(w, r)
+				return
+			}
 
-		_, err = poolConn.Exec(r.Context(), "SELECT app_auth.set_current_user_id($1)", claims.UserID)
-		if err != nil {
-			slog.Warn("auth-session: failed to set user ID", "error", err, "user_id", claims.UserID)
-			next.ServeHTTP(w, r)
-			return
-		}
+			// Keep the dedicated connection in the request context for the whole
+			// request so RLS sees app.current_user_id on every query (the Conn
+			// wrapper routes through ConnFromContext). Release it afterwards — a
+			// session variable set on a released pooled connection is a no-op.
+			ctx := database.WithConn(r.Context(), poolConn)
+			defer poolConn.Release()
 
-		slog.Debug("auth-session: set user ID", "user_id", claims.UserID)
-		next.ServeHTTP(w, r)
-	})
+			slog.Debug("auth-session: set user ID", "user_id", claims.UserID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 }
 
 // AuthSessionCheckHandler checks if the session variable is set correctly.

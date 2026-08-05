@@ -39,14 +39,14 @@ func (m *mockTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.Comm
 	return pgconn.NewCommandTag("OK"), nil
 }
 
-func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error)                       { return m, nil }
-func (m *mockTx) Commit(ctx context.Context) error                                { return nil }
-func (m *mockTx) Rollback(ctx context.Context) error                              { return nil }
+func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error) { return m, nil }
+func (m *mockTx) Commit(ctx context.Context) error          { return nil }
+func (m *mockTx) Rollback(ctx context.Context) error        { return nil }
 func (m *mockTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
 	return 0, nil
 }
-func (m *mockTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults     { return nil }
-func (m *mockTx) LargeObjects() pgx.LargeObjects                                  { return pgx.LargeObjects{} }
+func (m *mockTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
+func (m *mockTx) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
 func (m *mockTx) Prepare(_ context.Context, _, _ string) (*pgconn.StatementDescription, error) {
 	return nil, nil
 }
@@ -86,13 +86,13 @@ func (r *mockRows) Scan(dest ...any) error {
 	return nil
 }
 
-func (r *mockRows) Close()                                         { r.closed = true }
-func (r *mockRows) Err() error                                     { return r.err }
-func (r *mockRows) CommandTag() pgconn.CommandTag                  { return pgconn.NewCommandTag("SELECT 1") }
-func (r *mockRows) FieldDescriptions() []pgconn.FieldDescription   { return r.fields }
+func (r *mockRows) Close()                                       { r.closed = true }
+func (r *mockRows) Err() error                                   { return r.err }
+func (r *mockRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("SELECT 1") }
+func (r *mockRows) FieldDescriptions() []pgconn.FieldDescription { return r.fields }
 func (r *mockRows) Values() ([]any, error)                       { return nil, nil }
-func (r *mockRows) RawValues() [][]byte                            { return nil }
-func (r *mockRows) Conn() *pgx.Conn                                { return nil }
+func (r *mockRows) RawValues() [][]byte                          { return nil }
+func (r *mockRows) Conn() *pgx.Conn                              { return nil }
 
 // setValue uses reflect to assign a value to a destination pointer.
 func setValue(dest, src any) {

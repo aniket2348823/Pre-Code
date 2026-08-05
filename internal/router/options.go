@@ -3,33 +3,34 @@ package router
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/agent"
+	"github.com/vigilagent/vigilagent/internal/attackgraph"
+	"github.com/vigilagent/vigilagent/internal/audit"
 	"github.com/vigilagent/vigilagent/internal/auth"
+	"github.com/vigilagent/vigilagent/internal/compliance"
+	"github.com/vigilagent/vigilagent/internal/confidence"
 	"github.com/vigilagent/vigilagent/internal/config"
 	"github.com/vigilagent/vigilagent/internal/cost"
 	"github.com/vigilagent/vigilagent/internal/costintel"
 	"github.com/vigilagent/vigilagent/internal/database"
 	"github.com/vigilagent/vigilagent/internal/email"
 	"github.com/vigilagent/vigilagent/internal/featureflags"
+	"github.com/vigilagent/vigilagent/internal/knowledge"
 	"github.com/vigilagent/vigilagent/internal/llm"
-	mw "github.com/vigilagent/vigilagent/internal/middleware"
 	"github.com/vigilagent/vigilagent/internal/memory"
+	mw "github.com/vigilagent/vigilagent/internal/middleware"
+	"github.com/vigilagent/vigilagent/internal/pipeline"
 	"github.com/vigilagent/vigilagent/internal/queue"
 	"github.com/vigilagent/vigilagent/internal/repository"
-	"github.com/vigilagent/vigilagent/internal/skills"
-	"github.com/vigilagent/vigilagent/internal/knowledge"
-	"github.com/vigilagent/vigilagent/internal/skillengine"
-	"github.com/vigilagent/vigilagent/internal/attackgraph"
-	"github.com/vigilagent/vigilagent/internal/audit"
-	"github.com/vigilagent/vigilagent/internal/confidence"
-	"github.com/vigilagent/vigilagent/internal/compliance"
-	"github.com/vigilagent/vigilagent/internal/pipeline"
 	"github.com/vigilagent/vigilagent/internal/requirements"
 	"github.com/vigilagent/vigilagent/internal/scanner"
 	"github.com/vigilagent/vigilagent/internal/schema"
+	"github.com/vigilagent/vigilagent/internal/skillengine"
+	"github.com/vigilagent/vigilagent/internal/skills"
 	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/internal/websocket"
 )
@@ -94,8 +95,8 @@ type Options struct {
 
 	// Plan-based rate limiting
 	PlanRateLimiter *mw.PlanAwareRateLimiter
-	UsageMetering  *mw.UsageMeteringMiddleware
-	QuotaEnforcer  *mw.QuotaEnforcer
+	UsageMetering   *mw.UsageMeteringMiddleware
+	QuotaEnforcer   *mw.QuotaEnforcer
 
 	// Skill engine
 	SkillEngine *skillengine.Engine
@@ -134,18 +135,18 @@ type Options struct {
 // Router holds all HTTP handlers and dependencies.
 type Router struct {
 	*chi.Mux
-	cfg        *config.Config
-	db         *database.Postgres
-	rds        *database.Redis
-	nats       *queue.NATS
-	auth       *auth.JWT
-	apiKM      *auth.APIKeyService
-	apiKeyAuth *mw.APIKeyAuth
-	rl         *mw.RateLimiter
-	authRL     *mw.RateLimiter
+	cfg                   *config.Config
+	db                    *database.Postgres
+	rds                   *database.Redis
+	nats                  *queue.NATS
+	auth                  *auth.JWT
+	apiKM                 *auth.APIKeyService
+	apiKeyAuth            *mw.APIKeyAuth
+	rl                    *mw.RateLimiter
+	authRL                *mw.RateLimiter
 	authSessionMiddleware *mw.AuthSessionMiddleware
-	webhookEngine        *webhook.Engine
-	wsManager            *WebSocketManager
+	webhookEngine         *webhook.Engine
+	wsManager             *WebSocketManager
 
 	// Repositories
 	users    *repository.UserRepository
@@ -160,29 +161,30 @@ type Router struct {
 	alerts   *repository.AlertRepository
 
 	// Engine
-	agentExec *agent.Agent
-	llmRouter *llm.ModelRouter
-	memory    *memory.Manager
-	budget    *cost.BudgetManager
-	worker    *queue.TaskWorker
-	engine              *scanner.Engine
-	requirements        *requirements.Resolver
-	validator           *schema.Validator
-	complianceChecker   *compliance.Checker
-	pipeline            *pipeline.Pipeline
-	knowledge           *knowledge.Graph
-	skillEng            *skillengine.Engine
-	confidence          *confidence.Engine
-	attackGraph         *attackgraph.Engine
-	audit               *audit.Engine
-	costIntel           *costintel.Engine
-	hitlQueue           *mw.HITLQueue
-	hitlHandler         *mw.HITLHandler
-	planRateLimiter     *mw.PlanAwareRateLimiter
-	usageMetering       *mw.UsageMeteringMiddleware
-	quotaEnforcer       *mw.QuotaEnforcer
-	lockout             mw.Lockout
-	lockoutCancel       context.CancelFunc
+	agentExec         *agent.Agent
+	llmRouter         *llm.ModelRouter
+	memory            *memory.Manager
+	budget            *cost.BudgetManager
+	worker            *queue.TaskWorker
+	engine            *scanner.Engine
+	requirements      *requirements.Resolver
+	validator         *schema.Validator
+	complianceChecker *compliance.Checker
+	pipeline          *pipeline.Pipeline
+	knowledge         *knowledge.Graph
+	skillEng          *skillengine.Engine
+	confidence        *confidence.Engine
+	attackGraph       *attackgraph.Engine
+	audit             *audit.Engine
+	costIntel         *costintel.Engine
+	hitlQueue         *mw.HITLQueue
+	hitlHandler       *mw.HITLHandler
+	hitlOnce          sync.Once
+	planRateLimiter   *mw.PlanAwareRateLimiter
+	usageMetering     *mw.UsageMeteringMiddleware
+	quotaEnforcer     *mw.QuotaEnforcer
+	lockout           mw.Lockout
+	lockoutCancel     context.CancelFunc
 
 	// Security middleware
 	blacklist     *mw.JWTBlacklist
@@ -190,6 +192,7 @@ type Router struct {
 	csrf          *mw.CSRFMiddleware
 	idempotency   *mw.IdempotencyMiddleware
 	responseCache *mw.ResponseCache
+	rlHeaders     *mw.RateLimitHeadersMiddleware
 
 	// Login rate limiter (per-IP + per-email progressive lockout)
 	loginRateLimiter *mw.LoginRateLimiter
@@ -229,54 +232,54 @@ func newRouter(opts Options) *Router {
 	}
 
 	return &Router{
-		Mux:         chi.NewMux(),
-		cfg:         opts.Config,
-		db:          opts.DB,
-		rds:         opts.Redis,
-		nats:        opts.NATS,
-		auth:        opts.JWT,
-		apiKM:       opts.APIKeys,
-		apiKeyAuth:  opts.APIAuth,
-		rl:          opts.RateLimit,
-		authRL:      opts.AuthRateLimit,
-		users:       opts.Users,
-		orgs:        opts.Orgs,
-		projects:    opts.Projects,
-		agents:      opts.Agents,
-		sessions:    opts.Sessions,
-		events:      opts.Events,
-		apiKeys:     opts.APIKeyRepo,
-		tasks:       opts.Tasks,
-		skills:      opts.Skills,
-		alerts:      opts.Alerts,
-		agentExec:   opts.AgentExec,
-		llmRouter:   opts.LLMRouter,
-		memory:      opts.Memory,
-		budget:      opts.Budget,
-		worker:      opts.Worker,
-		engine:      opts.Engine,
-		requirements: opts.Requirements,
-		validator:   opts.Validator,
-		complianceChecker: opts.Compliance,
-		pipeline:    opts.Pipeline,
-		knowledge:   opts.Knowledge,
-		skillEng:    opts.SkillEngine,
-		confidence:  opts.Confidence,
-		attackGraph: opts.AttackGraph,
-		audit:       opts.Audit,
-		webhookEngine: opts.Webhook,
-		wsManager:     NewWebSocketManager(DefaultWebSocketManagerConfig()),
-		lockout:       lockout,
-		costIntel:       opts.CostIntel,
-		hitlQueue:       opts.HITLQueue,
-		planRateLimiter: opts.PlanRateLimiter,
-		usageMetering:   opts.UsageMetering,
-		quotaEnforcer:   opts.QuotaEnforcer,
-		email:       opts.Email,
-		featureFlags: opts.FeatureFlags,
-		skillRAG:    opts.SkillRAG,
-		loginRateLimiter:         opts.LoginRateLimiter,
-		apiKeyCreateRateLimiter:  opts.APIKeyCreateRateLimiter,
+		Mux:                     chi.NewMux(),
+		cfg:                     opts.Config,
+		db:                      opts.DB,
+		rds:                     opts.Redis,
+		nats:                    opts.NATS,
+		auth:                    opts.JWT,
+		apiKM:                   opts.APIKeys,
+		apiKeyAuth:              opts.APIAuth,
+		rl:                      opts.RateLimit,
+		authRL:                  opts.AuthRateLimit,
+		users:                   opts.Users,
+		orgs:                    opts.Orgs,
+		projects:                opts.Projects,
+		agents:                  opts.Agents,
+		sessions:                opts.Sessions,
+		events:                  opts.Events,
+		apiKeys:                 opts.APIKeyRepo,
+		tasks:                   opts.Tasks,
+		skills:                  opts.Skills,
+		alerts:                  opts.Alerts,
+		agentExec:               opts.AgentExec,
+		llmRouter:               opts.LLMRouter,
+		memory:                  opts.Memory,
+		budget:                  opts.Budget,
+		worker:                  opts.Worker,
+		engine:                  opts.Engine,
+		requirements:            opts.Requirements,
+		validator:               opts.Validator,
+		complianceChecker:       opts.Compliance,
+		pipeline:                opts.Pipeline,
+		knowledge:               opts.Knowledge,
+		skillEng:                opts.SkillEngine,
+		confidence:              opts.Confidence,
+		attackGraph:             opts.AttackGraph,
+		audit:                   opts.Audit,
+		webhookEngine:           opts.Webhook,
+		wsManager:               NewWebSocketManager(DefaultWebSocketManagerConfig()),
+		lockout:                 lockout,
+		costIntel:               opts.CostIntel,
+		hitlQueue:               opts.HITLQueue,
+		planRateLimiter:         opts.PlanRateLimiter,
+		usageMetering:           opts.UsageMetering,
+		quotaEnforcer:           opts.QuotaEnforcer,
+		email:                   opts.Email,
+		featureFlags:            opts.FeatureFlags,
+		skillRAG:                opts.SkillRAG,
+		loginRateLimiter:        opts.LoginRateLimiter,
+		apiKeyCreateRateLimiter: opts.APIKeyCreateRateLimiter,
 	}
 }
 

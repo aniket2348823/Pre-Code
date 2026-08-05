@@ -30,7 +30,7 @@ type Drift struct {
 
 // DriftReport is the full comparison report.
 type DriftReport struct {
-	SnapshotID string `json:"snapshot_id"`
+	SnapshotID string  `json:"snapshot_id"`
 	Drifts     []Drift `json:"drifts"`
 	Identical  bool    `json:"identical"`
 }

@@ -129,8 +129,8 @@ func (r *OrganizationRepository) ListByUser(ctx context.Context, userID string) 
 	query := `
 		SELECT o.id, o.name, o.slug, o.description, o.owner_id, o.plan, o.settings, o.created_at, o.updated_at
 		FROM organizations o
-		LEFT JOIN organization_members m ON o.id = m.organization_id
-		WHERE o.owner_id = $1 OR m.user_id = $1
+		WHERE o.owner_id = $1
+		   OR EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id = o.id AND m.user_id = $1)
 		ORDER BY o.created_at DESC
 	`
 	rows, err := r.pool.Query(ctx, query, userID)

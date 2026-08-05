@@ -69,6 +69,11 @@ func NewEngine(pool *pgxpool.Pool) *Engine {
 		pool: pool,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
+			// Block redirects so a webhook URL cannot bounce us to an internal
+			// address after SSRF validation (redirect targets are never re-checked).
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return fmt.Errorf("webhook redirects not allowed")
+			},
 		},
 		maxRetry:  3,
 		validator: NewSSRFValidator(),

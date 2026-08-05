@@ -162,7 +162,7 @@ func (r *TaskRepository) ListByProjectCursor(ctx context.Context, projectID stri
 		page.NextCursor = last.CreatedAt.Format(time.RFC3339Nano) + "|" + last.ID
 	}
 
-	return page, nil
+	return page, rows.Err()
 }
 
 // ListByProject lists tasks for a project with OFFSET pagination.
@@ -202,7 +202,7 @@ func (r *TaskRepository) ListByProject(ctx context.Context, projectID string, of
 		}
 		tasks = append(tasks, t)
 	}
-	return tasks, total, nil
+	return tasks, total, rows.Err()
 }
 
 // UpdateStatus updates the status and related fields of a task.

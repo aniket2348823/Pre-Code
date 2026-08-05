@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
@@ -228,7 +229,7 @@ func (m *BudgetManager) getTaskUsage(taskID string) float64 {
 
 // BudgetExceededError is returned when a cost would exceed the budget.
 type BudgetExceededError struct {
-	Type     string  // "org" or "task"
+	Type     string // "org" or "task"
 	ID       string
 	Usage    float64
 	Budget   float64

@@ -6,9 +6,22 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 func TestLoad_Defaults(t *testing.T) {
+	// Clear env vars that could be set by a local .env file or shell so the
+	// default values are exercised deterministically.
+	for _, k := range []string{
+		"VIGILAGENT_DATABASE_HOST", "VIGILAGENT_DATABASE_PORT", "VIGILAGENT_DATABASE_USER",
+		"VIGILAGENT_DATABASE_NAME", "VIGILAGENT_DATABASE_PASSWORD", "VIGILAGENT_DATABASE_SSLMODE",
+		"VIGILAGENT_REDIS_HOST", "VIGILAGENT_REDIS_PORT", "VIGILAGENT_NATS_URL", "VIGILAGENT_NATS_STREAM",
+		"VIGILAGENT_AUTH_API_KEY_PREFIX", "VIGILAGENT_AUTH_JWT_EXPIRATION",
+	} {
+		os.Unsetenv(k)
+	}
+
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
@@ -115,13 +128,13 @@ func TestConfigValidate(t *testing.T) {
 				Database: DatabaseConfig{Host: "localhost", Port: 5432, User: "vigilagent", Name: "vigilagent", MaxOpenConns: 10},
 				Redis:    RedisConfig{Host: "localhost", Port: 6379},
 				NATS:     NATSConfig{URL: "nats://localhost:4222", Stream: "vigilagent"},
-		Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
-			LLM:      LLMConfig{DefaultModel: "gpt-4o"},
+				Auth:     AuthConfig{JWTSecret: "a-secure-32-char-jwt-secret-ok!!", JWTExpiration: 24 * time.Hour},
+				LLM:      LLMConfig{DefaultModel: "gpt-4o"},
+			},
+			wantErr: false,
 		},
-		wantErr: false,
-	},
-	{
-		name: "missing database host",
+		{
+			name: "missing database host",
 			cfg: Config{
 				Server:   ServerConfig{Env: "development", Port: 8080, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second},
 				Database: DatabaseConfig{User: "vigilagent", Name: "vigilagent", MaxOpenConns: 10},
@@ -724,6 +737,9 @@ func TestHotReloader_StartStop(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Start did not return after context cancel")
 	}
+	// Reset viper's global state so Start's OnConfigChange handler does not
+	// fire during later tests (viper is a package-level singleton).
+	viper.Reset()
 }
 
 func TestReadFromViper(t *testing.T) {

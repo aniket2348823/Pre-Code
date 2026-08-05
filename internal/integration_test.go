@@ -1,4 +1,4 @@
-package integration_test
+package internal
 
 import (
 	"bytes"
@@ -237,12 +237,12 @@ func TestModelRouter_Routing(t *testing.T) {
 	}
 
 	complexTask := &llm.Task{
-		ID:              "complex",
-		Type:            "architecture",
-		Description:     "Refactor auth system with OAuth2",
+		ID:                "complex",
+		Type:              "architecture",
+		Description:       "Refactor auth system with OAuth2",
 		RequiresReasoning: true,
-		Tags:            []string{"security"},
-		Messages:        []llm.Message{{Role: "user", Content: "Refactor auth"}},
+		Tags:              []string{"security"},
+		Messages:          []llm.Message{{Role: "user", Content: "Refactor auth"}},
 	}
 
 	complexDecision, err := llmRouter.Route(context.Background(), complexTask)

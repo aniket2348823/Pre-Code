@@ -514,8 +514,8 @@ func TestListDirectoryTool_Execute_EmptyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !res.Success {
-		t.Fatalf("expected success with default path, got error: %s", res.Error)
+	if res.Success {
+		t.Error("expected failure without security configuration")
 	}
 }
 

@@ -17,8 +17,8 @@ import (
 
 	"github.com/vigilagent/vigilagent/internal/compliance"
 	"github.com/vigilagent/vigilagent/internal/requirements"
-	"github.com/vigilagent/vigilagent/internal/schema"
 	"github.com/vigilagent/vigilagent/internal/scanner"
+	"github.com/vigilagent/vigilagent/internal/schema"
 )
 
 // Request is the input to the unified validation pipeline.
@@ -39,14 +39,14 @@ type LayerResult struct {
 
 // Report is the aggregated output of the full pipeline.
 type Report struct {
-	Passed       bool                    `json:"passed"`
-	Confidence   float64                 `json:"confidence"`
-	Schema       *schema.Report          `json:"schema,omitempty"`
-	Requirements *requirements.Report    `json:"requirements,omitempty"`
-	Compliance   *compliance.Report      `json:"compliance,omitempty"`
-	ScanResult   *scanner.Report         `json:"scan_result,omitempty"`
-	Layers       []LayerResult           `json:"layers"`
-	Reasons      []string                `json:"reasons,omitempty"`
+	Passed       bool                 `json:"passed"`
+	Confidence   float64              `json:"confidence"`
+	Schema       *schema.Report       `json:"schema,omitempty"`
+	Requirements *requirements.Report `json:"requirements,omitempty"`
+	Compliance   *compliance.Report   `json:"compliance,omitempty"`
+	ScanResult   *scanner.Report      `json:"scan_result,omitempty"`
+	Layers       []LayerResult        `json:"layers"`
+	Reasons      []string             `json:"reasons,omitempty"`
 }
 
 // Pipeline chains all deterministic validation layers.

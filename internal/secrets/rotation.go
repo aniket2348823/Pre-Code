@@ -1,10 +1,12 @@
 package secrets
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,11 +16,11 @@ import (
 
 // SecretMetadata tracks version and rotation info for a secret.
 type SecretMetadata struct {
-	Name           string    `json:"name"`
-	Version        int       `json:"version"`
-	LastRotatedAt  time.Time `json:"last_rotated_at"`
-	RotationDays   int       `json:"rotation_days"`
-	ExpiresAt      time.Time `json:"expires_at,omitempty"`
+	Name          string    `json:"name"`
+	Version       int       `json:"version"`
+	LastRotatedAt time.Time `json:"last_rotated_at"`
+	RotationDays  int       `json:"rotation_days"`
+	ExpiresAt     time.Time `json:"expires_at,omitempty"`
 }
 
 // NeedsRotation returns true if the secret has exceeded its rotation window.
@@ -94,36 +96,21 @@ func (v *VaultSecretsManager) url(path string) string {
 }
 
 func (v *VaultSecretsManager) doRequest(method, url string, body interface{}) (*http.Response, error) {
-	var bodyReader interface{ Read([]byte) (int, error) }
+	var bodyReader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("marshal request: %w", err)
 		}
-		bodyReader = &byteReader{data: b}
+		bodyReader = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, url, bodyReader.(interface{ Read([]byte) (int, error) }))
+	req, err := http.NewRequest(method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("X-Vault-Token", v.token)
 	req.Header.Set("Content-Type", "application/json")
 	return v.client.Do(req)
-}
-
-// byteReader is a minimal io.Reader for request bodies.
-type byteReader struct {
-	data []byte
-	off  int
-}
-
-func (r *byteReader) Read(p []byte) (int, error) {
-	if r.off >= len(r.data) {
-		return 0, fmt.Errorf("EOF")
-	}
-	n := copy(p, r.data[r.off:])
-	r.off += n
-	return n, nil
 }
 
 // Get retrieves a secret by name from Vault.
@@ -274,11 +261,11 @@ func (e *EnvSecretsManager) List() ([]SecretMetadata, error) {
 
 // RotationScheduler periodically checks for secrets needing rotation.
 type RotationScheduler struct {
-	sm          SecretsManager
-	interval    time.Duration
+	sm           SecretsManager
+	interval     time.Duration
 	rotationDays int
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
+	stopCh       chan struct{}
+	wg           sync.WaitGroup
 }
 
 // NewRotationScheduler creates a scheduler that checks rotation needs.
@@ -347,11 +334,11 @@ func (s *RotationScheduler) check() {
 
 // JWTKeyRotator handles automatic rotation of JWT signing keys.
 type JWTKeyRotator struct {
-	sm          SecretsManager
-	keyName     string
+	sm           SecretsManager
+	keyName      string
 	rotationDays int
-	mu          sync.RWMutex
-	currentKey  []byte
+	mu           sync.RWMutex
+	currentKey   []byte
 }
 
 // NewJWTKeyRotator creates a rotator for JWT signing keys.

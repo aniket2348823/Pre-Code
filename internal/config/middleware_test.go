@@ -181,10 +181,10 @@ func TestRateLimitMWConfig_JSONTags(t *testing.T) {
 
 func TestCORSMWConfig_JSONTags(t *testing.T) {
 	cfg := CORSMWConfig{
-		Enabled:         true,
-		AllowedOrigins:  []string{"*"},
+		Enabled:          true,
+		AllowedOrigins:   []string{"*"},
 		AllowCredentials: true,
-		MaxAge:          86400,
+		MaxAge:           86400,
 	}
 	data, err := json.Marshal(cfg)
 	require.NoError(t, err)

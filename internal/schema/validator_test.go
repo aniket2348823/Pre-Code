@@ -42,8 +42,8 @@ func TestValidateArchitecture_AllFieldsPresent(t *testing.T) {
 func TestValidateArchitecture_UnknownTopLevelField(t *testing.T) {
 	v := NewValidator()
 	output := map[string]any{
-		"components":  []string{"api-gateway"},
-		"risks":       []string{},
+		"components":   []string{"api-gateway"},
+		"risks":        []string{},
 		"experimental": true,
 	}
 	rep := v.Validate("architecture", output)

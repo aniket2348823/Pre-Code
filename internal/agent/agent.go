@@ -571,7 +571,7 @@ func (a *Agent) filterValidSteps(steps []PlanStep) []PlanStep {
 		}
 	}
 	return filtered
-}// buildResult uses the LLM to synthesize a final result from all step outputs.
+} // buildResult uses the LLM to synthesize a final result from all step outputs.
 // When a tokenCallback is attached, it streams the response in real-time,
 // pushing each chunk to SSE subscribers as it arrives.
 func (a *Agent) buildResult(ctx context.Context, taskID string, history []llm.Message) string {

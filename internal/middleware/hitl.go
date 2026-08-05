@@ -22,7 +22,6 @@ func telemetryCounter(status string) {
 	}
 }
 
-
 // HITLDecision represents a human decision on a pending checkpoint.
 type HITLDecision string
 
@@ -34,22 +33,23 @@ const (
 
 // HITLCheckpoint represents a pending human-in-the-loop checkpoint.
 type HITLCheckpointEntry struct {
-	ID           string                 `json:"id"`
-	TaskID       string                 `json:"task_id"`
-	UserID       string                 `json:"user_id"`
-	OrgID        string                 `json:"org_id"`
-	StepIndex    int                    `json:"step_index"`
-	Description  string                 `json:"description"`
-	Tool         string                 `json:"tool"`
-	Params       map[string]interface{} `json:"params,omitempty"`
-	Options      []string               `json:"options"`
-	Status       string                 `json:"status"` // pending, approved, rejected, timed_out
-	Decision     HITLDecision           `json:"decision,omitempty"`
-	ModifiedData string                 `json:"modified_data,omitempty"`
-	CreatedAt    time.Time              `json:"created_at"`
-	DecidedAt    *time.Time             `json:"decided_at,omitempty"`
-	ExpiresAt    time.Time              `json:"expires_at"`
-	decisionCh   chan struct{}           `json:"-"` // closed by Decide() to wake Submit()
+	ID             string                 `json:"id"`
+	TaskID         string                 `json:"task_id"`
+	UserID         string                 `json:"user_id"`
+	OrgID          string                 `json:"org_id"`
+	StepIndex      int                    `json:"step_index"`
+	Description    string                 `json:"description"`
+	Tool           string                 `json:"tool"`
+	Params         map[string]interface{} `json:"params,omitempty"`
+	Options        []string               `json:"options"`
+	Status         string                 `json:"status"` // pending, approved, rejected, timed_out
+	Decision       HITLDecision           `json:"decision,omitempty"`
+	ModifiedData   string                 `json:"modified_data,omitempty"`
+	CreatedAt      time.Time              `json:"created_at"`
+	DecidedAt      *time.Time             `json:"decided_at,omitempty"`
+	ExpiresAt      time.Time              `json:"expires_at"`
+	decisionCh     chan struct{}          `json:"-"` // closed by Decide() to wake Submit()
+	decisionClosed bool                   `json:"-"` // guards against closing decisionCh twice
 }
 
 // HITLQueue manages pending human-in-the-loop checkpoints.
@@ -57,12 +57,12 @@ type HITLCheckpointEntry struct {
 // from background agent goroutines (e.g., agent.Execute), NEVER from HTTP
 // handlers — those should use the agent state machine's HITL flow instead.
 type HITLQueue struct {
-	client      *redis.Client
-	pending     map[string]*HITLCheckpointEntry
-	mu          sync.RWMutex
-	timeout     time.Duration
-	callback    func(checkpoint *HITLCheckpointEntry) // called on decision
-	cancel      context.CancelFunc                   // stops expiryChecker
+	client   *redis.Client
+	pending  map[string]*HITLCheckpointEntry
+	mu       sync.RWMutex
+	timeout  time.Duration
+	callback func(checkpoint *HITLCheckpointEntry) // called on decision
+	cancel   context.CancelFunc                    // stops expiryChecker
 }
 
 // NewHITLQueue creates a new HITL queue with Redis-backed persistence.
@@ -187,9 +187,7 @@ func (q *HITLQueue) Decide(ctx context.Context, checkpointID string, decision HI
 	}
 
 	// Signal the waiting Submit() goroutine that a decision was made.
-	if entry.decisionCh != nil {
-		close(entry.decisionCh)
-	}
+	q.signalDecision(entry)
 
 	return nil
 }
@@ -206,6 +204,31 @@ func (q *HITLQueue) GetPending(userID string) []*HITLCheckpointEntry {
 		}
 	}
 	return result
+}
+
+// GetByID returns a pending checkpoint by ID, or (nil, false) if it no longer exists.
+func (q *HITLQueue) GetByID(id string) (*HITLCheckpointEntry, bool) {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	entry, ok := q.pending[id]
+	if !ok || entry.Status != "pending" {
+		return nil, false
+	}
+	return entry, true
+}
+
+// signalDecision closes the entry's decision channel at most once.
+// Callers must NOT hold q.mu when calling this method.
+func (q *HITLQueue) signalDecision(entry *HITLCheckpointEntry) {
+	if entry == nil || entry.decisionCh == nil {
+		return
+	}
+	q.mu.Lock()
+	if !entry.decisionClosed {
+		entry.decisionClosed = true
+		close(entry.decisionCh)
+	}
+	q.mu.Unlock()
 }
 
 // GetPendingByTask returns all pending checkpoints for a specific task.
@@ -243,8 +266,8 @@ func (q *HITLQueue) markTimeout(id string) {
 	}
 
 	// Signal waiting Submit() goroutine so it doesn't block forever.
-	if exists && entry.decisionCh != nil {
-		close(entry.decisionCh)
+	if exists {
+		q.signalDecision(entry)
 	}
 }
 
@@ -268,7 +291,9 @@ func (q *HITLQueue) expiryChecker(ctx context.Context) {
 					slog.Warn("HITL checkpoint expired", "id", id, "task_id", entry.TaskID)
 					telemetryCounter("timed_out")
 					// Signal waiting Submit() goroutine so it doesn't block until timer fires.
-					if entry.decisionCh != nil {
+					// Lock is already held here, so guard + close inline (no re-lock).
+					if !entry.decisionClosed && entry.decisionCh != nil {
+						entry.decisionClosed = true
 						close(entry.decisionCh)
 					}
 				}
@@ -317,7 +342,6 @@ func (h *HITLHandler) DecideHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := claims.UserID
-	_ = userID // used for access control; decision applies to checkpoint owner
 
 	var input struct {
 		CheckpointID string       `json:"checkpoint_id"`
@@ -338,32 +362,53 @@ func (h *HITLHandler) DecideHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enforce ownership: a user can only decide their own checkpoints
+	// (admins may decide any checkpoint).
+	entry, ok := h.queue.GetByID(input.CheckpointID)
+	if !ok {
+		response.NotFound(w, "checkpoint not found or already decided")
+		return
+	}
+	if entry.UserID != userID && claims.Role != "admin" && claims.Role != "superadmin" {
+		response.Forbidden(w, "you can only decide your own checkpoints")
+		return
+	}
+
 	if err := h.queue.Decide(r.Context(), input.CheckpointID, input.Decision, input.ModifiedData); err != nil {
 		response.NotFound(w, err.Error())
 		return
 	}
 
 	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"message":      "decision recorded",
+		"message":       "decision recorded",
 		"checkpoint_id": input.CheckpointID,
-		"decision":     input.Decision,
+		"decision":      input.Decision,
 	})
 }
 
 // StatusHandler returns the status of a specific checkpoint.
 func (h *HITLHandler) StatusHandler(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		response.Unauthorized(w, "missing authentication")
+		return
+	}
+
 	checkpointID := r.URL.Query().Get("id")
 	if checkpointID == "" {
 		response.BadRequest(w, "id query parameter is required")
 		return
 	}
 
-	h.queue.mu.RLock()
-	entry, exists := h.queue.pending[checkpointID]
-	h.queue.mu.RUnlock()
-
+	entry, exists := h.queue.GetByID(checkpointID)
 	if !exists {
 		response.NotFound(w, "checkpoint not found or already decided")
+		return
+	}
+
+	// Enforce ownership: a user can only view their own checkpoints.
+	if entry.UserID != claims.UserID && claims.Role != "admin" && claims.Role != "superadmin" {
+		response.Forbidden(w, "you can only view your own checkpoints")
 		return
 	}
 

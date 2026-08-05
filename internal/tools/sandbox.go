@@ -9,7 +9,7 @@ import (
 
 // SandboxConfig configures the Docker sandbox for command execution.
 type SandboxConfig struct {
-	Engine    string        `json:"engine"`              // "docker", "local"
+	Engine    string        `json:"engine"`               // "docker", "local"
 	Image     string        `json:"image,omitempty"`      // Docker image
 	Timeout   time.Duration `json:"timeout"`              // Max execution time
 	MaxMemory string        `json:"max_memory,omitempty"` // e.g. "256m"

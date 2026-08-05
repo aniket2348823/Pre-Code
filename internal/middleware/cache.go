@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -80,7 +81,7 @@ func (c *ResponseCache) Get(key string) (*CacheEntry, bool) {
 
 	c.mu.Lock()
 	c.hits++
-	// Move to end (most recently used)
+
 	for i, k := range c.order {
 		if k == key {
 			c.order = append(c.order[:i], c.order[i+1:]...)
@@ -93,6 +94,14 @@ func (c *ResponseCache) Get(key string) (*CacheEntry, bool) {
 	return entry, true
 }
 
+// GetRaw retrieves a cached entry without checking expiration.
+func (c *ResponseCache) GetRaw(key string) (*CacheEntry, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.entries[key]
+	return entry, ok
+}
+
 // Set stores a response in the cache.
 func (c *ResponseCache) Set(key string, entry *CacheEntry) {
 	c.mu.Lock()
@@ -102,10 +111,9 @@ func (c *ResponseCache) Set(key string, entry *CacheEntry) {
 		entry.TTL = c.defaultTTL
 	}
 
-	// Update existing entry
 	if _, ok := c.entries[key]; ok {
 		c.entries[key] = entry
-		// Move to end
+
 		for i, k := range c.order {
 			if k == key {
 				c.order = append(c.order[:i], c.order[i+1:]...)
@@ -116,7 +124,6 @@ func (c *ResponseCache) Set(key string, entry *CacheEntry) {
 		return
 	}
 
-	// Evict oldest if at capacity
 	for len(c.entries) >= c.maxSize && len(c.order) > 0 {
 		oldest := c.order[0]
 		c.order = c.order[1:]
@@ -184,7 +191,7 @@ func ResponseCacheMiddleware(cache *ResponseCache) func(http.Handler) http.Handl
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Only cache GET requests
+
 			if r.Method != http.MethodGet {
 				next.ServeHTTP(w, r)
 				return
@@ -195,22 +202,18 @@ func ResponseCacheMiddleware(cache *ResponseCache) func(http.Handler) http.Handl
 				key += "?" + r.URL.RawQuery
 			}
 
-			// Check for cache bypass header
 			if r.Header.Get("Cache-Control") == "no-cache" {
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// Try cache hit
-			if entry, ok := cache.Get(key); ok {
-				// Check If-None-Match
-				if match := r.Header.Get("If-None-Match"); match != "" {
-					if match == entry.ETag || match == "*" {
-						w.WriteHeader(http.StatusNotModified)
-						w.Write(nil)
-						return
+			if entry, ok := cache.Get(key); ok {					if match := r.Header.Get("If-None-Match"); match != "" {
+						if match == entry.ETag || match == "*" {
+							// 304 must not carry a body.
+							w.WriteHeader(http.StatusNotModified)
+							return
+						}
 					}
-				}
 
 				w.Header().Set("Content-Type", entry.ContentType)
 				w.Header().Set("ETag", entry.ETag)
@@ -222,11 +225,9 @@ func ResponseCacheMiddleware(cache *ResponseCache) func(http.Handler) http.Handl
 				return
 			}
 
-			// Cache miss — capture response
 			rec := &cacheCapture{ResponseWriter: w, statusCode: http.StatusOK}
 			next.ServeHTTP(rec, r)
 
-			// Cache successful GET responses with a body
 			if rec.statusCode >= 200 && rec.statusCode < 300 && len(rec.body) > 0 {
 				ct := rec.Header().Get("Content-Type")
 				if ct == "" {
@@ -274,21 +275,6 @@ func (c *cacheCapture) Unwrap() http.ResponseWriter {
 	return c.ResponseWriter
 }
 
-// statusWriter wraps ResponseWriter to capture the status code.
-type statusWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (sw *statusWriter) WriteHeader(code int) {
-	sw.status = code
-	sw.ResponseWriter.WriteHeader(code)
-}
-
-func (sw *statusWriter) Unwrap() http.ResponseWriter {
-	return sw.ResponseWriter
-}
-
 // CacheInvalidationMiddleware invalidates cache entries on write operations.
 func CacheInvalidationMiddleware(cache *ResponseCache) func(http.Handler) http.Handler {
 	if cache == nil {
@@ -308,7 +294,6 @@ func CacheInvalidationMiddleware(cache *ResponseCache) func(http.Handler) http.H
 			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(sw, r)
 
-			// Invalidate on success
 			if sw.status >= 200 && sw.status < 300 {
 				invalidateByMethod(cache, r)
 			}
@@ -320,20 +305,16 @@ func CacheInvalidationMiddleware(cache *ResponseCache) func(http.Handler) http.H
 func invalidateByMethod(cache *ResponseCache, r *http.Request) {
 	path := r.URL.Path
 
-	// Invalidate the exact path
 	cache.Delete(path)
 	cache.Delete(path + "?" + r.URL.RawQuery)
 
-	// Invalidate list endpoints that might contain this resource
-	// e.g., POST /agents → invalidate /projects/*/agents
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) >= 2 {
-		// Invalidate parent collection
+
 		parent := "/" + strings.Join(parts[:len(parts)-1], "/")
 		cache.InvalidatePrefix(parent)
 	}
 
-	// Invalidate root collection for this resource type
 	if len(parts) > 0 {
 		cache.InvalidatePrefix("/" + parts[0])
 	}
@@ -352,4 +333,287 @@ func WriteCacheHeaders(w http.ResponseWriter, maxAge time.Duration, etag string)
 	if etag != "" {
 		w.Header().Set("ETag", etag)
 	}
+}
+
+// ETagConfig controls ETag middleware behavior.
+type ETagConfig struct {
+	Enabled              bool
+	Weak                 bool
+	MaxAge               time.Duration
+	StaleWhileRevalidate time.Duration
+	SkipPaths            []string
+	Authenticated        bool
+	pathPatterns         map[string]bool
+	mu                   sync.RWMutex
+}
+
+// DefaultETagConfig returns production-ready ETag configuration.
+func DefaultETagConfig() *ETagConfig {
+	return &ETagConfig{
+		Enabled:              true,
+		Weak:                 false,
+		MaxAge:               30 * time.Second,
+		StaleWhileRevalidate: 60 * time.Second,
+		SkipPaths:            []string{"/api/v1/health", "/api/v1/ready"},
+		Authenticated:        false,
+		pathPatterns:         make(map[string]bool),
+	}
+}
+
+// WithPathPatterns sets path patterns to enable caching on (e.g., "/agents", "/tasks").
+func (c *ETagConfig) WithPathPatterns(patterns []string) *ETagConfig {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, p := range patterns {
+		c.pathPatterns[p] = true
+	}
+	return c
+}
+
+// matchesPath checks if request path should be cached.
+func (c *ETagConfig) matchesPath(path string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if len(c.pathPatterns) == 0 {
+		return true
+	}
+	for pattern := range c.pathPatterns {
+		if strings.HasPrefix(path, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldSkip returns true if this request should bypass ETag caching.
+func (c *ETagConfig) shouldSkip(r *http.Request) bool {
+	if !c.Enabled {
+		return true
+	}
+
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return true
+	}
+	path := r.URL.Path
+	for _, skip := range c.SkipPaths {
+		if path == skip {
+			return true
+		}
+	}
+	return false
+}
+
+// ETagMiddleware returns middleware that handles ETag-based HTTP caching.
+func ETagMiddleware(cfg *ETagConfig) func(http.Handler) http.Handler {
+	if cfg == nil {
+		cfg = DefaultETagConfig()
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if cfg.shouldSkip(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			if !cfg.matchesPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			rec := &etagRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+			next.ServeHTTP(rec, r)
+
+			if rec.statusCode < 200 || rec.statusCode >= 300 {
+				if rec.headerWritten {
+					w.WriteHeader(rec.statusCode)
+				}
+				w.Write(rec.body)
+				return
+			}
+			if len(rec.body) == 0 {
+				if rec.headerWritten {
+					w.WriteHeader(rec.statusCode)
+				}
+				return
+			}
+
+			hash := sha256.Sum256(rec.body)
+			etag := fmt.Sprintf(`"%x"`, hash[:16])
+			if cfg.Weak {
+				etag = "W/" + etag
+			}
+
+			// Set Cache-Control
+			var directives []string
+			if cfg.MaxAge > 0 {
+				directives = append(directives, fmt.Sprintf("max-age=%d", int(cfg.MaxAge.Seconds())))
+			}
+			directives = append(directives, "must-revalidate")
+			if cfg.StaleWhileRevalidate > 0 {
+				directives = append(directives, fmt.Sprintf("stale-while-revalidate=%d", int(cfg.StaleWhileRevalidate.Seconds())))
+			}
+			directives = append(directives, "private")
+			w.Header().Set("Cache-Control", strings.Join(directives, ", "))
+			w.Header().Set("ETag", etag)
+
+			if match := r.Header.Get("If-None-Match"); match != "" {
+				if match == etag || match == "*" {
+					w.WriteHeader(http.StatusNotModified)
+					return
+				}
+			}
+
+			if rec.headerWritten {
+				w.WriteHeader(rec.statusCode)
+			}
+			w.Write(rec.body)
+		})
+	}
+}
+
+// etagRecorder captures the response body for ETag computation.
+type etagRecorder struct {
+	http.ResponseWriter
+	statusCode    int
+	headerWritten bool
+	body          []byte
+}
+
+func (r *etagRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.headerWritten = true
+}
+
+func (r *etagRecorder) Write(b []byte) (int, error) {
+	r.body = append(r.body, b...)
+	return len(b), nil
+}
+
+// Unwrap returns the underlying ResponseWriter for http.ResponseController.
+func (r *etagRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
+// StaleWhileRevalidateMiddleware serves stale cached content while refreshing
+// in the background. Requires a ResponseCache (see cache.go) to store bodies.
+type StaleWhileRevalidateMiddleware struct {
+	cache      *ResponseCache
+	duration   time.Duration
+	mu         sync.RWMutex
+	refreshing map[string]bool
+}
+
+// NewStaleWhileRevalidate creates the middleware with a shared ResponseCache.
+func NewStaleWhileRevalidate(cache *ResponseCache, duration time.Duration) *StaleWhileRevalidateMiddleware {
+	return &StaleWhileRevalidateMiddleware{
+		cache:      cache,
+		duration:   duration,
+		refreshing: make(map[string]bool),
+	}
+}
+
+// Middleware returns the HTTP middleware that serves stale content.
+func (swr *StaleWhileRevalidateMiddleware) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || swr.cache == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		key := r.URL.Path
+		if r.URL.RawQuery != "" {
+			key += "?" + r.URL.RawQuery
+		}
+
+		entry, ok := swr.cache.GetRaw(key)
+		if ok && entry.IsExpired() {
+
+			w.Header().Set("Content-Type", entry.ContentType)
+			w.Header().Set("ETag", entry.ETag)
+			w.Header().Set("Cache-Control", fmt.Sprintf(
+				"max-age=0, must-revalidate, stale-while-revalidate=%d", int(swr.duration.Seconds())))
+			w.Header().Set("X-Cache", "STALE")
+			w.WriteHeader(http.StatusOK)
+			w.Write(entry.Body)
+
+			swr.maybeRefresh(key, r, next)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (swr *StaleWhileRevalidateMiddleware) maybeRefresh(key string, r *http.Request, next http.Handler) {
+	swr.mu.Lock()
+	if swr.refreshing[key] {
+		swr.mu.Unlock()
+		return
+	}
+	swr.refreshing[key] = true
+	swr.mu.Unlock()
+
+	go func() {
+		defer func() {
+			swr.mu.Lock()
+			delete(swr.refreshing, key)
+			swr.mu.Unlock()
+		}()
+
+		rec := &cacheOnlyRecorder{}
+		r2 := r.Clone(r.Context())
+		next.ServeHTTP(rec, r2)
+		if rec.statusCode >= 200 && rec.statusCode < 300 && len(rec.body) > 0 {
+			hash := sha256.Sum256(rec.body)
+			swr.cache.Set(key, &CacheEntry{
+				Body:        rec.body,
+				ContentType: rec.Header().Get("Content-Type"),
+				ETag:        fmt.Sprintf(`"%x"`, hash[:16]),
+				StoredAt:    time.Now(),
+				TTL:         swr.duration,
+			})
+		}
+	}()
+}
+
+// cacheOnlyRecorder captures response without writing to client.
+type cacheOnlyRecorder struct {
+	header     http.Header
+	statusCode int
+	body       []byte
+}
+
+func (r *cacheOnlyRecorder) Header() http.Header {
+	if r.header == nil {
+		r.header = make(http.Header)
+	}
+	return r.header
+}
+
+func (r *cacheOnlyRecorder) WriteHeader(code int) {
+	r.statusCode = code
+}
+
+func (r *cacheOnlyRecorder) Write(b []byte) (int, error) {
+	r.body = append(r.body, b...)
+	return len(b), nil
+}
+
+// Unwrap returns nil — this recorder does not wrap a real writer.
+func (r *cacheOnlyRecorder) Unwrap() http.ResponseWriter { return nil }
+
+// ParseMaxAge parses a max-age string from a Cache-Control header.
+func ParseMaxAge(header string) time.Duration {
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "max-age=") {
+			val := strings.TrimPrefix(part, "max-age=")
+			if secs, err := strconv.Atoi(val); err == nil {
+				return time.Duration(secs) * time.Second
+			}
+		}
+	}
+	return 0
 }

@@ -13,9 +13,9 @@ import (
 type Entry struct {
 	ID        string                 `json:"id"`
 	Timestamp time.Time              `json:"timestamp"`
-	Actor     string                 `json:"actor"`     // user_id or "system"
-	Action    string                 `json:"action"`    // request.processed, skill.extracted, etc.
-	Resource  string                 `json:"resource"`  // what was affected
+	Actor     string                 `json:"actor"`    // user_id or "system"
+	Action    string                 `json:"action"`   // request.processed, skill.extracted, etc.
+	Resource  string                 `json:"resource"` // what was affected
 	Details   map[string]interface{} `json:"details,omitempty"`
 	Success   bool                   `json:"success"`
 	Error     string                 `json:"error,omitempty"`

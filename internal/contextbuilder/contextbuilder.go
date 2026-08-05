@@ -15,25 +15,25 @@ import (
 
 // File represents a workspace file with its content.
 type File struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-	Lines   int    `json:"lines"`
+	Path     string `json:"path"`
+	Content  string `json:"content"`
+	Lines    int    `json:"lines"`
 	Language string `json:"language"`
 }
 
 // ProjectContext holds all gathered context about the workspace.
 type ProjectContext struct {
-	Files           []File           `json:"files"`
-	OpenTabs        []string         `json:"open_tabs"`        // currently open file paths
-	GitBranch       string           `json:"git_branch"`
+	Files            []File          `json:"files"`
+	OpenTabs         []string        `json:"open_tabs"` // currently open file paths
+	GitBranch        string          `json:"git_branch"`
 	GitRecentCommits []string        `json:"git_recent_commits"` // last N commit messages
-	ProjectType     string           `json:"project_type"`     // go, node, python, etc.
-	Dependencies    []string         `json:"dependencies"`     // from go.mod, package.json, etc.
-	Conventions     []Convention     `json:"conventions"`      // detected coding conventions
-	MemoryContext   []MemorySnippet  `json:"memory_context"`   // recalled from memory
-	CursorPosition  *CursorPosition  `json:"cursor_position,omitempty"`
-	TokenBudget     int              `json:"token_budget"`     // max tokens for context
-	Timestamp       time.Time        `json:"timestamp"`
+	ProjectType      string          `json:"project_type"`       // go, node, python, etc.
+	Dependencies     []string        `json:"dependencies"`       // from go.mod, package.json, etc.
+	Conventions      []Convention    `json:"conventions"`        // detected coding conventions
+	MemoryContext    []MemorySnippet `json:"memory_context"`     // recalled from memory
+	CursorPosition   *CursorPosition `json:"cursor_position,omitempty"`
+	TokenBudget      int             `json:"token_budget"` // max tokens for context
+	Timestamp        time.Time       `json:"timestamp"`
 }
 
 // Convention represents a detected coding convention.
@@ -45,7 +45,7 @@ type Convention struct {
 
 // MemorySnippet is a recalled memory item.
 type MemorySnippet struct {
-	Type    string  `json:"type"`    // working, episodic, semantic
+	Type    string  `json:"type"` // working, episodic, semantic
 	Content string  `json:"content"`
 	Score   float64 `json:"score"`
 }
@@ -93,12 +93,12 @@ func NewBuilder(cfg *Config) *Builder {
 // BuildContext creates a ProjectContext from the provided inputs.
 func (b *Builder) BuildContext(ctx context.Context, req *BuildRequest) (*ProjectContext, error) {
 	pc := &ProjectContext{
-		OpenTabs:   req.OpenTabs,
-		GitBranch:  req.GitBranch,
-		ProjectType: req.ProjectType,
+		OpenTabs:       req.OpenTabs,
+		GitBranch:      req.GitBranch,
+		ProjectType:    req.ProjectType,
 		CursorPosition: req.Cursor,
-		TokenBudget: b.config.MaxTokenBudget,
-		Timestamp:   time.Now(),
+		TokenBudget:    b.config.MaxTokenBudget,
+		Timestamp:      time.Now(),
 	}
 
 	// Process files (truncate long ones)
@@ -356,17 +356,15 @@ func (b *Builder) detectDependencies(files []File) []string {
 	return deps
 }
 
-
-
 // BuildRequest is the input to BuildContext.
 type BuildRequest struct {
-	Files          []File           `json:"files"`
-	OpenTabs       []string         `json:"open_tabs"`
-	GitBranch      string           `json:"git_branch"`
-	RecentCommits  []string         `json:"recent_commits"`
-	ProjectType    string           `json:"project_type"`
-	MemoryContext  []MemorySnippet  `json:"memory_context"`
-	Cursor         *CursorPosition  `json:"cursor,omitempty"`
+	Files         []File          `json:"files"`
+	OpenTabs      []string        `json:"open_tabs"`
+	GitBranch     string          `json:"git_branch"`
+	RecentCommits []string        `json:"recent_commits"`
+	ProjectType   string          `json:"project_type"`
+	MemoryContext []MemorySnippet `json:"memory_context"`
+	Cursor        *CursorPosition `json:"cursor,omitempty"`
 }
 
 const defaultSystemPrompt = `You are VigilAgent, an expert AI coding assistant.

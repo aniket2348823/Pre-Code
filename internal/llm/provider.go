@@ -125,20 +125,20 @@ var PriceTable = map[string]ModelInfo{
 	"gpt-4o-mini":              {Name: "gpt-4o-mini", Provider: "openai", InputCostPer1K: 0.00015, OutputCostPer1K: 0.0006, MaxTokens: 16384, Capabilities: []string{"tools"}},
 	"deepseek-r1":              {Name: "deepseek-r1", Provider: "deepseek", InputCostPer1K: 0.00055, OutputCostPer1K: 0.00219, MaxTokens: 8192, Capabilities: []string{"reasoning"}},
 	// Gemini
-	"gemini-2.5-pro":           {Name: "gemini-2.5-pro", Provider: "gemini", InputCostPer1K: 0.00125, OutputCostPer1K: 0.01, MaxTokens: 8192, Capabilities: []string{"tools", "vision", "reasoning"}},
-	"gemini-2.0-flash":         {Name: "gemini-2.0-flash", Provider: "gemini", InputCostPer1K: 0.000075, OutputCostPer1K: 0.0003, MaxTokens: 8192, Capabilities: []string{"tools", "vision"}},
+	"gemini-2.5-pro":   {Name: "gemini-2.5-pro", Provider: "gemini", InputCostPer1K: 0.00125, OutputCostPer1K: 0.01, MaxTokens: 8192, Capabilities: []string{"tools", "vision", "reasoning"}},
+	"gemini-2.0-flash": {Name: "gemini-2.0-flash", Provider: "gemini", InputCostPer1K: 0.000075, OutputCostPer1K: 0.0003, MaxTokens: 8192, Capabilities: []string{"tools", "vision"}},
 	// Mistral
-	"mistral-large-latest":     {Name: "mistral-large-latest", Provider: "mistral", InputCostPer1K: 0.002, OutputCostPer1K: 0.006, MaxTokens: 8192, Capabilities: []string{"tools"}},
-	"mistral-small-latest":     {Name: "mistral-small-latest", Provider: "mistral", InputCostPer1K: 0.001, OutputCostPer1K: 0.003, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"mistral-large-latest": {Name: "mistral-large-latest", Provider: "mistral", InputCostPer1K: 0.002, OutputCostPer1K: 0.006, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"mistral-small-latest": {Name: "mistral-small-latest", Provider: "mistral", InputCostPer1K: 0.001, OutputCostPer1K: 0.003, MaxTokens: 8192, Capabilities: []string{"tools"}},
 	// Groq
-	"llama-3.1-70b-versatile":  {Name: "llama-3.1-70b-versatile", Provider: "groq", InputCostPer1K: 0.00059, OutputCostPer1K: 0.00079, MaxTokens: 8192, Capabilities: []string{"tools"}},
-	"llama-3.1-8b-instant":     {Name: "llama-3.1-8b-instant", Provider: "groq", InputCostPer1K: 0.00005, OutputCostPer1K: 0.00008, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"llama-3.1-70b-versatile": {Name: "llama-3.1-70b-versatile", Provider: "groq", InputCostPer1K: 0.00059, OutputCostPer1K: 0.00079, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"llama-3.1-8b-instant":    {Name: "llama-3.1-8b-instant", Provider: "groq", InputCostPer1K: 0.00005, OutputCostPer1K: 0.00008, MaxTokens: 8192, Capabilities: []string{"tools"}},
 	// NVIDIA NIM
 	"nvidia/llama-3.1-405b-instruct": {Name: "nvidia/llama-3.1-405b-instruct", Provider: "nvidia_nim", InputCostPer1K: 0.003, OutputCostPer1K: 0.009, MaxTokens: 8192, Capabilities: []string{"tools", "reasoning"}},
 	"nvidia/llama-3.1-70b-instruct":  {Name: "nvidia/llama-3.1-70b-instruct", Provider: "nvidia_nim", InputCostPer1K: 0.00088, OutputCostPer1K: 0.00088, MaxTokens: 8192, Capabilities: []string{"tools"}},
 	// Cohere
-	"command-r-plus":           {Name: "command-r-plus", Provider: "cohere", InputCostPer1K: 0.0015, OutputCostPer1K: 0.00225, MaxTokens: 8192, Capabilities: []string{"tools"}},
-	"command-r":                {Name: "command-r", Provider: "cohere", InputCostPer1K: 0.00015, OutputCostPer1K: 0.00015, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"command-r-plus": {Name: "command-r-plus", Provider: "cohere", InputCostPer1K: 0.0015, OutputCostPer1K: 0.00225, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	"command-r":      {Name: "command-r", Provider: "cohere", InputCostPer1K: 0.00015, OutputCostPer1K: 0.00015, MaxTokens: 8192, Capabilities: []string{"tools"}},
 }
 
 // Task represents a task for model routing (canonical definition).
@@ -187,14 +187,14 @@ type RoutingCandidate struct {
 
 // ModelRouter selects the optimal LLM for each task.
 type ModelRouter struct {
-	providers      map[string]Provider
-	healthMonitor  *HealthMonitor
+	providers       map[string]Provider
+	healthMonitor   *HealthMonitor
 	circuitBreakers map[string]*CircuitBreaker
-	config         *RouterConfig
-	prices         map[string]ModelInfo
-	cache          ResponseCache
-	budget         BudgetGuard
-	mu             sync.RWMutex
+	config          *RouterConfig
+	prices          map[string]ModelInfo
+	cache           ResponseCache
+	budget          BudgetGuard
+	mu              sync.RWMutex
 }
 
 // RouterConfig holds routing configuration.
@@ -208,12 +208,14 @@ type RouterConfig struct {
 
 // NewModelRouter creates a new model router.
 func NewModelRouter(cfg *RouterConfig) *ModelRouter {
-	r := &ModelRouter{
-		providers:       make(map[string]Provider),
-		healthMonitor:   NewHealthMonitor(),
-		circuitBreakers: make(map[string]*CircuitBreaker),
-		config:          cfg,
-		prices:          PriceTable, // default; override with SetPrices
+	r := &ModelRouter{			providers:       make(map[string]Provider),
+			healthMonitor:   NewHealthMonitor(),
+			circuitBreakers: make(map[string]*CircuitBreaker),
+			config:          cfg,
+			// Snapshot, not a reference: SetPrice mutates the global PriceTable
+			// under priceTableMu, while routers read through r.mu — sharing the
+			// map directly would be a concurrent map read/write data race.
+			prices: AllPrices(),
 	}
 	if r.config == nil {
 		r.config = &RouterConfig{DefaultModel: "claude-sonnet-4-20250514", BudgetPerTask: 1.00}
@@ -501,7 +503,11 @@ func (r *ModelRouter) ExecuteWithFailover(ctx context.Context, task *Task) (*Cha
 	r.mu.RUnlock()
 
 	for _, name := range remaining {
-		resp, err := r.attempt(ctx, task, FallbackOption{Provider: name})
+		model := r.defaultModelFor(name)
+		if model == "" {
+			continue
+		}
+		resp, err := r.attempt(ctx, task, FallbackOption{Provider: name, Model: model})
 		if err == nil {
 			return resp, nil
 		}
@@ -575,6 +581,18 @@ func (r *ModelRouter) attempt(ctx context.Context, task *Task, opt FallbackOptio
 		cache.Set(CacheKey(req), resp)
 	}
 	return resp, nil
+}
+
+// defaultModelFor returns any registered model for a provider from the price
+// table, used when falling back to providers the router did not rank.
+func (r *ModelRouter) defaultModelFor(provider string) string {
+	prices := r.priceTable()
+	for model, info := range prices {
+		if info.Provider == provider {
+			return model
+		}
+	}
+	return ""
 }
 
 // maxTokensFor returns the completion cap for a model from the price table,
@@ -702,7 +720,7 @@ func (r *ModelRouter) streamAttempt(ctx context.Context, task *Task, opt Fallbac
 	go func() {
 		defer close(wrappedCh)
 		var content strings.Builder
-	finished := false
+		finished := false
 	drainLoop:
 		for {
 			select {
@@ -778,5 +796,3 @@ func systemPrompt(task *Task) string {
 	}
 	return b.String()
 }
-
-

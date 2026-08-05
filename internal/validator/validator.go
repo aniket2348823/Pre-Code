@@ -19,8 +19,8 @@ type ValidationError struct {
 
 // ValidationResult aggregates all validation errors.
 type ValidationResult struct {
-	Valid  bool               `json:"valid"`
-	Errors []ValidationError  `json:"errors,omitempty"`
+	Valid  bool              `json:"valid"`
+	Errors []ValidationError `json:"errors,omitempty"`
 }
 
 // AddError appends a validation error.

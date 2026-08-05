@@ -1,31 +1,37 @@
 package response
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vigilagent/vigilagent/internal/requestid"
 )
 
+// Content from response.go
 // --- Error Code Constants ---
 
 const (
 	// Auth errors
-	CodeAUTHInvalidToken        = "AUTH_004"
-	CodeAUTHExpiredToken        = "AUTH_003"
-	CodeAUTHMissingToken        = "AUTH_001"
-	CodeAUTHInsufficientPerms   = "AUTH_007"
-	CodeAUTHAccountLocked       = "AUTH_005"
-	CodeAUTHInvalidCredentials  = "AUTH_002"
-	CodeAUTHAccountDisabled     = "AUTH_006"
-	CodeAUTHAPIKeyInvalid       = "AUTH_011"
-	CodeAUTHAPIKeyExpired       = "AUTH_013"
-	CodeAUTHDuplicateEmail      = "AUTH_010"
-	CodeAUTHEmailNotVerified    = "AUTH_008"
-	CodeAUTHPasswordTooWeak     = "AUTH_009"
-	CodeAUTHHashFailed          = "AUTH_012"
+	CodeAUTHInvalidToken       = "AUTH_004"
+	CodeAUTHExpiredToken       = "AUTH_003"
+	CodeAUTHMissingToken       = "AUTH_001"
+	CodeAUTHInsufficientPerms  = "AUTH_007"
+	CodeAUTHAccountLocked      = "AUTH_005"
+	CodeAUTHInvalidCredentials = "AUTH_002"
+	CodeAUTHAccountDisabled    = "AUTH_006"
+	CodeAUTHAPIKeyInvalid      = "AUTH_011"
+	CodeAUTHAPIKeyExpired      = "AUTH_013"
+	CodeAUTHDuplicateEmail     = "AUTH_010"
+	CodeAUTHEmailNotVerified   = "AUTH_008"
+	CodeAUTHPasswordTooWeak    = "AUTH_009"
+	CodeAUTHHashFailed         = "AUTH_012"
 
 	// Resource errors
 	CodeResourceNotFound         = "RES_001"
@@ -42,8 +48,8 @@ const (
 	CodeServiceUnavailable  = "INFRA_002"
 
 	// Method
-	CodeBadRequest        = "VAL_001"
-	CodeMethodNotAllowed  = "METHOD_001"
+	CodeBadRequest       = "VAL_001"
+	CodeMethodNotAllowed = "METHOD_001"
 )
 
 // --- APIResponse envelope ---
@@ -318,4 +324,416 @@ func RateLimitError(w http.ResponseWriter, r *http.Request, retryAfterSeconds in
 // MethodNotAllowed writes a 405 Method Not Allowed response.
 func MethodNotAllowed(w http.ResponseWriter, r *http.Request) {
 	ErrorWithCode(w, r, http.StatusMethodNotAllowed, CodeMethodNotAllowed, "method not allowed")
+}
+
+// WriteError writes a structured error response with optional details.
+// Kept for backward compatibility with earlier response helpers.
+func WriteError(w http.ResponseWriter, r *http.Request, status int, code string, message string, details interface{}) {
+	ErrorWithDetails(w, r, status, code, message, details)
+}
+
+// WritePaginated writes a paginated response with total/has_more metadata.
+// page/perPage/total drive the Meta block. Kept for backward compatibility.
+func WritePaginated(w http.ResponseWriter, r *http.Request, data interface{}, page, perPage, total int) {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 20
+	}
+	offset := (page - 1) * perPage
+	hasMore := offset+perPage < total
+	meta := &Meta{
+		Total:   total,
+		Limit:   perPage,
+		Offset:  offset,
+		HasMore: hasMore,
+	}
+	SuccessWithMeta(w, r, http.StatusOK, data, meta)
+}
+
+// Content from cursor.go
+// CursorDirection represents the pagination direction.
+type CursorDirection string
+
+const (
+	CursorForward  CursorDirection = "forward"
+	CursorBackward CursorDirection = "backward"
+)
+
+// Cursor holds pagination state for cursor-based pagination.
+type Cursor struct {
+	Value     string          `json:"v"`
+	Direction CursorDirection `json:"d"`
+	Limit     int             `json:"l"`
+}
+
+// CursorConfig holds default and maximum limits for cursor pagination.
+type CursorConfig struct {
+	DefaultLimit int
+	MaxLimit     int
+}
+
+// EncodeCursor encodes a Cursor into a base64-encoded opaque string.
+func EncodeCursor(c Cursor) (string, error) {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal cursor: %w", err)
+	}
+	return base64.URLEncoding.EncodeToString(data), nil
+}
+
+// DecodeCursor decodes a base64-encoded cursor string into a Cursor.
+func DecodeCursor(encoded string) (Cursor, error) {
+	if encoded == "" {
+		return Cursor{}, nil
+	}
+	data, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		return Cursor{}, fmt.Errorf("invalid cursor encoding: %w", err)
+	}
+	var c Cursor
+	if err := json.Unmarshal(data, &c); err != nil {
+		return Cursor{}, fmt.Errorf("invalid cursor format: %w", err)
+	}
+	return c, nil
+}
+
+// ParseCursorFromQuery extracts cursor parameters from query string.
+// Supports "cursor" (opaque string) and "limit" parameters.
+func ParseCursorFromQuery(q url.Values, cfg CursorConfig) (Cursor, error) {
+	defaultLimit := cfg.DefaultLimit
+	if defaultLimit <= 0 {
+		defaultLimit = 20
+	}
+	maxLimit := cfg.MaxLimit
+	if maxLimit <= 0 {
+		maxLimit = 100
+	}
+
+	limit := defaultLimit
+	if l := q.Get("limit"); l != "" {
+		parsed, err := strconv.Atoi(l)
+		if err != nil || parsed < 1 {
+			return Cursor{}, fmt.Errorf("invalid limit: %q", l)
+		}
+		if parsed > maxLimit {
+			parsed = maxLimit
+		}
+		limit = parsed
+	}
+
+	encoded := q.Get("cursor")
+	if encoded == "" {
+		return Cursor{Limit: limit, Direction: CursorForward}, nil
+	}
+
+	c, err := DecodeCursor(encoded)
+	if err != nil {
+		return Cursor{}, err
+	}
+	c.Limit = limit
+	return c, nil
+}
+
+// WriteCursorPaginated writes a cursor-paginated response with Link headers (RFC 8288).
+// data is the current page results. nextCursor/prevCursor are opaque cursor strings (empty = none).
+// hasMore indicates if more results exist in the forward direction.
+func WriteCursorPaginated(w http.ResponseWriter, r *http.Request, data interface{}, nextCursor, prevCursor string, hasMore bool) {
+	baseURL := buildBaseURL(r)
+
+	links := []string{}
+	if nextCursor != "" {
+		nextURL := buildCursorURL(baseURL, r.URL.Query(), nextCursor, "next")
+		links = append(links, fmt.Sprintf("<%s>; rel=\"next\"", nextURL))
+	}
+	if prevCursor != "" {
+		prevURL := buildCursorURL(baseURL, r.URL.Query(), prevCursor, "prev")
+		links = append(links, fmt.Sprintf("<%s>; rel=\"prev\"", prevURL))
+	}
+	// Always include "first" link pointing to start (no cursor)
+	firstURL := buildCursorURL(baseURL, r.URL.Query(), "", "first")
+	links = append(links, fmt.Sprintf("<%s>; rel=\"first\"", firstURL))
+
+	if len(links) > 0 {
+		w.Header().Set("Link", strings.Join(links, ", "))
+	}
+
+	cursorMeta := &Meta{
+		HasMore: hasMore,
+	}
+	if nextCursor != "" {
+		cursorMeta.NextCursor = nextCursor
+	}
+
+	SuccessWithMeta(w, r, http.StatusOK, data, cursorMeta)
+}
+
+// buildBaseURL reconstructs the base URL from the request.
+func buildBaseURL(r *http.Request) string {
+	baseURL := r.URL.Scheme + "://" + r.URL.Host + r.URL.Path
+	if baseURL == "://" {
+		baseURL = r.RequestURI
+		if idx := strings.IndexByte(baseURL, '?'); idx != -1 {
+			baseURL = baseURL[:idx]
+		}
+	}
+	return baseURL
+}
+
+// buildCursorURL constructs a URL with updated cursor query parameter.
+func buildCursorURL(baseURL string, existingParams url.Values, cursor string, rel string) string {
+	params := url.Values{}
+	for k, vs := range existingParams {
+		for _, v := range vs {
+			if k == "cursor" || k == "limit" || k == "page" || k == "per_page" {
+				continue
+			}
+			params.Set(k, v)
+		}
+	}
+	if cursor != "" {
+		params.Set("cursor", cursor)
+	}
+	// Preserve the limit from existing params
+	if l := existingParams.Get("limit"); l != "" {
+		params.Set("limit", l)
+	}
+	if len(params) > 0 {
+		return baseURL + "?" + params.Encode()
+	}
+	return baseURL
+}
+
+// Content from hateoas.go
+// --- HATEOAS types ---
+
+// Link represents a hypermedia link (HAL/JSON-LD compatible).
+type Link struct {
+	Href   string `json:"href"`
+	Method string `json:"method,omitempty"`
+	Type   string `json:"type,omitempty"`
+	Title  string `json:"title,omitempty"`
+}
+
+// Links is an ordered collection of links keyed by relation name.
+type Links map[string]Link
+
+// --- Link construction helpers ---
+
+// NewLink creates a Link with just href.
+func NewLink(href string) Link {
+	return Link{Href: href}
+}
+
+// NewMethodLink creates a Link with href and HTTP method.
+func NewMethodLink(href, method string) Link {
+	return Link{Href: href, Method: method}
+}
+
+// NewTypedLink creates a Link with href, method, and content type.
+func NewTypedLink(href, method, contentType string) Link {
+	return Link{Href: href, Method: method, Type: contentType}
+}
+
+// --- Adding links to data (additive, backward-compatible) ---
+
+// AddLink attaches a single hypermedia link to data.
+// data must be a pointer to a struct, *map[string]interface{}, or map[string]interface{}.
+// If data is a *map[string]interface{}, _links is added/merged in-place.
+// Returns the (possibly modified) data for convenience.
+func AddLink(data interface{}, rel, href, method string) interface{} {
+	link := NewMethodLink(href, method)
+	return addLinkToData(data, rel, link)
+}
+
+// AddSelfLink adds a "self" link to data.
+func AddSelfLink(data interface{}, href string) interface{} {
+	return AddLink(data, "self", href, "GET")
+}
+
+// addLinkToData is the internal implementation that injects _links into a map.
+func addLinkToData(data interface{}, rel string, link Link) interface{} {
+	switch d := data.(type) {
+	case *map[string]interface{}:
+		if *d == nil {
+			*d = make(map[string]interface{})
+		}
+		setLink(*d, rel, link)
+		return d
+	case map[string]interface{}:
+		setLink(d, rel, link)
+		return d
+	case *map[string]string:
+		// Convert to map[string]interface{} and wrap
+		wrapped := make(map[string]interface{}, len(*d))
+		for k, v := range *d {
+			wrapped[k] = v
+		}
+		setLink(wrapped, rel, link)
+		*d = make(map[string]string)
+		for k, v := range wrapped {
+			if k == "_links" {
+				continue
+			}
+			if s, ok := v.(string); ok {
+				(*d)[k] = s
+			}
+		}
+		// Store _links separately in the original map's context
+		return wrapped
+	default:
+		return data
+	}
+}
+
+// setLink writes a link into the _links key of a map, merging if _links exists.
+func setLink(data map[string]interface{}, rel string, link Link) {
+	existing, ok := data["_links"]
+	if !ok || existing == nil {
+		data["_links"] = Links{rel: link}
+		return
+	}
+	existingLinks, ok := existing.(Links)
+	if !ok {
+		existingLinks = Links{}
+	}
+	existingLinks[rel] = link
+	data["_links"] = existingLinks
+}
+
+// --- Collection pagination links (HAL-style) ---
+
+// AddCollectionLinks generates first/next/prev/last pagination links and attaches them to data.
+// basePath is the resource URL (e.g., "/api/v1/items").
+// page is 1-based. perPage is items per page. total is total item count.
+func AddCollectionLinks(data interface{}, basePath string, page, perPage, total int) interface{} {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 20
+	}
+
+	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
+	basePath = ensureNoQuery(basePath)
+
+	// Always add self
+	selfHref := pageURL(basePath, page, perPage)
+	addLinkToData(data, "self", NewLink(selfHref))
+
+	// first
+	firstHref := pageURL(basePath, 1, perPage)
+	addLinkToData(data, "first", NewLink(firstHref))
+
+	// last
+	lastHref := pageURL(basePath, totalPages, perPage)
+	addLinkToData(data, "last", NewLink(lastHref))
+
+	// next
+	if page < totalPages {
+		nextHref := pageURL(basePath, page+1, perPage)
+		addLinkToData(data, "next", NewLink(nextHref))
+	}
+
+	// prev
+	if page > 1 {
+		prevHref := pageURL(basePath, page-1, perPage)
+		addLinkToData(data, "prev", NewLink(prevHref))
+	}
+
+	return data
+}
+
+// pageURL builds a paginated URL: basePath?page=N&per_page=M
+func pageURL(basePath string, page, perPage int) string {
+	return fmt.Sprintf("%s?page=%d&per_page=%d", basePath, page, perPage)
+}
+
+// ensureNoQuery strips query parameters from a path.
+func ensureNoQuery(path string) string {
+	if idx := strings.IndexByte(path, '?'); idx != -1 {
+		return path[:idx]
+	}
+	return path
+}
+
+// --- Embedded resources ---
+
+// AddEmbedded adds an embedded resource collection under the _embedded key (HAL convention).
+func AddEmbedded(data interface{}, name string, resources interface{}) interface{} {
+	switch d := data.(type) {
+	case *map[string]interface{}:
+		if *d == nil {
+			*d = make(map[string]interface{})
+		}
+		setEmbedded(*d, name, resources)
+		return d
+	case map[string]interface{}:
+		setEmbedded(d, name, resources)
+		return d
+	}
+	return data
+}
+
+// setEmbedded writes an embedded resource into the _embedded key of a map.
+func setEmbedded(data map[string]interface{}, name string, resources interface{}) {
+	existing, ok := data["_embedded"]
+	if !ok || existing == nil {
+		data["_embedded"] = map[string]interface{}{name: resources}
+		return
+	}
+	existingMap, ok := existing.(map[string]interface{})
+	if !ok {
+		existingMap = map[string]interface{}{}
+	}
+	existingMap[name] = resources
+	data["_embedded"] = existingMap
+}
+
+// --- HAL document wrapper ---
+
+// HALDocument is a top-level HAL representation with _links and _embedded.
+type HALDocument struct {
+	Links    Links                  `json:"_links,omitempty"`
+	Embedded map[string]interface{} `json:"_embedded,omitempty"`
+	Data     interface{}            `json:"data,omitempty"`
+}
+
+// NewHALDocument creates a HAL document with a self link.
+func NewHALDocument(selfHref string) *HALDocument {
+	return &HALDocument{
+		Links: Links{"self": NewLink(selfHref)},
+	}
+}
+
+// WithLink adds a link to the HAL document and returns it for chaining.
+func (h *HALDocument) WithLink(rel, href string) *HALDocument {
+	h.Links[rel] = NewLink(href)
+	return h
+}
+
+// WithMethodLink adds a link with method to the HAL document.
+func (h *HALDocument) WithMethodLink(rel, href, method string) *HALDocument {
+	h.Links[rel] = NewMethodLink(href, method)
+	return h
+}
+
+// WithEmbedded adds an embedded resource to the HAL document.
+func (h *HALDocument) WithEmbedded(name string, resources interface{}) *HALDocument {
+	if h.Embedded == nil {
+		h.Embedded = make(map[string]interface{})
+	}
+	h.Embedded[name] = resources
+	return h
+}
+
+// WithData sets the primary resource data.
+func (h *HALDocument) WithData(data interface{}) *HALDocument {
+	h.Data = data
+	return h
 }

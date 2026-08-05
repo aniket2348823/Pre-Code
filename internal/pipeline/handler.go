@@ -87,5 +87,3 @@ func NewHTTPHandler(p *Pipeline) http.HandlerFunc {
 		response.JSON(w, http.StatusOK, report)
 	}
 }
-
-

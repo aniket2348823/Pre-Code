@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -25,10 +24,10 @@ type Tool interface {
 type ToolResult struct {
 	Output   string                 `json:"output"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
-	Cost     float64               `json:"cost"`
-	Duration time.Duration         `json:"duration"`
-	Success  bool                  `json:"success"`
-	Error    string                `json:"error,omitempty"`
+	Cost     float64                `json:"cost"`
+	Duration time.Duration          `json:"duration"`
+	Success  bool                   `json:"success"`
+	Error    string                 `json:"error,omitempty"`
 }
 
 // ToolRegistry manages available tools.
@@ -120,9 +119,4 @@ type FileSecurityConfig struct {
 type CommandSecurityConfig struct {
 	Blocklist []string `json:"blocklist"`
 	Allowlist []string `json:"allowlist"`
-}
-
-func init() {
-	// Ensure fmt is used
-	_ = fmt.Sprintf
 }

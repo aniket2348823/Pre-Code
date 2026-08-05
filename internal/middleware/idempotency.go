@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
 const maxCacheEntries = 10000
@@ -142,7 +144,12 @@ func (m *IdempotencyMiddleware) waitForCompletion(cacheKey string, w http.Respon
 			}
 			m.mu.RUnlock()
 		case <-timeout:
-			// Timeout - treat as cache miss and let the request proceed
+			// The in-flight request is taking too long. Respond with a 409 so the
+			// client can retry rather than hanging with no response at all.
+			response.JSON(w, http.StatusConflict, map[string]interface{}{
+				"code":  "IDEM_001",
+				"error": "request with this idempotency key is still processing",
+			})
 			return
 		}
 	}

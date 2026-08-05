@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	maxExtractSize     = 100 << 20 // 100 MB per file
+	maxExtractSize      = 100 << 20 // 100 MB per file
 	maxTotalExtractSize = 500 << 20 // 500 MB total
 )
 

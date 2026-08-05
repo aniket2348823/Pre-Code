@@ -35,9 +35,9 @@ import (
 // Finding represents a single security/quality finding from either engine.
 type Finding struct {
 	RuleID     string  `json:"rule_id"`
-	Engine     string  `json:"engine"`     // "deterministic" or "llm"
-	Severity   string  `json:"severity"`   // critical, high, medium, low, info
-	Category   string  `json:"category"`   // injection, secrets, crypto, etc.
+	Engine     string  `json:"engine"`   // "deterministic" or "llm"
+	Severity   string  `json:"severity"` // critical, high, medium, low, info
+	Category   string  `json:"category"` // injection, secrets, crypto, etc.
 	Message    string  `json:"message"`
 	Fix        string  `json:"fix,omitempty"`
 	Line       int     `json:"line,omitempty"`
@@ -475,7 +475,7 @@ func MergeFindings(detFindings, llmFindings []Finding) []Finding {
 		if llmMatches, ok := llmByCategory[f.Category]; ok && len(llmMatches) > 0 {
 			// CORROBORATED: Both engines found the same category of issue
 			f.Confidence = clampFloat(f.Confidence+0.2, 0.0, 1.0) // boost confidence
-			f.RuleID = f.RuleID + "+llm"                           // mark as corroborated
+			f.RuleID = f.RuleID + "+llm"                          // mark as corroborated
 			// Use the more severe finding's message
 			if len(llmMatches) > 0 && severityRank(llmMatches[0].Severity) > severityRank(f.Severity) {
 				f.Severity = llmMatches[0].Severity

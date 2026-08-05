@@ -9,18 +9,19 @@ import (
 	"math"
 	"sort"
 
-	"github.com/vigilagent/vigilagent/internal/scanner"
 	"strconv"
 	"strings"
+
+	"github.com/vigilagent/vigilagent/internal/scanner"
 )
 
 // Evidence represents a single piece of evidence for or against confidence.
 type Evidence struct {
-	Source    string  `json:"source"`    // e.g. "schema", "requirements", "compliance", "scan"
-	Verdict   string  `json:"verdict"`   // "pass", "fail", "warn"
-	Severity  string  `json:"severity"`  // critical, high, medium, low, info
-	Detail    string  `json:"detail"`
-	Weight    float64 `json:"weight"`    // 0.0–1.0 importance weight
+	Source   string  `json:"source"`   // e.g. "schema", "requirements", "compliance", "scan"
+	Verdict  string  `json:"verdict"`  // "pass", "fail", "warn"
+	Severity string  `json:"severity"` // critical, high, medium, low, info
+	Detail   string  `json:"detail"`
+	Weight   float64 `json:"weight"` // 0.0–1.0 importance weight
 }
 
 // Score is the calibrated confidence output.
@@ -203,8 +204,6 @@ func parseSeverity(s string) Severity {
 		return SeverityInfo
 	}
 }
-
-
 
 // SortEvidence orders evidence by severity (most severe first) then source.
 func SortEvidence(evidence []Evidence) {

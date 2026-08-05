@@ -31,54 +31,54 @@ import (
 
 // Request is the input to the middleware pipeline.
 type Request struct {
-	ID          string                      `json:"id"`
-	UserID      string                      `json:"user_id"`
-	TaskType    string                      `json:"task_type"`
-	Description string                      `json:"description"`
-	Code        string                      `json:"code,omitempty"`
-	Language    string                      `json:"language,omitempty"`
-	Filename    string                      `json:"filename,omitempty"`
+	ID          string                       `json:"id"`
+	UserID      string                       `json:"user_id"`
+	TaskType    string                       `json:"task_type"`
+	Description string                       `json:"description"`
+	Code        string                       `json:"code,omitempty"`
+	Language    string                       `json:"language,omitempty"`
+	Filename    string                       `json:"filename,omitempty"`
 	Context     *contextbuilder.BuildRequest `json:"context,omitempty"`
-	Budget      float64                     `json:"budget,omitempty"`
+	Budget      float64                      `json:"budget,omitempty"`
 }
 
 // Response is the output from the middleware pipeline.
 type Response struct {
-	ID            string                  `json:"id"`
-	Content       string                  `json:"content"`
-	Model         string                  `json:"model"`
-	Provider      string                  `json:"provider"`
-	Cost          float64                 `json:"cost"`
-	TokensUsed    int                     `json:"tokens_used"`
-	LatencyMs     float64                 `json:"latency_ms"`
-	Critique      *critic.CritiqueResult  `json:"critique,omitempty"`
-	SkillsMatched int                     `json:"skills_matched"`
-	Retries       int                     `json:"retries"`
-	Accepted      bool                    `json:"accepted"`
-	Grade         string                  `json:"grade"`
-	Cached        bool                    `json:"cached"`
-	RateLimited   bool                    `json:"rate_limited"`
+	ID            string                 `json:"id"`
+	Content       string                 `json:"content"`
+	Model         string                 `json:"model"`
+	Provider      string                 `json:"provider"`
+	Cost          float64                `json:"cost"`
+	TokensUsed    int                    `json:"tokens_used"`
+	LatencyMs     float64                `json:"latency_ms"`
+	Critique      *critic.CritiqueResult `json:"critique,omitempty"`
+	SkillsMatched int                    `json:"skills_matched"`
+	Retries       int                    `json:"retries"`
+	Accepted      bool                   `json:"accepted"`
+	Grade         string                 `json:"grade"`
+	Cached        bool                   `json:"cached"`
+	RateLimited   bool                   `json:"rate_limited"`
 }
 
 // PipelineConfig holds middleware pipeline configuration.
 type PipelineConfig struct {
-	CriticConfig     *critic.Config              `json:"critic_config"`
-	ContextConfig    *contextbuilder.Config      `json:"context_config"`
-	CacheConfig      *cache.Config               `json:"cache_config"`
-	RetryPolicy      *retry.Policy               `json:"retry_policy"`
-	EnableCritique   bool                        `json:"enable_critique"`
-	EnableExtraction bool                        `json:"enable_extraction"`
-	EnableMemory     bool                        `json:"enable_memory"`
-	EnableCache      bool                        `json:"enable_cache"`
-	EnableRateLimit  bool                        `json:"enable_rate_limit"`
-	MaxRetries       int                         `json:"max_retries"`
+	CriticConfig     *critic.Config         `json:"critic_config"`
+	ContextConfig    *contextbuilder.Config `json:"context_config"`
+	CacheConfig      *cache.Config          `json:"cache_config"`
+	RetryPolicy      *retry.Policy          `json:"retry_policy"`
+	EnableCritique   bool                   `json:"enable_critique"`
+	EnableExtraction bool                   `json:"enable_extraction"`
+	EnableMemory     bool                   `json:"enable_memory"`
+	EnableCache      bool                   `json:"enable_cache"`
+	EnableRateLimit  bool                   `json:"enable_rate_limit"`
+	MaxRetries       int                    `json:"max_retries"`
 }
 
 // DefaultPipelineConfig returns a production-ready middleware configuration.
 func DefaultPipelineConfig() *PipelineConfig {
 	return &PipelineConfig{
-		CriticConfig:     critic.DefaultConfig(),
-		ContextConfig:    contextbuilder.DefaultConfig(),
+		CriticConfig:  critic.DefaultConfig(),
+		ContextConfig: contextbuilder.DefaultConfig(),
 		CacheConfig: &cache.Config{
 			MaxSize:    10000,
 			DefaultTTL: 24 * time.Hour,
@@ -213,14 +213,14 @@ func (p *Pipeline) Process(ctx context.Context, req *Request) (*Response, error)
 			p.mu.Unlock()
 			slog.Info("middleware: cache hit", "key", cacheKey)
 			return &Response{
-				ID:         req.ID,
-				Content:    cached.Response,
-				Model:      cached.Model,
-				Cost:       0, // cached = free
-				Cached:     true,
-				Accepted:   true,
-				Grade:      "cached",
-				LatencyMs:  float64(time.Since(start).Milliseconds()),
+				ID:        req.ID,
+				Content:   cached.Response,
+				Model:     cached.Model,
+				Cost:      0, // cached = free
+				Cached:    true,
+				Accepted:  true,
+				Grade:     "cached",
+				LatencyMs: float64(time.Since(start).Milliseconds()),
 			}, nil
 		}
 	}
@@ -295,10 +295,11 @@ func (p *Pipeline) Process(ctx context.Context, req *Request) (*Response, error)
 	}
 
 	// Step 7b: Record feedback outcome for learning loop
-	if p.feedback != nil {			p.feedback.RecordOutcome(ctx, feedback.Outcome{
-				ID:         fmt.Sprintf("fb-%s", req.ID),
-				RequestID:  req.ID,
-				UserID:     req.UserID,
+	if p.feedback != nil {
+		p.feedback.RecordOutcome(ctx, feedback.Outcome{
+			ID:         fmt.Sprintf("fb-%s", req.ID),
+			RequestID:  req.ID,
+			UserID:     req.UserID,
 			Accepted:   response.Accepted,
 			Model:      response.Model,
 			TaskType:   req.TaskType,
@@ -330,13 +331,13 @@ func (p *Pipeline) Process(ctx context.Context, req *Request) (*Response, error)
 	// Step 10: Record cost intelligence
 	if p.costIntel != nil {
 		p.costIntel.RecordCost(costintel.CostRecord{
-			ID:           req.ID,
-			Model:        response.Model,
-			Provider:     response.Provider,
-			CostUSD:      response.Cost,
-			TaskType:     req.TaskType,
-			Success:      response.Accepted,
-			DurationMs:   response.LatencyMs,
+			ID:         req.ID,
+			Model:      response.Model,
+			Provider:   response.Provider,
+			CostUSD:    response.Cost,
+			TaskType:   req.TaskType,
+			Success:    response.Accepted,
+			DurationMs: response.LatencyMs,
 		})
 	}
 
@@ -470,16 +471,16 @@ func (p *Pipeline) GetMetrics() map[string]interface{} {
 	perfSummary := p.metrics.Summary()
 
 	return map[string]interface{}{
-		"total_requests":    p.totalRequests,
-		"total_retries":     p.totalRetries,
-		"total_cost":        p.totalCost,
-		"skills_extracted":  p.skillsExtracted,
-		"cache_hits":        p.cacheHits,
+		"total_requests":     p.totalRequests,
+		"total_retries":      p.totalRetries,
+		"total_cost":         p.totalCost,
+		"skills_extracted":   p.skillsExtracted,
+		"cache_hits":         p.cacheHits,
 		"rate_limit_rejects": p.rateLimitRejects,
-		"cache_stats":       cacheStats,
-		"cost_by_model":     costStats,
-		"performance":       perfSummary,
-		"health":            p.healthChecker.Summary(),
+		"cache_stats":        cacheStats,
+		"cost_by_model":      costStats,
+		"performance":        perfSummary,
+		"health":             p.healthChecker.Summary(),
 	}
 }
 

@@ -107,10 +107,10 @@ func TestPerformanceMetricsReset(t *testing.T) {
 
 func TestPerformanceMetricsLatencyBuckets(t *testing.T) {
 	pm := NewPerformanceMetrics()
-	pm.RecordRequest(50, false)   // 0-100ms
-	pm.RecordRequest(250, false)  // 100-500ms
-	pm.RecordRequest(750, false)  // 500ms-1s
-	pm.RecordRequest(3000, false) // 1s-5s
+	pm.RecordRequest(50, false)    // 0-100ms
+	pm.RecordRequest(250, false)   // 100-500ms
+	pm.RecordRequest(750, false)   // 500ms-1s
+	pm.RecordRequest(3000, false)  // 1s-5s
 	pm.RecordRequest(10000, false) // 5s+
 	summary := pm.Summary()
 	buckets := summary["latency_buckets"].(map[string]int64)

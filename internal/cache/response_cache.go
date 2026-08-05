@@ -12,16 +12,16 @@ import (
 
 // CachedResponse stores a cached LLM response.
 type CachedResponse struct {
-	Key           string        `json:"key"`
-	Model         string        `json:"model"`
-	Prompt        string        `json:"prompt"`
-	Response      string        `json:"response"`
-	TokensUsed    int           `json:"tokens_used"`
-	CostUSD       float64       `json:"cost_usd"`
-	HitCount      int           `json:"hit_count"`
-	CreatedAt     time.Time     `json:"created_at"`
-	ExpiresAt     time.Time     `json:"expires_at"`
-	Tags          []string      `json:"tags,omitempty"`
+	Key        string    `json:"key"`
+	Model      string    `json:"model"`
+	Prompt     string    `json:"prompt"`
+	Response   string    `json:"response"`
+	TokensUsed int       `json:"tokens_used"`
+	CostUSD    float64   `json:"cost_usd"`
+	HitCount   int       `json:"hit_count"`
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Tags       []string  `json:"tags,omitempty"`
 }
 
 // CacheStats tracks cache performance.
@@ -37,10 +37,10 @@ type CacheStats struct {
 
 // Config configures the response cache.
 type Config struct {
-	MaxSize      int           `json:"max_size"`      // max entries
-	DefaultTTL   time.Duration `json:"default_ttl"`   // default TTL
-	KeyPrefix    string        `json:"key_prefix"`     // prefix for all keys
-	EnableHash   bool          `json:"enable_hash"`    // use content hashing for keys
+	MaxSize    int           `json:"max_size"`    // max entries
+	DefaultTTL time.Duration `json:"default_ttl"` // default TTL
+	KeyPrefix  string        `json:"key_prefix"`  // prefix for all keys
+	EnableHash bool          `json:"enable_hash"` // use content hashing for keys
 }
 
 // ResponseCache provides LLM response caching.

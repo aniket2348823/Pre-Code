@@ -29,7 +29,7 @@ func NewBuiltinAnalyzer() *BuiltinAnalyzer {
 	return &BuiltinAnalyzer{rules: builtinRules()}
 }
 
-func (b *BuiltinAnalyzer) Name() string   { return "builtin" }
+func (b *BuiltinAnalyzer) Name() string    { return "builtin" }
 func (b *BuiltinAnalyzer) Available() bool { return true }
 
 // isTestFile returns true if the filename looks like a Go test file.
@@ -149,12 +149,12 @@ func builtinRules() []builtinRule {
 			category:    "injection",
 		},
 		{
-			name:        "command_injection",
-			description: "Potential command injection via unsanitized input in exec.Command",
-			severity:    SeverityCritical,
-			pattern:     regexp.MustCompile(`exec\.Command\([^)]*(?:req\.|r\.|params\.|input\.|fmt\.Sprintf)`),
-			fix:         "Use allowlists for commands; never pass user input directly to exec.Command arguments",
-			category:    "injection",
+			name:           "command_injection",
+			description:    "Potential command injection via unsanitized input in exec.Command",
+			severity:       SeverityCritical,
+			pattern:        regexp.MustCompile(`exec\.Command\([^)]*(?:req\.|r\.|params\.|input\.|fmt\.Sprintf)`),
+			fix:            "Use allowlists for commands; never pass user input directly to exec.Command arguments",
+			category:       "injection",
 			requireContext: []string{"req.", "r.", "params.", "input.", "fmt.Sprintf"},
 		},
 		{
@@ -174,30 +174,30 @@ func builtinRules() []builtinRule {
 			category:    "xss",
 		},
 		{
-			name:        "xss_http_redirect",
-			description: "Open redirect vulnerability — user input in redirect URL",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`http\.Redirect\([^,]+,\s*[^,]+,\s*[^,]*r\.URL`),
-			fix:         "Validate redirect URLs against an allowlist before redirecting",
-			category:    "xss",
+			name:           "xss_http_redirect",
+			description:    "Open redirect vulnerability — user input in redirect URL",
+			severity:       SeverityHigh,
+			pattern:        regexp.MustCompile(`http\.Redirect\([^,]+,\s*[^,]+,\s*[^,]*r\.URL`),
+			fix:            "Validate redirect URLs against an allowlist before redirecting",
+			category:       "xss",
 			requireContext: []string{"r.URL"},
 		},
 		{
-			name:        "template_injection",
-			description: "Potential template injection — user input in template parsing",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`template\.(New|Must)\([^)]*(?:req\.|r\.|input\.)`),
-			fix:         "Never pass user input directly to template constructors; use predefined templates",
-			category:    "injection",
+			name:           "template_injection",
+			description:    "Potential template injection — user input in template parsing",
+			severity:       SeverityHigh,
+			pattern:        regexp.MustCompile(`template\.(New|Must)\([^)]*(?:req\.|r\.|input\.)`),
+			fix:            "Never pass user input directly to template constructors; use predefined templates",
+			category:       "injection",
 			requireContext: []string{"req.", "r.", "input."},
 		},
 		{
-			name:        "log_injection",
-			description: "Potential log injection via unsanitized user input",
-			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`(?:log\.|slog\.|fmt\.Print|fmt\.Fprint)\w*\([^)]*(?:req\.|r\.|input\.|user\.)`),
-			fix:         "Sanitize user input before logging; use structured logging with key-value pairs",
-			category:    "injection",
+			name:           "log_injection",
+			description:    "Potential log injection via unsanitized user input",
+			severity:       SeverityMedium,
+			pattern:        regexp.MustCompile(`(?:log\.|slog\.|fmt\.Print|fmt\.Fprint)\w*\([^)]*(?:req\.|r\.|input\.|user\.)`),
+			fix:            "Sanitize user input before logging; use structured logging with key-value pairs",
+			category:       "injection",
 			requireContext: []string{"req.", "r.", "input.", "user."},
 		},
 
@@ -205,12 +205,12 @@ func builtinRules() []builtinRule {
 		// SECRETS (CWE-798, CWE-259, CWE-321)
 		// ════════════════════════════════════════════════════════════════
 		{
-			name:        "hardcoded_password",
-			description: "Hardcoded password or secret in source code",
-			severity:    SeverityCritical,
-			pattern:     regexp.MustCompile(`(?i)(password|passwd|secret|api_key|apikey|api[-_]?secret|private[-_]?key)\s*[:=]+\s*"[^"]{8,}"`),
-			fix:         "Use environment variables or a secrets manager (e.g., HashiCorp Vault)",
-			category:    "secrets",
+			name:             "hardcoded_password",
+			description:      "Hardcoded password or secret in source code",
+			severity:         SeverityCritical,
+			pattern:          regexp.MustCompile(`(?i)(password|passwd|secret|api_key|apikey|api[-_]?secret|private[-_]?key)\s*[:=]+\s*"[^"]{8,}"`),
+			fix:              "Use environment variables or a secrets manager (e.g., HashiCorp Vault)",
+			category:         "secrets",
 			excludeFilenames: []string{"example", "sample", "mock_", "stub_"},
 		},
 		{
@@ -342,30 +342,30 @@ func builtinRules() []builtinRule {
 		// PATH TRAVERSAL (CWE-22)
 		// ════════════════════════════════════════════════════════════════
 		{
-			name:        "path_traversal",
-			description: "Potential path traversal via unsanitized user input in file operations",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`(os\.Open|os\.Create|os\.ReadFile|os\.WriteFile|ioutil\.ReadFile|filepath\.Join)\s*\([^)]*(?:req\.|r\.|params\.|input\.)`),
-			fix:         "Validate and sanitize file paths; use filepath.Clean and verify the path stays within allowed directories",
-			category:    "path_traversal",
+			name:           "path_traversal",
+			description:    "Potential path traversal via unsanitized user input in file operations",
+			severity:       SeverityHigh,
+			pattern:        regexp.MustCompile(`(os\.Open|os\.Create|os\.ReadFile|os\.WriteFile|ioutil\.ReadFile|filepath\.Join)\s*\([^)]*(?:req\.|r\.|params\.|input\.)`),
+			fix:            "Validate and sanitize file paths; use filepath.Clean and verify the path stays within allowed directories",
+			category:       "path_traversal",
 			requireContext: []string{"req.", "r.", "params.", "input."},
 		},
 		{
-			name:        "path_traversal_unsanitized",
-			description: "File operation with potentially unsanitized path concatenation",
-			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`(?:os\.Open|os\.Create|os\.ReadFile)\s*\([^)]*\+\s*(?:r\.|req\.|input\.)`),
-			fix:         "Use filepath.Clean() and validate the resolved path stays within allowed directories",
-			category:    "path_traversal",
+			name:           "path_traversal_unsanitized",
+			description:    "File operation with potentially unsanitized path concatenation",
+			severity:       SeverityMedium,
+			pattern:        regexp.MustCompile(`(?:os\.Open|os\.Create|os\.ReadFile)\s*\([^)]*\+\s*(?:r\.|req\.|input\.)`),
+			fix:            "Use filepath.Clean() and validate the resolved path stays within allowed directories",
+			category:       "path_traversal",
 			requireContext: []string{"r.", "req.", "input."},
 		},
 		{
-			name:        "symlink_attack",
-			description: "Potential symlink following in file operations",
-			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`(?i)(?:os\.ReadFile|os\.Open|ioutil\.ReadFile)\s*\([^)]*(?:r\.|req\.)`),
-			fix:         "Use os.Lstat to check for symlinks before following them; validate path boundaries",
-			category:    "path_traversal",
+			name:           "symlink_attack",
+			description:    "Potential symlink following in file operations",
+			severity:       SeverityMedium,
+			pattern:        regexp.MustCompile(`(?i)(?:os\.ReadFile|os\.Open|ioutil\.ReadFile)\s*\([^)]*(?:r\.|req\.)`),
+			fix:            "Use os.Lstat to check for symlinks before following them; validate path boundaries",
+			category:       "path_traversal",
 			requireContext: []string{"r.", "req."},
 		},
 
@@ -373,30 +373,30 @@ func builtinRules() []builtinRule {
 		// SSRF (CWE-918)
 		// ════════════════════════════════════════════════════════════════
 		{
-			name:        "ssrf_http_get",
-			description: "Potential SSRF — user-controlled URL passed to HTTP client",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`http\.(Get|Post|Head|Do)\s*\(\s*(?:req\.|r\.)`),
-			fix:         "Validate URLs against an allowlist; block internal/private IP ranges",
-			category:    "ssrf",
+			name:           "ssrf_http_get",
+			description:    "Potential SSRF — user-controlled URL passed to HTTP client",
+			severity:       SeverityHigh,
+			pattern:        regexp.MustCompile(`http\.(Get|Post|Head|Do)\s*\(\s*(?:req\.|r\.)`),
+			fix:            "Validate URLs against an allowlist; block internal/private IP ranges",
+			category:       "ssrf",
 			requireContext: []string{"req.", "r."},
 		},
 		{
-			name:        "ssrf_http_client",
-			description: "HTTP client request with user-controlled URL via variable",
-			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`(?:Client|HttpClient|http\.Client)\s*\.\s*(?:Get|Post|Do|GetWithContext|PostWithContext)\s*\(\s*(?:ctx,\s*)?(?:r\.|req\.|input\.|params\.)`),
-			fix:         "Validate URLs against an allowlist; use URL parsing to block internal ranges",
-			category:    "ssrf",
+			name:           "ssrf_http_client",
+			description:    "HTTP client request with user-controlled URL via variable",
+			severity:       SeverityMedium,
+			pattern:        regexp.MustCompile(`(?:Client|HttpClient|http\.Client)\s*\.\s*(?:Get|Post|Do|GetWithContext|PostWithContext)\s*\(\s*(?:ctx,\s*)?(?:r\.|req\.|input\.|params\.)`),
+			fix:            "Validate URLs against an allowlist; use URL parsing to block internal ranges",
+			category:       "ssrf",
 			requireContext: []string{"r.", "req.", "input.", "params."},
 		},
 		{
-			name:        "ssrf_url_parse",
-			description: "URL parsed from user input without validation",
-			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`url\.Parse\s*\(\s*(?:r\.|req\.|input\.)(?:URL|Body|Form|Query)`),
-			fix:         "Validate parsed URL scheme, host, and port against an allowlist",
-			category:    "ssrf",
+			name:           "ssrf_url_parse",
+			description:    "URL parsed from user input without validation",
+			severity:       SeverityMedium,
+			pattern:        regexp.MustCompile(`url\.Parse\s*\(\s*(?:r\.|req\.|input\.)(?:URL|Body|Form|Query)`),
+			fix:            "Validate parsed URL scheme, host, and port against an allowlist",
+			category:       "ssrf",
 			requireContext: []string{"r.", "req.", "input."},
 		},
 
@@ -404,12 +404,12 @@ func builtinRules() []builtinRule {
 		// DESERIALIZATION (CWE-502, CWE-20)
 		// ════════════════════════════════════════════════════════════════
 		{
-			name:        "insecure_json_decode",
-			description: "Decoding JSON from untrusted source without size limits",
-			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`json\.NewDecoder\((?:req\.|r\.)Body\)\.Decode\(&[^)]+\)`),
-			fix:         "Use http.MaxBytesReader to limit request body size before decoding",
-			category:    "deserialization",
+			name:           "insecure_json_decode",
+			description:    "Decoding JSON from untrusted source without size limits",
+			severity:       SeverityMedium,
+			pattern:        regexp.MustCompile(`json\.NewDecoder\((?:req\.|r\.)Body\)\.Decode\(&[^)]+\)`),
+			fix:            "Use http.MaxBytesReader to limit request body size before decoding",
+			category:       "deserialization",
 			requireContext: []string{"req.Body", "r.Body"},
 		},
 		{
@@ -457,12 +457,12 @@ func builtinRules() []builtinRule {
 			category:    "info_disclosure",
 		},
 		{
-			name:        "verbose_error_handler",
-			description: "HTTP error handler that exposes internal error details",
-			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`http\.Error\(\w+,\s*(?:err\.Error|fmt\.Sprintf.*err)`),
-			fix:         "Return generic error messages to users; log detailed errors server-side",
-			category:    "info_disclosure",
+			name:           "verbose_error_handler",
+			description:    "HTTP error handler that exposes internal error details",
+			severity:       SeverityMedium,
+			pattern:        regexp.MustCompile(`http\.Error\(\w+,\s*(?:err\.Error|fmt\.Sprintf.*err)`),
+			fix:            "Return generic error messages to users; log detailed errors server-side",
+			category:       "info_disclosure",
 			requireContext: []string{"err"},
 		},
 		{
@@ -486,12 +486,12 @@ func builtinRules() []builtinRule {
 			category:    "permissions",
 		},
 		{
-			name:        "world_readable_secret",
-			description: "Secret or key file created with world-readable permissions",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`(?i)(?:os\.WriteFile|os\.Create)\s*\([^)]*(?:key|secret|token|credential)[^)]*,\s*0[0-7][67][0-7]`),
-			fix:         "Use 0600 permissions for all secret files; never use group/world-readable permissions",
-			category:    "permissions",
+			name:           "world_readable_secret",
+			description:    "Secret or key file created with world-readable permissions",
+			severity:       SeverityHigh,
+			pattern:        regexp.MustCompile(`(?i)(?:os\.WriteFile|os\.Create)\s*\([^)]*(?:key|secret|token|credential)[^)]*,\s*0[0-7][67][0-7]`),
+			fix:            "Use 0600 permissions for all secret files; never use group/world-readable permissions",
+			category:       "permissions",
 			requireContext: []string{"key", "secret", "token", "credential"},
 		},
 		{
@@ -548,8 +548,5 @@ func builtinRules() []builtinRule {
 			fix:         "Use context.WithTimeout or rate limiters instead of sleep in handlers",
 			category:    "quality",
 		},
-
-
-
 	}
 }

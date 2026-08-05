@@ -276,6 +276,9 @@ func (r *APIKeyRepository) UpdateLastUsedBatch(ctx context.Context, ids []string
 // Returns a stop function to cancel the goroutine.
 func (r *APIKeyRepository) StartExpiredKeyCleanup(ctx context.Context, interval time.Duration) context.CancelFunc {
 	cleanupCtx, cancel := context.WithCancel(ctx)
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()

@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
@@ -10,13 +12,13 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
-// --- Input Sanitization ---
-
 var (
-	sqlInjectionPattern = regexp.MustCompile(`(?i)(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE|UNION|DECLARE|CAST|CONVERT|OR)\b\s)`)
-	xssPattern          = regexp.MustCompile(`(?i)(<script|<\/script|script\s*>|javascript:|on\w+\s*=|<iframe|<object|<embed|<applet)`)
+	sqlInjectionPattern  = regexp.MustCompile(`(?i)(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE|UNION|DECLARE|CAST|CONVERT|OR)\b\s)`)
+	xssPattern           = regexp.MustCompile(`(?i)(<script|<\/script|script\s*>|javascript:|on\w+\s*=|<iframe|<object|<embed|<applet)`)
 	pathTraversalPattern = regexp.MustCompile(`(\.\.\/|\.\\.\\|%2e%2e%2f|%2e%2e\/|%2e%2e%5c)`)
 )
 
@@ -26,7 +28,7 @@ func SanitizeInput(input string) string {
 		return input
 	}
 	input = strings.TrimSpace(input)
-	// Strip null bytes and control characters (except \n, \r, \t)
+
 	input = strings.Map(func(r rune) rune {
 		if r == 0 || (r < 32 && r != '\n' && r != '\r' && r != '\t') {
 			return -1
@@ -60,8 +62,7 @@ func DetectXSS(input string) bool {
 // SanitizeMiddleware returns middleware that sanitizes common injection patterns.
 func SanitizeMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Use RawPath to detect encoded attacks that Go's URL decoding has already
-		// resolved in r.URL.Path. This catches payloads like %2e%2e%2f or %2e%2e%5c.
+
 		path := r.URL.Path
 		if r.URL.RawPath != "" {
 			path = r.URL.RawPath
@@ -90,8 +91,6 @@ func SanitizeMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-// --- CSRF Protection ---
 
 // CSRFConfig holds CSRF protection configuration.
 type CSRFConfig struct {
@@ -145,27 +144,34 @@ func CSRFProtect(cfg *CSRFConfig) func(http.Handler) http.Handler {
 			}
 
 			cookieToken, _ := r.Cookie(cfg.CookieName)
-			headerToken := r.Header.Get(cfg.HeaderName)
-
-			if isIgnored {
-				if cookieToken != nil && headerToken != "" {
-					if !compareTokens(cookieToken.Value, headerToken) {
-						http.Error(w, "CSRF token mismatch", http.StatusForbidden)
-						return
+			headerToken := r.Header.Get(cfg.HeaderName)				if isIgnored {
+					if cookieToken != nil && headerToken != "" {
+						if !compareTokens(cookieToken.Value, headerToken) {
+							http.Error(w, "CSRF token mismatch", http.StatusForbidden)
+							return
+						}
 					}
-				}
 
-				token, genErr := GenerateCSRFToken(cfg.TokenLength)
-				if genErr != nil {
-					http.Error(w, "failed to generate CSRF token", http.StatusInternalServerError)
-					return
-				}
-				http.SetCookie(w, &http.Cookie{
+					// Reuse an existing cookie token instead of regenerating on every
+					// GET — regenerating invalidates previously issued header tokens and
+					// breaks SPA flows that fetch a token then POST after another GET.
+					token := ""
+					if cookieToken != nil && cookieToken.Value != "" {
+						token = cookieToken.Value
+					} else {
+						var genErr error
+						token, genErr = GenerateCSRFToken(cfg.TokenLength)
+						if genErr != nil {
+							http.Error(w, "failed to generate CSRF token", http.StatusInternalServerError)
+							return
+						}
+					}
+					http.SetCookie(w, &http.Cookie{
 					Name:     cfg.CookieName,
 					Value:    token,
 					Path:     "/",
 					Domain:   cfg.CookieDomain,
-					Secure:   cfg.CookieSecure || true,
+					Secure:   cfg.CookieSecure,
 					HttpOnly: cfg.CookieHTTPOnly,
 					MaxAge:   int(cfg.MaxAge.Seconds()),
 					SameSite: http.SameSiteLaxMode,
@@ -199,8 +205,6 @@ func CSRFProtect(cfg *CSRFConfig) func(http.Handler) http.Handler {
 func compareTokens(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
-
-// --- Security Headers ---
 
 // SecurityHeadersConfig holds security header middleware configuration.
 type SecurityHeadersConfig struct {
@@ -251,7 +255,6 @@ func SecurityHeaders(cfg *SecurityHeadersConfig) func(http.Handler) http.Handler
 				return
 			}
 
-			// HSTS
 			if cfg.HSTSMaxAge > 0 {
 				hsts := fmt.Sprintf("max-age=%d", cfg.HSTSMaxAge)
 				if cfg.HSTSIncludeSubDomains {
@@ -263,37 +266,30 @@ func SecurityHeaders(cfg *SecurityHeadersConfig) func(http.Handler) http.Handler
 				w.Header().Set("Strict-Transport-Security", hsts)
 			}
 
-			// Content-Security-Policy
 			if cfg.CSP != "" {
 				w.Header().Set("Content-Security-Policy", cfg.CSP)
 			}
 
-			// X-Content-Type-Options
 			if cfg.XContentTypeOptions {
 				w.Header().Set("X-Content-Type-Options", "nosniff")
 			}
 
-			// X-Frame-Options
 			if cfg.XFrameOptions != "" {
 				w.Header().Set("X-Frame-Options", cfg.XFrameOptions)
 			}
 
-			// Referrer-Policy
 			if cfg.ReferrerPolicy != "" {
 				w.Header().Set("Referrer-Policy", cfg.ReferrerPolicy)
 			}
 
-			// Permissions-Policy
 			if cfg.PermissionsPolicy != "" {
 				w.Header().Set("Permissions-Policy", cfg.PermissionsPolicy)
 			}
 
-			// X-XSS-Protection
 			if cfg.XSSProtection != "" {
 				w.Header().Set("X-XSS-Protection", cfg.XSSProtection)
 			}
 
-			// Cache-Control: use API policy for /api/ paths, static for everything else
 			isAPI := strings.HasPrefix(r.URL.Path, "/api/")
 			if isAPI && cfg.CacheControlAPI != "" {
 				w.Header().Set("Cache-Control", cfg.CacheControlAPI)
@@ -301,7 +297,6 @@ func SecurityHeaders(cfg *SecurityHeadersConfig) func(http.Handler) http.Handler
 				w.Header().Set("Cache-Control", cfg.CacheControlStatic)
 			}
 
-			// Custom headers
 			for k, v := range cfg.CustomHeaders {
 				w.Header().Set(k, v)
 			}
@@ -309,4 +304,272 @@ func SecurityHeaders(cfg *SecurityHeadersConfig) func(http.Handler) http.Handler
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// BodySizeConfig configures the body size limiter middleware.
+type BodySizeConfig struct {
+	MaxBodySize int64 // Maximum request body size in bytes (default 10MB)
+}
+
+// DefaultBodySizeConfig returns a BodySizeConfig with a 10MB default.
+func DefaultBodySizeConfig() BodySizeConfig {
+	return BodySizeConfig{
+		MaxBodySize: 10 << 20,
+	}
+}
+
+// BodySizeLimiter returns middleware that limits request body size for POST/PUT/PATCH.
+// Returns 413 Payload Too Large if the body exceeds the configured max.
+func BodySizeLimiter(cfg BodySizeConfig) func(http.Handler) http.Handler {
+	if cfg.MaxBodySize <= 0 {
+		cfg = DefaultBodySizeConfig()
+	}
+	maxSize := cfg.MaxBodySize
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPost, http.MethodPut, http.MethodPatch:
+				if r.Body != nil {
+					r.Body = http.MaxBytesReader(w, r.Body, maxSize)
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// HandleMaxBytesError checks if an error is from http.MaxBytesReader and writes a 413 response.
+// Returns true if the error was handled (caller should return).
+func HandleMaxBytesError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), "http: request body too large") {
+		response.JSON(w, http.StatusRequestEntityTooLarge, map[string]interface{}{
+			"code":  "INFRA_003",
+			"error": "request body too large",
+		})
+		return true
+	}
+	return false
+}
+
+// CSRFMiddleware protects state-changing endpoints from cross-site request forgery.
+// It uses HMAC-signed tokens: the server signs a random token, stores it in a cookie,
+// and verifies the signature when the client sends it back in a header.
+type CSRFMiddleware struct {
+	cookieName    string
+	headerName    string
+	secret        []byte
+	safeMethods   []string
+	excludedPaths []string
+}
+
+// NewCSRFMiddleware creates a new CSRF middleware with HMAC-signed tokens.
+func NewCSRFMiddleware(secret []byte) *CSRFMiddleware {
+	return &CSRFMiddleware{
+		cookieName:    "_csrf",
+		headerName:    "X-CSRF-Token",
+		secret:        secret,
+		safeMethods:   []string{"GET", "HEAD", "OPTIONS", "TRACE"},
+		excludedPaths: []string{"/api/v1/health", "/api/v1/ready", "/api/v1/metrics"},
+	}
+}
+
+// Middleware returns a chi-compatible CSRF middleware.
+// Skips validation for API key consumers (they can't have cookies).
+func (m *CSRFMiddleware) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		if isAPIKeyRequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		for _, method := range m.safeMethods {
+			if strings.EqualFold(r.Method, method) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		for _, path := range m.excludedPaths {
+			if strings.HasPrefix(r.URL.Path, path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		token := m.getOrCreateToken(r)
+		if token == "" {
+			http.Error(w, `{"error":"failed to generate CSRF token"}`, http.StatusInternalServerError)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     m.cookieName,
+			Value:    token,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+			MaxAge:   3600,
+		})
+
+		submitted := r.Header.Get(m.headerName)
+		if submitted == "" {
+			submitted = r.FormValue("csrf_token")
+		}
+
+		if submitted == "" || !m.verifyToken(submitted) {
+			slog.Warn("CSRF validation failed",
+				"path", r.URL.Path,
+				"method", r.Method,
+				"remote", r.RemoteAddr,
+			)
+			http.Error(w, `{"error":"CSRF token missing or invalid"}`, http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SetToken sets a CSRF token on the response for SPA clients.
+func (m *CSRFMiddleware) SetToken(w http.ResponseWriter, r *http.Request) {
+	token := m.getOrCreateToken(r)
+	if token == "" {
+		http.Error(w, `{"error":"failed to generate CSRF token"}`, http.StatusInternalServerError)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     m.cookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   3600,
+	})
+	w.Header().Set(m.headerName, token)
+}
+
+// getOrCreateToken returns the existing valid signed token or generates a new one.
+func (m *CSRFMiddleware) getOrCreateToken(r *http.Request) string {
+
+	if cookie, err := r.Cookie(m.cookieName); err == nil && cookie.Value != "" && m.verifyToken(cookie.Value) {
+		return cookie.Value
+	}
+
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	token := hex.EncodeToString(b)
+
+	sig := m.signToken(token)
+	return token + "." + sig
+}
+
+// signToken computes HMAC-SHA256 signature for the token.
+func (m *CSRFMiddleware) signToken(token string) string {
+	mac := hmac.New(sha256.New, m.secret)
+	mac.Write([]byte(token))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// verifyToken checks that the submitted token has a valid HMAC signature.
+func (m *CSRFMiddleware) verifyToken(token string) bool {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	rawToken, sigHex := parts[0], parts[1]
+
+	mac := hmac.New(sha256.New, m.secret)
+	mac.Write([]byte(rawToken))
+	expected := hex.EncodeToString(mac.Sum(nil))
+
+	return hmac.Equal([]byte(sigHex), []byte(expected))
+}
+
+// isAPIKeyRequest checks if the request uses API key authentication.
+// API key consumers (VS Code extension, MCP server, CLI) can't have CSRF cookies,
+// so CSRF validation should be skipped for them.
+func isAPIKeyRequest(r *http.Request) bool {
+
+	if r.Header.Get("X-API-Key") != "" {
+		return true
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			token := parts[1]
+
+			if !strings.Contains(token, ".") && strings.Contains(token, "_") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sensitiveFields are keys whose values should be redacted in logs.
+var sensitiveFields = map[string]bool{
+	"password":      true,
+	"password_hash": true,
+	"api_key":       true,
+	"api-key":       true,
+	"x-api-key":     true,
+	"authorization": true,
+	"token":         true,
+	"access_token":  true,
+	"refresh_token": true,
+	"secret":        true,
+	"secret_key":    true,
+	"jwt_secret":    true,
+	"credit_card":   true,
+	"ssn":           true,
+	"pin":           true,
+}
+
+// RedactLogger returns middleware that logs requests with sensitive fields redacted.
+func RedactLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		slog.Info("http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"remote_addr", r.RemoteAddr,
+			"user_agent", r.UserAgent(),
+			"content_type", r.Header.Get("Content-Type"),
+
+			"has_auth", r.Header.Get("Authorization") != "",
+			"has_api_key", r.Header.Get("X-API-Key") != "",
+		)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RedactValue returns "***REDACTED***" for sensitive fields, or the original value.
+func RedactValue(key, value string) string {
+	lower := strings.ToLower(key)
+	if sensitiveFields[lower] {
+		if value != "" {
+			return "***REDACTED***"
+		}
+	}
+	return value
+}
+
+// RedactHeaders returns a map of HTTP headers with sensitive values redacted.
+func RedactHeaders(headers map[string][]string) map[string]string {
+	result := make(map[string]string, len(headers))
+	for k, vals := range headers {
+		if len(vals) == 0 {
+			continue
+		}
+		result[k] = RedactValue(k, vals[0])
+	}
+	return result
 }

@@ -17,11 +17,11 @@ import (
 )
 
 var (
-	ErrInvalidToken      = errors.New("invalid or expired token")
-	ErrMissingToken      = errors.New("missing authorization token")
-	ErrAudienceMismatch  = errors.New("token audience mismatch")
+	ErrInvalidToken        = errors.New("invalid or expired token")
+	ErrMissingToken        = errors.New("missing authorization token")
+	ErrAudienceMismatch    = errors.New("token audience mismatch")
 	ErrFingerprintMismatch = errors.New("token fingerprint mismatch")
-	ErrTokenRevoked      = errors.New("token revoked by password change")
+	ErrTokenRevoked        = errors.New("token revoked by password change")
 )
 
 // Claims represents the JWT claims structure.
@@ -38,13 +38,13 @@ type Claims struct {
 
 // JWT handles token generation and validation.
 type JWT struct {
-	secret              []byte
-	expiration          time.Duration
-	audience            string
-	bindToIP            bool
-	bindToUserAgent     bool
+	secret               []byte
+	expiration           time.Duration
+	audience             string
+	bindToIP             bool
+	bindToUserAgent      bool
 	revocationTimestamps map[string]time.Time
-	mu                  sync.RWMutex
+	mu                   sync.RWMutex
 }
 
 // NewJWT creates a new JWT service from config.
@@ -57,11 +57,11 @@ func NewJWT(cfg *config.AuthConfig) *JWT {
 		audience = "vigilagent-api"
 	}
 	return &JWT{
-		secret:              []byte(cfg.JWTSecret),
-		expiration:          cfg.JWTExpiration,
-		audience:            audience,
-		bindToIP:            cfg.JWTBindToIP,
-		bindToUserAgent:     cfg.JWTBindToUserAgent,
+		secret:               []byte(cfg.JWTSecret),
+		expiration:           cfg.JWTExpiration,
+		audience:             audience,
+		bindToIP:             cfg.JWTBindToIP,
+		bindToUserAgent:      cfg.JWTBindToUserAgent,
 		revocationTimestamps: make(map[string]time.Time),
 	}
 }

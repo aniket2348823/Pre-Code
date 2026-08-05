@@ -65,8 +65,8 @@ type ReadFileTool struct {
 	Security *FileSecurityConfig
 }
 
-func (t *ReadFileTool) Name() string        { return "read_file" }
-func (t *ReadFileTool) Description() string  { return "Read the contents of a file" }
+func (t *ReadFileTool) Name() string                                    { return "read_file" }
+func (t *ReadFileTool) Description() string                             { return "Read the contents of a file" }
 func (t *ReadFileTool) RequiresHITL(params map[string]interface{}) bool { return false }
 
 func NewReadFileTool(sec *FileSecurityConfig) *ReadFileTool {
@@ -120,8 +120,10 @@ type WriteFileTool struct {
 	Security *FileSecurityConfig
 }
 
-func (t *WriteFileTool) Name() string        { return "write_file" }
-func (t *WriteFileTool) Description() string  { return "Write content to a file (creates or overwrites)" }
+func (t *WriteFileTool) Name() string { return "write_file" }
+func (t *WriteFileTool) Description() string {
+	return "Write content to a file (creates or overwrites)"
+}
 func (t *WriteFileTool) RequiresHITL(params map[string]interface{}) bool {
 	path, _ := params["path"].(string)
 	if path != "" {
@@ -193,8 +195,10 @@ type EditFileTool struct {
 	Security *FileSecurityConfig
 }
 
-func (t *EditFileTool) Name() string        { return "edit_file" }
-func (t *EditFileTool) Description() string  { return "Edit a file by replacing a specific string with new content" }
+func (t *EditFileTool) Name() string { return "edit_file" }
+func (t *EditFileTool) Description() string {
+	return "Edit a file by replacing a specific string with new content"
+}
 func (t *EditFileTool) RequiresHITL(params map[string]interface{}) bool { return true }
 
 func NewEditFileTool(sec *FileSecurityConfig) *EditFileTool {
@@ -232,10 +236,11 @@ func (t *EditFileTool) Execute(ctx context.Context, params map[string]interface{
 		return &ToolResult{Success: false, Error: "path and old_string are required"}, nil
 	}
 
-	if t.Security != nil {
-		if err := validateFilePath(path, t.Security.AllowedDirs); err != nil {
-			return &ToolResult{Success: false, Error: err.Error()}, nil
-		}
+	if t.Security == nil {
+		return &ToolResult{Success: false, Error: "file tool requires security configuration"}, nil
+	}
+	if err := validateFilePath(path, t.Security.AllowedDirs); err != nil {
+		return &ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
 	data, err := os.ReadFile(path)
@@ -266,8 +271,8 @@ type ListDirectoryTool struct {
 	Security *FileSecurityConfig
 }
 
-func (t *ListDirectoryTool) Name() string        { return "list_directory" }
-func (t *ListDirectoryTool) Description() string  { return "List files and directories in a path" }
+func (t *ListDirectoryTool) Name() string                                    { return "list_directory" }
+func (t *ListDirectoryTool) Description() string                             { return "List files and directories in a path" }
 func (t *ListDirectoryTool) RequiresHITL(params map[string]interface{}) bool { return false }
 
 func NewListDirectoryTool(sec *FileSecurityConfig) *ListDirectoryTool {
@@ -294,10 +299,11 @@ func (t *ListDirectoryTool) Execute(ctx context.Context, params map[string]inter
 		path = "."
 	}
 
-	if t.Security != nil {
-		if err := validateFilePath(path, t.Security.AllowedDirs); err != nil {
-			return &ToolResult{Success: false, Error: err.Error()}, nil
-		}
+	if t.Security == nil {
+		return &ToolResult{Success: false, Error: "file tool requires security configuration"}, nil
+	}
+	if err := validateFilePath(path, t.Security.AllowedDirs); err != nil {
+		return &ToolResult{Success: false, Error: err.Error()}, nil
 	}
 
 	entries, err := os.ReadDir(path)

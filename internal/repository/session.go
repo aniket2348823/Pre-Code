@@ -12,15 +12,15 @@ import (
 
 // Session represents a session record in the database.
 type Session struct {
-	ID        string      `json:"id"`
-	ProjectID string      `json:"project_id"`
-	AgentID   string      `json:"agent_id,omitempty"`
-	UserID    string      `json:"user_id,omitempty"`
-	Status    string      `json:"status"`
-	StartedAt time.Time   `json:"started_at"`
-	EndedAt   *time.Time  `json:"ended_at,omitempty"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	ID        string     `json:"id"`
+	ProjectID string     `json:"project_id"`
+	AgentID   string     `json:"agent_id,omitempty"`
+	UserID    string     `json:"user_id,omitempty"`
+	Status    string     `json:"status"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // SessionRepository handles database operations for sessions.

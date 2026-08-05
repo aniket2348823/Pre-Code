@@ -6,10 +6,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vigilagent/vigilagent/internal/auth"
+	mw "github.com/vigilagent/vigilagent/internal/middleware"
 	"github.com/vigilagent/vigilagent/internal/webhook"
 	"github.com/vigilagent/vigilagent/pkg/response"
 )
 
+// Content from hitl_handlers.go
 // approveHITLHandler approves or rejects a HITL checkpoint for a task.
 // On approval, it broadcasts a real-time SSE event so the agent's polling
 // goroutine (in streamTaskHandler) can resume execution. On rejection,
@@ -41,6 +43,16 @@ func (r *Router) approveHITLHandler(w http.ResponseWriter, req *http.Request) {
 	task, err := r.tasks.FindByID(req.Context(), taskID)
 	if err != nil {
 		response.NotFound(w, "task not found")
+		return
+	}
+
+	// Only tasks actually waiting for a human decision may be decided.
+	// This prevents resurrecting completed/failed/cancelled tasks.
+	if task.Status != "waiting_hitl" && task.Status != "pending" {
+		response.JSON(w, http.StatusConflict, map[string]interface{}{
+			"error":  "task is not awaiting a HITL decision",
+			"status": task.Status,
+		})
 		return
 	}
 
@@ -107,4 +119,30 @@ func (r *Router) approveHITLHandler(w http.ResponseWriter, req *http.Request) {
 		"decision": input.Decision,
 		"message":  "HITL checkpoint " + input.Decision + "d",
 	})
+}
+
+// Content from hitl_queue_handlers.go
+// ensureHITLHandler lazily creates the HITL HTTP handler exactly once.
+// The handler only wraps the fixed queue, so a single assignment is enough;
+// using sync.Once prevents a data race when multiple requests arrive together.
+func (r *Router) ensureHITLHandler() *mw.HITLHandler {
+	r.hitlOnce.Do(func() {
+		r.hitlHandler = mw.NewHITLHandler(r.hitlQueue)
+	})
+	return r.hitlHandler
+}
+
+// listHITLCheckpointsHandler returns all pending HITL checkpoints for the authenticated user.
+func (r *Router) listHITLCheckpointsHandler(w http.ResponseWriter, req *http.Request) {
+	r.ensureHITLHandler().ListPendingHandler(w, req)
+}
+
+// decideHITLHandler processes a human decision on a checkpoint.
+func (r *Router) decideHITLHandler(w http.ResponseWriter, req *http.Request) {
+	r.ensureHITLHandler().DecideHandler(w, req)
+}
+
+// hitlStatusHandler returns the status of a specific checkpoint.
+func (r *Router) hitlStatusHandler(w http.ResponseWriter, req *http.Request) {
+	r.ensureHITLHandler().StatusHandler(w, req)
 }

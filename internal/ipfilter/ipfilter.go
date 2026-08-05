@@ -10,11 +10,11 @@ import (
 
 // Filter controls access based on client IP addresses.
 type Filter struct {
-	mu         sync.RWMutex
-	allowList  []net.IPNet
-	denyList   []net.IPNet
-	allowAll   bool
-	denyAll    bool
+	mu             sync.RWMutex
+	allowList      []net.IPNet
+	denyList       []net.IPNet
+	allowAll       bool
+	denyAll        bool
 	trustedProxies []net.IPNet
 }
 
@@ -202,10 +202,10 @@ func (f *Filter) Summary() map[string]interface{} {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	return map[string]interface{}{
-		"allow_all":      f.allowAll,
-		"deny_all":       f.denyAll,
-		"allow_count":    len(f.allowList),
-		"deny_count":     len(f.denyList),
-		"proxy_count":    len(f.trustedProxies),
+		"allow_all":   f.allowAll,
+		"deny_all":    f.denyAll,
+		"allow_count": len(f.allowList),
+		"deny_count":  len(f.denyList),
+		"proxy_count": len(f.trustedProxies),
 	}
 }

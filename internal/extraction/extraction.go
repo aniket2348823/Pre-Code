@@ -26,7 +26,7 @@ type Pattern struct {
 	Confidence   float64   `json:"confidence"`   // 0.0–1.0
 	UsageCount   int       `json:"usage_count"`
 	SuccessRate  float64   `json:"success_rate"`
-	Variants     []string  `json:"variants"`     // different concrete manifestations
+	Variants     []string  `json:"variants"` // different concrete manifestations
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

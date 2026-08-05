@@ -17,32 +17,32 @@ import (
 
 // Outcome represents the result of a user interaction.
 type Outcome struct {
-	ID           string    `json:"id"`
-	RequestID    string    `json:"request_id"`
-	UserID       string    `json:"user_id"`
-	Accepted     bool      `json:"accepted"`      // did user accept the response?
-	Model        string    `json:"model"`          // which model was used
-	TaskType     string    `json:"task_type"`      // code_generation, review, etc.
-	Score        float64   `json:"score"`          // critic score if available
-	Cost         float64   `json:"cost"`           // LLM cost
-	TokensUsed   int       `json:"tokens_used"`
-	DurationMs   float64   `json:"duration_ms"`
-	Tags         []string  `json:"tags,omitempty"`
-	Feedback     string    `json:"feedback,omitempty"` // user-provided feedback text
-	CreatedAt    time.Time `json:"created_at"`
+	ID         string    `json:"id"`
+	RequestID  string    `json:"request_id"`
+	UserID     string    `json:"user_id"`
+	Accepted   bool      `json:"accepted"`  // did user accept the response?
+	Model      string    `json:"model"`     // which model was used
+	TaskType   string    `json:"task_type"` // code_generation, review, etc.
+	Score      float64   `json:"score"`     // critic score if available
+	Cost       float64   `json:"cost"`      // LLM cost
+	TokensUsed int       `json:"tokens_used"`
+	DurationMs float64   `json:"duration_ms"`
+	Tags       []string  `json:"tags,omitempty"`
+	Feedback   string    `json:"feedback,omitempty"` // user-provided feedback text
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // ModelStats tracks aggregate performance for a model.
 type ModelStats struct {
-	Model          string  `json:"model"`
-	TotalRequests  int     `json:"total_requests"`
-	AcceptedCount  int     `json:"accepted_count"`
-	RejectedCount  int     `json:"rejected_count"`
-	AcceptRate     float64 `json:"accept_rate"`
-	AvgScore       float64 `json:"avg_score"`
-	AvgCost        float64 `json:"avg_cost"`
-	AvgDurationMs  float64 `json:"avg_duration_ms"`
-	TotalCost      float64 `json:"total_cost"`
+	Model         string  `json:"model"`
+	TotalRequests int     `json:"total_requests"`
+	AcceptedCount int     `json:"accepted_count"`
+	RejectedCount int     `json:"rejected_count"`
+	AcceptRate    float64 `json:"accept_rate"`
+	AvgScore      float64 `json:"avg_score"`
+	AvgCost       float64 `json:"avg_cost"`
+	AvgDurationMs float64 `json:"avg_duration_ms"`
+	TotalCost     float64 `json:"total_cost"`
 }
 
 // TaskTypeStats tracks performance by task type.
@@ -60,7 +60,7 @@ const maxOutcomes = 10000
 
 // Engine tracks outcomes and computes learning metrics.
 type Engine struct {
-	mu      sync.RWMutex
+	mu       sync.RWMutex
 	outcomes []Outcome
 	models   map[string]*ModelStats
 	tasks    map[string]*TaskTypeStats
@@ -224,8 +224,6 @@ func (e *Engine) AcceptRate() float64 {
 	}
 	return float64(accepted) / float64(len(e.outcomes))
 }
-
-
 
 // DecayStats applies time-based decay to stats (older outcomes matter less).
 func (e *Engine) DecayStats(decayFactor float64) {

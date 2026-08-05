@@ -14,7 +14,7 @@ var ErrCircuitOpen = errors.New("circuit breaker is open")
 type CircuitState int
 
 const (
-	CircuitClosed   CircuitState = iota
+	CircuitClosed CircuitState = iota
 	CircuitOpen
 	CircuitHalfOpen
 )

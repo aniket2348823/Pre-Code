@@ -101,8 +101,8 @@ func TestManager_GetAll_CacheHit(t *testing.T) {
 			"flag-a": {Name: "flag-a", Enabled: true},
 			"flag-b": {Name: "flag-b", Enabled: false},
 		},
-		ttl:        5 * time.Minute,
-		lastFetch:  time.Now(),
+		ttl:       5 * time.Minute,
+		lastFetch: time.Now(),
 	}
 
 	// Verify cache has expected flags
@@ -147,9 +147,9 @@ func TestManager_SetAndDelete(t *testing.T) {
 // TestManager_StartRefresh tests StartRefresh doesn't panic with nil pool
 func TestManager_StartRefresh(t *testing.T) {
 	m := &Manager{
-		cache:      make(map[string]*Flag),
-		ttl:        5 * time.Minute,
-		lastFetch:  time.Now(),
+		cache:     make(map[string]*Flag),
+		ttl:       5 * time.Minute,
+		lastFetch: time.Now(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

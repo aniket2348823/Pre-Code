@@ -3,6 +3,7 @@ package router
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -40,9 +41,6 @@ type BatchRequest struct {
 }
 
 func (r *Router) maxBatchOperations() int {
-	if r.cfg != nil && r.cfg.Server.RateLimitPerMin > 0 {
-		return defaultMaxBatchOps
-	}
 	return defaultMaxBatchOps
 }
 
@@ -68,7 +66,7 @@ func (r *Router) batchHandler(w http.ResponseWriter, req *http.Request) {
 	maxOps := r.maxBatchOperations()
 	if len(batchReq.Operations) > maxOps {
 		response.ErrorR(w, req, http.StatusBadRequest, "BATCH_003",
-			strings.Replace("too many operations, max {max}", "{max}", "", 1))
+			fmt.Sprintf("too many operations, max %d", maxOps))
 		return
 	}
 
@@ -77,7 +75,14 @@ func (r *Router) batchHandler(w http.ResponseWriter, req *http.Request) {
 		op.Path = strings.TrimSpace(op.Path)
 		if op.Method == "" || op.Path == "" {
 			response.ErrorR(w, req, http.StatusBadRequest, "BATCH_004",
-				"operation at index "+strings.Replace("{i}", "{i}", "", 1)+" requires method and path")
+				fmt.Sprintf("operation at index %d requires method and path", i))
+			return
+		}
+		// Prevent infinite self-recursion: a batch operation must not target
+		// the batch endpoint itself (would recurse until stack overflow).
+		if strings.HasSuffix(op.Path, "/batch") || op.Path == "/batch" {
+			response.ErrorR(w, req, http.StatusBadRequest, "BATCH_005",
+				fmt.Sprintf("operation at index %d cannot target the batch endpoint", i))
 			return
 		}
 		batchReq.Operations[i] = op
@@ -108,7 +113,7 @@ func (r *Router) batchHandler(w http.ResponseWriter, req *http.Request) {
 				results[j] = BatchResult{
 					Index:  j,
 					Status: http.StatusFailedDependency,
-					Error:  "skipped: atomic batch failed at operation " + strings.Replace("{i}", "{i}", "", 1),
+					Error:  fmt.Sprintf("skipped: atomic batch failed at operation %d", firstError),
 				}
 			}
 			break
@@ -255,5 +260,3 @@ func (r *Router) batchTaskHandler(w http.ResponseWriter, req *http.Request) {
 		"total":   len(results),
 	})
 }
-
-

@@ -426,10 +426,32 @@ func TestHITLHandler_StatusHandler(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	req := httptest.NewRequest("GET", "/hitl/status?id=cp-status", nil)
+	req = reqWithClaims(req, "user-status")
 	w := httptest.NewRecorder()
 	h.StatusHandler(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHITLHandler_StatusHandler_ForbiddenForOtherUser(t *testing.T) {
+	q := NewHITLQueue(nil, 5*time.Second)
+	defer q.Close()
+	h := NewHITLHandler(q)
+
+	entry := &HITLCheckpointEntry{
+		ID:     "cp-other",
+		TaskID: "task-other",
+		UserID: "user-owner",
+	}
+	go q.Submit(context.Background(), entry)
+	time.Sleep(10 * time.Millisecond)
+
+	req := httptest.NewRequest("GET", "/hitl/status?id=cp-other", nil)
+	req = reqWithClaims(req, "user-attacker")
+	w := httptest.NewRecorder()
+	h.StatusHandler(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 func TestHITLHandler_StatusHandler_MissingID(t *testing.T) {
@@ -438,6 +460,7 @@ func TestHITLHandler_StatusHandler_MissingID(t *testing.T) {
 	h := NewHITLHandler(q)
 
 	req := httptest.NewRequest("GET", "/hitl/status", nil)
+	req = reqWithClaims(req, "user-status")
 	w := httptest.NewRecorder()
 	h.StatusHandler(w, req)
 
@@ -450,6 +473,7 @@ func TestHITLHandler_StatusHandler_NotFound(t *testing.T) {
 	h := NewHITLHandler(q)
 
 	req := httptest.NewRequest("GET", "/hitl/status?id=nonexistent", nil)
+	req = reqWithClaims(req, "user-status")
 	w := httptest.NewRecorder()
 	h.StatusHandler(w, req)
 

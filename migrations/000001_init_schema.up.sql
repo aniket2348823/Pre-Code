@@ -658,3 +658,37 @@ BEGIN
     FROM pg_stat_activity WHERE datname = current_database() AND state = 'active';
 END;
 $$;
+
+
+-- API Key Rotation
+-- Add API key rotation support
+-- rotation_token_hash: stores HMAC of a rotation token so old key stays valid during 24h transition
+
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotation_token_hash VARCHAR(255);
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS rotated_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys (expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_api_keys_rotation_token ON api_keys (rotation_token_hash) WHERE rotation_token_hash IS NOT NULL;
+
+
+-- Soft Deletes
+-- Add soft delete support and optimistic concurrency control
+
+-- Add deleted_at columns for soft deletes
+ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+-- Add version columns for optimistic concurrency control
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+-- Partial indexes: only index non-deleted rows
+CREATE INDEX IF NOT EXISTS idx_users_active ON users (email) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_projects_active ON projects (org_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_agents_active ON agents (project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions (project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_active ON tasks (project_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_active_by_user ON tasks (user_id) WHERE deleted_at IS NULL;

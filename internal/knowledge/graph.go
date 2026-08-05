@@ -80,12 +80,12 @@ func DefaultControlRules() []ControlRule {
 
 // Graph is a pgvector-backed knowledge graph with in-memory cache.
 type Graph struct {
-	mu          sync.RWMutex
-	nodes       map[string]*Node
-	edges       []Edge
-	index       map[string]map[string]bool // nodeID → set of connected nodeIDs
+	mu           sync.RWMutex
+	nodes        map[string]*Node
+	edges        []Edge
+	index        map[string]map[string]bool // nodeID → set of connected nodeIDs
 	controlRules []ControlRule
-	pool        *pgxpool.Pool // nil = in-memory only mode
+	pool         *pgxpool.Pool // nil = in-memory only mode
 }
 
 // NewGraph creates an empty in-memory knowledge graph.
@@ -547,5 +547,3 @@ func (g *Graph) LoadFromDB(ctx context.Context) error {
 	)
 	return nil
 }
-
-

@@ -22,10 +22,10 @@ type RateLimitInfo struct {
 // RateLimitTier holds the per-tier request and task limits.
 // Monthly limits per reconciliation report C2 resolution.
 type RateLimitTier struct {
-	Tier             Tier  `json:"tier"`
-	RequestsPerMin   int   `json:"requests_per_min"`
-	MonthlyTasks     int   `json:"monthly_tasks"`
-	MonthlyTokens    int64 `json:"monthly_tokens"`
+	Tier           Tier  `json:"tier"`
+	RequestsPerMin int   `json:"requests_per_min"`
+	MonthlyTasks   int   `json:"monthly_tasks"`
+	MonthlyTokens  int64 `json:"monthly_tokens"`
 }
 
 // DefaultRateLimits returns the rate-limit configuration for each pricing tier.

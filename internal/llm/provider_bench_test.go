@@ -20,8 +20,8 @@ func BenchmarkCacheKey(b *testing.B) {
 
 func BenchmarkModelRouter_Route(b *testing.B) {
 	router := NewModelRouter(&RouterConfig{
-		DefaultModel:       "gpt-4o-mini",
-		BudgetPerTask:      10.0,
+		DefaultModel:        "gpt-4o-mini",
+		BudgetPerTask:       10.0,
 		DefaultOutputTokens: 4096,
 	})
 	router.RegisterProvider("mock", &benchMockProvider{})
@@ -78,8 +78,8 @@ func BenchmarkComplexityClassification(b *testing.B) {
 	}
 
 	router := NewModelRouter(&RouterConfig{
-		DefaultModel:       "gpt-4o-mini",
-		BudgetPerTask:      10.0,
+		DefaultModel:        "gpt-4o-mini",
+		BudgetPerTask:       10.0,
 		DefaultOutputTokens: 4096,
 	})
 
@@ -111,4 +111,4 @@ func (m *benchMockProvider) Stream(ctx context.Context, req *ChatRequest) (<-cha
 }
 
 func (m *benchMockProvider) HealthCheck(ctx context.Context) error { return nil }
-func (m *benchMockProvider) Name() string                         { return "mock" }
+func (m *benchMockProvider) Name() string                          { return "mock" }

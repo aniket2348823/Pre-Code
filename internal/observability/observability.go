@@ -19,15 +19,15 @@ type TraceID string
 
 // Span represents a single unit of work within a trace.
 type Span struct {
-	TraceID   TraceID       `json:"trace_id"`
-	SpanID    string        `json:"span_id"`
-	ParentID  string        `json:"parent_id,omitempty"`
-	Name      string        `json:"name"`
-	StartTime time.Time     `json:"start_time"`
-	EndTime   time.Time     `json:"end_time,omitempty"`
-	Duration  time.Duration `json:"duration"`
-	Status    string        `json:"status"` // ok, error
-	Error     string        `json:"error,omitempty"`
+	TraceID   TraceID           `json:"trace_id"`
+	SpanID    string            `json:"span_id"`
+	ParentID  string            `json:"parent_id,omitempty"`
+	Name      string            `json:"name"`
+	StartTime time.Time         `json:"start_time"`
+	EndTime   time.Time         `json:"end_time,omitempty"`
+	Duration  time.Duration     `json:"duration"`
+	Status    string            `json:"status"` // ok, error
+	Error     string            `json:"error,omitempty"`
 	Attrs     map[string]string `json:"attrs,omitempty"`
 }
 
@@ -160,11 +160,11 @@ type PerformanceMetrics struct {
 func NewPerformanceMetrics() *PerformanceMetrics {
 	return &PerformanceMetrics{
 		latencyBuckets: map[string]int64{
-			"0-100ms":    0,
-			"100-500ms":  0,
-			"500ms-1s":   0,
-			"1s-5s":      0,
-			"5s+":        0,
+			"0-100ms":   0,
+			"100-500ms": 0,
+			"500ms-1s":  0,
+			"1s-5s":     0,
+			"5s+":       0,
 		},
 	}
 }
@@ -213,10 +213,10 @@ func (pm *PerformanceMetrics) Summary() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_requests": pm.requestCount,
-		"total_errors":   pm.errorCount,
+		"total_requests":  pm.requestCount,
+		"total_errors":    pm.errorCount,
 		"avg_duration_ms": avgDuration,
-		"error_rate_pct": errorRate,
+		"error_rate_pct":  errorRate,
 		"latency_buckets": buckets,
 	}
 }

@@ -9,10 +9,10 @@ import (
 
 // TraceRequest is the input for audit trail queries.
 type TraceRequest struct {
-	Entity  string `json:"entity"`
-	Action  string `json:"action"`
-	Actor   string `json:"actor"`
-	Limit   int    `json:"limit"`
+	Entity string `json:"entity"`
+	Action string `json:"action"`
+	Actor  string `json:"actor"`
+	Limit  int    `json:"limit"`
 }
 
 // TraceResponse is the output from audit trail queries.

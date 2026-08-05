@@ -12,11 +12,11 @@ import (
 
 // ExportData represents the export format.
 type ExportData struct {
-	Version       string              `json:"version"`
-	ExportedAt    time.Time           `json:"exported_at"`
-	UserID        string              `json:"user_id"`
+	Version       string               `json:"version"`
+	ExportedAt    time.Time            `json:"exported_at"`
+	UserID        string               `json:"user_id"`
 	Conversations []ConversationExport `json:"conversations,omitempty"`
-	Skills        []SkillExport       `json:"skills,omitempty"`
+	Skills        []SkillExport        `json:"skills,omitempty"`
 }
 
 // ConversationExport represents an exported conversation.

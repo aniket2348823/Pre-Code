@@ -23,10 +23,10 @@ type Flag struct {
 
 // Manager manages feature flags backed by PostgreSQL with in-memory caching.
 type Manager struct {
-	pool   *database.Conn
-	cache  map[string]*Flag
-	mu     sync.RWMutex
-	ttl    time.Duration
+	pool      *database.Conn
+	cache     map[string]*Flag
+	mu        sync.RWMutex
+	ttl       time.Duration
 	lastFetch time.Time
 }
 

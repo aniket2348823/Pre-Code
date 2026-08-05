@@ -12,10 +12,10 @@ import (
 
 // SSRFValidator prevents Server-Side Request Forgery in webhook URLs.
 type SSRFValidator struct {
-	allowedSchemes  []string
-	blockedHosts    []string
-	privateRanges   []net.IPNet
-	client          *http.Client
+	allowedSchemes []string
+	blockedHosts   []string
+	privateRanges  []net.IPNet
+	client         *http.Client
 }
 
 // NewSSRFValidator creates a validator that blocks internal/private IPs.
