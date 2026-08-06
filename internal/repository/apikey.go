@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -38,14 +39,27 @@ func NewAPIKeyRepository(pool *database.Conn) *APIKeyRepository {
 
 // Create inserts a new API key.
 func (r *APIKeyRepository) Create(ctx context.Context, key *APIKey) error {
+	scopesJSON, err := marshalScopes(key.Scopes)
+	if err != nil {
+		return fmt.Errorf("failed to encode scopes: %w", err)
+	}
 	query := `
 		INSERT INTO api_keys (user_id, name, key_hash, prefix, scopes, is_active, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
 		RETURNING id, created_at
 	`
-	return r.pool.QueryRow(ctx, query,
-		key.UserID, key.Name, key.KeyHash, key.Prefix, key.Scopes, key.IsActive, key.ExpiresAt,
-	).Scan(&key.ID, &key.CreatedAt)
+	// The pool uses QueryExecModeSimpleProtocol (PgBouncer compatibility), so
+	// parameters travel as TEXT. []byte would be sent as raw text bytes and
+	// cannot be cast to jsonb; a string keeps the JSON literal intact.
+	if err := r.pool.QueryRow(ctx, query,
+		key.UserID, key.Name, key.KeyHash, key.Prefix, string(scopesJSON), key.IsActive, key.ExpiresAt,
+	).Scan(&key.ID, &key.CreatedAt); err != nil {
+		// Surface the underlying database error (RLS, constraint, type) so
+		// API-key creation failures are diagnosable instead of generic 500s.
+		log.Printf("apikey create failed: user_id=%q name=%q err=%v", key.UserID, key.Name, err)
+		return fmt.Errorf("failed to insert api key: %w", err)
+	}
+	return nil
 }
 
 // FindByHash retrieves an API key by its SHA-256 hash (O(1) indexed lookup).
@@ -168,11 +182,15 @@ func (r *APIKeyRepository) RotateAPIKey(ctx context.Context, oldKeyID, userID, n
 		Scopes:   scopes,
 		IsActive: true,
 	}
+	scopesJSON, err := marshalScopes(scopes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode scopes during rotation: %w", err)
+	}
 	err = tx.QueryRow(ctx,
 		`INSERT INTO api_keys (user_id, name, key_hash, prefix, scopes, is_active)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		 VALUES ($1, $2, $3, $4, $5::jsonb, $6)
 		 RETURNING id, created_at`,
-		newKey.UserID, newKey.Name, newKey.KeyHash, newKey.Prefix, newKey.Scopes, newKey.IsActive,
+		newKey.UserID, newKey.Name, newKey.KeyHash, newKey.Prefix, string(scopesJSON), newKey.IsActive,
 	).Scan(&newKey.ID, &newKey.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rotated key: %w", err)
@@ -203,6 +221,17 @@ func (r *APIKeyRepository) FindByRotationToken(ctx context.Context, rotationToke
 		return nil, fmt.Errorf("failed to find api key by rotation token: %w", err)
 	}
 	return key, nil
+}
+
+// marshalScopes encodes a scopes slice as JSONB-safe bytes. The api_keys.scopes
+// column is JSONB; passing a bare []string through pgx produces
+// "invalid input syntax for type json" on some pool configurations, so scopes
+// are always marshalled explicitly.
+func marshalScopes(scopes []string) ([]byte, error) {
+	if scopes == nil {
+		scopes = []string{}
+	}
+	return json.Marshal(scopes)
 }
 
 // GetExpiredKeys returns all API keys that have expired (expires_at < NOW).

@@ -173,8 +173,9 @@ func TestServer_MetricsEndpoint(t *testing.T) {
 }
 
 func TestServer_UsageEndpoint_Empty(t *testing.T) {
-	server := NewServer(Config{BackendURL: "http://localhost:9999"})
+	server := NewServer(Config{BackendURL: "http://localhost:9999", APIKey: "test-backend"})
 	req := createTestRequest("GET", "/v1/usage", nil)
+	req.Header.Set("X-API-Key", "test-backend")
 	w := executeRequest(server, req)
 	assert.Equal(t, 200, w.Code)
 
@@ -185,8 +186,9 @@ func TestServer_UsageEndpoint_Empty(t *testing.T) {
 }
 
 func TestServer_ProvidersEndpoint(t *testing.T) {
-	server := NewServer(Config{BackendURL: "http://localhost:9999"})
+	server := NewServer(Config{BackendURL: "http://localhost:9999", APIKey: "test-backend"})
 	req := createTestRequest("GET", "/v1/providers", nil)
+	req.Header.Set("X-API-Key", "test-backend")
 	w := executeRequest(server, req)
 	assert.Equal(t, 200, w.Code)
 

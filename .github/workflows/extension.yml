@@ -1,0 +1,46 @@
+name: Extension CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Typecheck, Lint & Package VSIX
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Install dependencies
+        working-directory: vscode-extension
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: vscode-extension
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: vscode-extension
+        run: npm run lint
+
+      - name: Package VSIX
+        working-directory: vscode-extension
+        run: npx @vscode/vsce package
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vigilagent-vsix
+          path: vscode-extension/*.vsix
+          if-no-files-found: error
+          retention-days: 14

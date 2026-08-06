@@ -283,9 +283,11 @@ func newRouter(opts Options) *Router {
 	}
 }
 
-// New creates a Router from an Options struct with the default middleware stack.
-func New(opts Options) *Router {
-	r := newRouter(opts)
+// initSecurityDependencies wires security-critical components that both the
+// default (New) and NewWithMiddleware construction paths must have. Missing
+// these causes nil-pointer panics at request time (e.g. the API-key creation
+// rate limiter), so both constructors share this initialization.
+func (r *Router) initSecurityDependencies() {
 	if r.db != nil && r.db.Pool != nil {
 		r.authSessionMiddleware = mw.NewAuthSessionMiddleware(r.db.Conn())
 	}
@@ -297,9 +299,9 @@ func New(opts Options) *Router {
 	if r.db != nil && r.db.Pool != nil {
 		r.auditLogger = mw.NewAuditLogger(r.db.Conn())
 	}
-	if opts.Config != nil {
+	if r.cfg != nil {
 		// Use JWT secret as CSRF secret for HMAC signing
-		r.csrf = mw.NewCSRFMiddleware([]byte(opts.Config.Auth.JWTSecret))
+		r.csrf = mw.NewCSRFMiddleware([]byte(r.cfg.Auth.JWTSecret))
 	}
 	r.idempotency = mw.NewIdempotencyMiddleware(10 * time.Minute)
 
@@ -312,7 +314,12 @@ func New(opts Options) *Router {
 	if r.apiKeyCreateRateLimiter == nil {
 		r.apiKeyCreateRateLimiter = mw.NewAPIKeyCreateRateLimiter(nil, mw.DefaultAPIKeyCreateRateLimiterConfig())
 	}
+}
 
+// New creates a Router from an Options struct with the default middleware stack.
+func New(opts Options) *Router {
+	r := newRouter(opts)
+	r.initSecurityDependencies()
 	r.initHandlers()
 	r.setupMiddleware()
 
@@ -400,6 +407,15 @@ func (r *Router) initHandlers() {
 		au = audit.NewEngine(audit.NewMemoryStore())
 	}
 	r.auditHandlerFn = audit.NewHTTPHandler(au)
+}
+
+// dispatchWebhook safely dispatches a webhook event, no-op when the engine is
+// nil (e.g. dev/mock mode with no database). Keeps every call site free of
+// nil checks while guaranteeing handlers can never panic on a nil engine.
+func (r *Router) dispatchWebhook(ctx context.Context, event webhook.Event) {
+	if r.webhookEngine != nil {
+		r.webhookEngine.Dispatch(ctx, event)
+	}
 }
 
 // Shutdown cancels background goroutines started by the router.

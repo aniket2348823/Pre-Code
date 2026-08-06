@@ -739,9 +739,9 @@ func (szp *ShiftZeroPipeline) extractSkills(findings []scanner.Finding, reviewer
 			Analyzers:  f.Analyzers,
 			Confidence: f.Confidence,
 		})
-		if skill != nil {
-			skills = append(skills, skill)
-		}
+		// skill is a per-iteration copy; taking its address is safe and keeps
+		// the caller from mutating the registry entry (which is lock-guarded).
+		skills = append(skills, &skill)
 	}
 
 	return skills

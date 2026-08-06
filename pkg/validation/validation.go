@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/vigilagent/vigilagent/pkg/response"
@@ -49,7 +50,7 @@ func (v *Validator) Required(field, val string) *Validator {
 // MinLength checks if string length is below minimum
 func (v *Validator) MinLength(field, val string, min int) *Validator {
 	if len(val) < min {
-		v.Errors.Add(field, "min_length", field+" must be at least "+strconvItoa(min)+" characters")
+		v.Errors.Add(field, "min_length", field+" must be at least "+strconv.Itoa(min)+" characters")
 	}
 	return v
 }
@@ -92,44 +93,4 @@ func DecodeAndValidate(w http.ResponseWriter, r *http.Request, body interface{})
 		return nil, false
 	}
 	return New(), true
-}
-
-func strconvItoa(n int) string {
-	return string(strconvAppendInt(nil, int64(n)))
-}
-
-func strconvAppendInt(dst []byte, n int64) []byte {
-	return strconvAppendIntBase(dst, n, 10)
-}
-
-func strconvAppendIntBase(dst []byte, n int64, base int) []byte {
-	if base < 2 || base > 36 {
-		panic("invalid base")
-	}
-	var buf [64]byte
-	i := len(buf)
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	if n == 0 {
-		i--
-		buf[i] = '0'
-	} else {
-		for n > 0 {
-			i--
-			d := n % int64(base)
-			if d < 10 {
-				buf[i] = byte('0' + d)
-			} else {
-				buf[i] = byte('a' + d - 10)
-			}
-			n /= int64(base)
-		}
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return append(dst, buf[i:]...)
 }

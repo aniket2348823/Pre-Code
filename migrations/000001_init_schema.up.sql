@@ -314,6 +314,14 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
     delivered_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
+-- Columns required by the webhook delivery recorder (internal/webhook). Kept
+-- as additive ALTERs so this migration stays idempotent for databases created
+-- from earlier schema versions (Supabase included).
+ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS success BOOLEAN DEFAULT false NOT NULL;
+ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS error TEXT DEFAULT '';
+ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS duration_ms BIGINT DEFAULT 0;
+ALTER TABLE webhook_endpoints ADD COLUMN IF NOT EXISTS last_triggered_at TIMESTAMPTZ;
+
 -- Audit Logs table
 CREATE TABLE IF NOT EXISTS audit_logs (
     id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
@@ -452,7 +460,16 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION app_auth.set_current_user_id(UUID) FROM PUBLIC, anon;
+-- anon is a Supabase-managed role that does not exist on self-hosted
+-- Postgres; revoke from it only when present so this migration stays
+-- portable (docker-compose / plain PostgreSQL installs).
+REVOKE EXECUTE ON FUNCTION app_auth.set_current_user_id(UUID) FROM PUBLIC;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        EXECUTE 'REVOKE EXECUTE ON FUNCTION app_auth.set_current_user_id(UUID) FROM anon';
+    END IF;
+END $$;
 
 -- ================================================================
 -- SECTION 4: ROW LEVEL SECURITY (RLS) POLICIES (EXACTLY 1 PERMISSIVE POLICY PER TABLE)

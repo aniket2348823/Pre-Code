@@ -441,8 +441,10 @@ func TestRequireScope_AllowsAPIKeyWithWildcardScope(t *testing.T) {
 	}
 }
 
-func TestRequireScope_PassesWithoutClaims(t *testing.T) {
-	// No claims in context (unauthenticated) — should pass through
+func TestRequireScope_DeniesWithoutClaims(t *testing.T) {
+	// No claims in context (unauthenticated) — must fail closed. Passing an
+	// anonymous request through would grant access to a scope-protected
+	// endpoint.
 	handler := RequireScope("admin:read")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -451,8 +453,8 @@ func TestRequireScope_PassesWithoutClaims(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("no claims should pass through, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated request must be rejected with 401, got %d", w.Code)
 	}
 }
 

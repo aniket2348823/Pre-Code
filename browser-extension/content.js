@@ -2,7 +2,9 @@ let timeout = null;
 
 function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get({
+    // Keys live in chrome.storage.local — never .sync (cloud replication would
+    // expose provider API keys through the sync service).
+    chrome.storage.local.get({
       backendUrl: 'http://localhost:8080',
       apiKey: '',
       enabled: true,
@@ -15,6 +17,12 @@ function getSettings() {
 
 async function scanCode(code, language, settings) {
   try {
+    // Never send an API key over plain HTTP to a remote host. Localhost is
+    // allowed for local development; anything else must be https:// — this
+    // mirrors the guard in the VS Code extension (client.ts).
+    if (!isSafeBackendUrl(settings.backendUrl)) {
+      throw new Error('VigilAgent refuses to send API keys over plain HTTP. Use an https:// backend URL (http://localhost is allowed for local development).');
+    }
     const response = await fetch(`${settings.backendUrl}/api/v1/scan`, {
       method: 'POST',
       headers: {
@@ -27,6 +35,19 @@ async function scanCode(code, language, settings) {
     return await response.json();
   } catch (err) {
     throw err;
+  }
+}
+
+function isSafeBackendUrl(url) {
+  try {
+    const parsed = new URL(url || '');
+    if (parsed.protocol === 'https:') return true;
+    if (parsed.protocol === 'http:') {
+      return parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]' || parsed.hostname === '::1';
+    }
+    return false;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -63,7 +84,7 @@ function updateBadge(badge, result, settings) {
   badge.classList.add(colorClass);
   const findingsCount = result.findings ? result.findings.length : 0;
   
-  badge.innerHTML = `<span class="va-icon">${icon}</span><span class="va-text">Grade: ${grade} (${findingsCount} findings)</span>`;
+  badge.innerHTML = `<span class="va-icon">${icon}</span><span class="va-text">Grade: ${escapeHtml(grade)} (${findingsCount} findings)</span>`;
   
   if (settings.showDetails && findingsCount > 0) {
     const details = document.createElement('div');
@@ -73,7 +94,7 @@ function updateBadge(badge, result, settings) {
     result.findings.forEach(f => {
       const fDiv = document.createElement('div');
       fDiv.className = 'va-finding';
-      fDiv.innerHTML = `<strong>${f.severity || 'Issue'}</strong>: ${f.message}`;
+      fDiv.innerHTML = `<strong>${escapeHtml(f.severity) || 'Issue'}</strong>: ${escapeHtml(f.message)}`;
       details.appendChild(fDiv);
     });
     
@@ -88,6 +109,17 @@ function updateBadge(badge, result, settings) {
 function setErrorBadge(badge) {
   badge.className = 'vigilagent-badge vigilagent-badge-error';
   badge.innerHTML = `<span class="va-icon">⚠️</span><span class="va-text">Scan Failed</span>`;
+}
+
+// Escape untrusted server data before it touches innerHTML — finding messages
+// can originate from scanned (untrusted) code and must never execute as markup.
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 async function processBlocks() {

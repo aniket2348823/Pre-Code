@@ -84,11 +84,6 @@
           "default": true,
           "description": "Show confidence score in the status bar"
         },
-        "vigilagent.apiKey": {
-          "type": "string",
-          "default": "local-dev",
-          "description": "VigilAgent backend API key. Use 'local-dev' for local development without auth."
-        },
         "vigilagent.llmProvider": {
           "type": "string",
           "default": "NVIDIA NIM",
@@ -99,11 +94,6 @@
           "type": "string",
           "default": "kimi-k2.6",
           "description": "Model name to use with the selected LLM provider"
-        },
-        "vigilagent.llmApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "API key for the selected LLM provider (e.g., nvapi-... for NVIDIA NIM)"
         }
       }
     }
@@ -113,7 +103,10 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "package": "vsce package"
+    "typecheck": "tsc --noEmit -p ./",
+    "package": "vsce package",
+    "publish:openvsx": "ovsx publish",
+    "publish:marketplace": "vsce publish"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -122,6 +115,7 @@
     "@typescript-eslint/parser": "^8.0.0",
     "@vscode/vsce": "^3.0.0",
     "eslint": "^8.57.0",
+    "ovsx": "^1.1.0",
     "typescript": "^5.5.0"
   },
   "dependencies": {}

@@ -3,6 +3,7 @@ package timeout
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -44,9 +45,14 @@ func TestMiddlewareFastResponse(t *testing.T) {
 }
 
 func TestMiddlewareContextCancelled(t *testing.T) {
+	// The handler is held on `release` until AFTER the middleware has already
+	// responded 504, so the late write is guaranteed to hit the timedOut
+	// suppression path. (Previously the handler's write raced the middleware's
+	// timeout decision at the deadline boundary and the test flaked.)
+	release := make(chan struct{})
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
-		// After context cancellation, write should be silent
+		<-release
 		w.Write([]byte("aborted"))
 	})
 
@@ -56,8 +62,15 @@ func TestMiddlewareContextCancelled(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	// Handler should have been cancelled — response should be 504 or empty
-	if rec.Body.String() == "aborted" {
-		t.Fatal("handler should not complete after context cancellation")
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("expected 504, got %d", rec.Code)
+	}
+
+	// Now let the handler attempt its late write — it must be suppressed.
+	close(release)
+	time.Sleep(10 * time.Millisecond)
+
+	if strings.Contains(rec.Body.String(), "aborted") {
+		t.Fatal("handler write after cancellation must be suppressed")
 	}
 }

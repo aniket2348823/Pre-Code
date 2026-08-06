@@ -508,16 +508,11 @@ func (r *Router) cleanupAuditLogsHandler(w http.ResponseWriter, req *http.Reques
 
 	cutoff := time.Now().AddDate(0, 0, -days)
 
-	// TODO: Actually delete audit logs older than cutoff
-	// This would require an AuditLogRepository with a DeleteBefore method
-	// For now, return the operation details
-
-	response.Success(w, http.StatusOK, map[string]interface{}{
-		"message":        "Audit log cleanup is not yet implemented",
-		"retention_days": days,
-		"cutoff_date":    cutoff.Format(time.RFC3339),
-		"status":         "not_implemented",
-	})
+	// Not yet implemented — deleting would require an AuditLogRepository with
+	// a DeleteBefore method. Report honestly as 501 rather than a 200 that
+	// implies cleanup ran.
+	response.ErrorR(w, req, http.StatusNotImplemented, "AUDIT_002",
+		fmt.Sprintf("audit log cleanup is not yet implemented (retention_days=%d, cutoff=%s)", days, cutoff.Format(time.RFC3339)))
 }
 
 // getAuditRetentionHandler returns current retention settings (admin only).
@@ -534,11 +529,11 @@ func (r *Router) getAuditRetentionHandler(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
+	// Cleanup is not implemented yet; report the policy honestly instead of
+	// claiming a cleanup ran 24h ago.
 	config := AuditRetentionConfig{
 		RetentionDays: 90,
-		AutoCleanup:   true,
-		LastCleanup:   time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
-		CleanedCount:  0,
+		AutoCleanup:   false,
 	}
 
 	response.Success(w, http.StatusOK, config)

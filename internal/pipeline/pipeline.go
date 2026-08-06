@@ -33,8 +33,9 @@ type Request struct {
 
 // LayerResult holds the output from one validation layer.
 type LayerResult struct {
-	Name   string `json:"name"`
-	Passed bool   `json:"passed"`
+	Name    string `json:"name"`
+	Passed  bool   `json:"passed"`
+	Skipped bool   `json:"skipped,omitempty"`
 }
 
 // Report is the aggregated output of the full pipeline.
@@ -159,19 +160,28 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) *Report {
 			rep.Passed = false
 		}
 	} else if req.Code != "" {
-		// Code provided but no engine — record as skipped
-		rep.Layers = append(rep.Layers, LayerResult{Name: "static_analysis", Passed: true})
+		// Code provided but no engine — record the layer as skipped so the
+		// confidence computation below does not count it as a passing layer
+		// (a skipped scan must not inflate confidence).
+		rep.Layers = append(rep.Layers, LayerResult{Name: "static_analysis", Passed: false, Skipped: true})
 	}
 
-	// Compute confidence based on layer pass rates
+	// Compute confidence based on layer pass rates. Skipped layers are excluded
+	// from both numerator and denominator — a layer that never ran must not
+	// dilute or inflate the reported confidence.
 	passed := 0
+	tran := 0
 	for _, l := range rep.Layers {
+		if l.Skipped {
+			continue
+		}
+		tran++
 		if l.Passed {
 			passed++
 		}
 	}
-	if len(rep.Layers) > 0 {
-		rep.Confidence = float64(passed) / float64(len(rep.Layers))
+	if tran > 0 {
+		rep.Confidence = float64(passed) / float64(tran)
 	}
 
 	return rep

@@ -1045,6 +1045,102 @@ func TestRetryExec_NonRetryableErrorNoRetry(t *testing.T) {
 	}
 }
 
+// --- RetryQueryRow ---
+
+func TestRetryQueryRow_SuccessFirstAttempt(t *testing.T) {
+	cfg := DefaultRetryConfig()
+	calls := 0
+	row := RetryQueryRow(context.Background(), cfg, func(ctx context.Context) pgx.Row {
+		calls++
+		return &mockRow{}
+	})
+	if err := row.Scan(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 call, got %d", calls)
+	}
+}
+
+func TestRetryQueryRow_TransientErrorRetries(t *testing.T) {
+	cfg := RetryConfig{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, JitterRatio: 0}
+	calls := 0
+	row := RetryQueryRow(context.Background(), cfg, func(ctx context.Context) pgx.Row {
+		calls++
+		if calls < 3 {
+			return &mockRow{scanErr: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+		}
+		return &mockRow{}
+	})
+	if err := row.Scan(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("expected 3 calls, got %d", calls)
+	}
+}
+
+func TestRetryQueryRow_ContextCancelledAbortsRetry(t *testing.T) {
+	cfg := RetryConfig{MaxAttempts: 3, BaseDelay: time.Second, MaxDelay: time.Second, JitterRatio: 0}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	row := RetryQueryRow(ctx, cfg, func(ctx context.Context) pgx.Row {
+		calls++
+		return &mockRow{scanErr: errors.New("connection refused")}
+	})
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+	}()
+	err := row.Scan()
+	if err == nil {
+		t.Fatal("expected error after context cancel")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 call before cancel, got %d", calls)
+	}
+}
+
+func TestRetryQueryRow_DeadlinePropagatedToRetry(t *testing.T) {
+	// The re-invoked fn must receive the original context (with its deadline),
+	// not a fresh context.Background() that would lose the request's timeout.
+	cfg := RetryConfig{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, JitterRatio: 0}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	calls := 0
+	var seenDeadline time.Time
+	row := RetryQueryRow(ctx, cfg, func(fnCtx context.Context) pgx.Row {
+		calls++
+		if d, ok := fnCtx.Deadline(); ok {
+			seenDeadline = d
+		}
+		if calls < 2 {
+			return &mockRow{scanErr: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+		}
+		return &mockRow{}
+	})
+	if err := row.Scan(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if seenDeadline.IsZero() {
+		t.Error("expected the retry fn to receive the original deadline, got none")
+	}
+}
+
+func TestRetryQueryRow_NilContextDefaultsToBackground(t *testing.T) {
+	cfg := DefaultRetryConfig()
+	row := RetryQueryRow(nil, cfg, func(ctx context.Context) pgx.Row {
+		return &mockRow{}
+	})
+	if err := row.Scan(); err != nil {
+		t.Fatalf("nil context should not panic: %v", err)
+	}
+}
+
 // Content from database_test.go
 type mockRow struct{ scanErr error }
 

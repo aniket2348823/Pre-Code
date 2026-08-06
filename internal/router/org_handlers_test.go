@@ -183,6 +183,17 @@ func TestBillingHandlers_AuthRequired(t *testing.T) {
 	}
 }
 
+// Regression test: billing must never fabricate an active subscription when
+// Stripe is not configured (previously returned plan:free/status:active for
+// every org). The guard runs before the membership check, so no DB is needed.
+func TestGetSubscriptionHandler_StripeUnconfigured(t *testing.T) {
+	r := billingTestRouter()
+	req := reqWithClaims("GET", "/billing/subscription?org_id=org-1", nil, testClaims)
+	w := httptest.NewRecorder()
+	r.getSubscriptionHandler(w, req)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
 func costIntelTestRouter() *Router {
 	return &Router{Mux: chi.NewMux()}
 }

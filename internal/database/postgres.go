@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -160,6 +161,14 @@ func NewPostgres(ctx context.Context, cfg *config.DatabaseConfig) (*Postgres, er
 	// Disable prepared statement caching for compatibility with PgBouncer / Supabase Pooler
 	poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 
+	// Fail safe: an unset sslmode would let the DSN negotiate plaintext.
+	// Default to requiring TLS so credentials and data are never sent
+	// unencrypted to a remote database.
+	if strings.TrimSpace(cfg.SSLMode) == "" {
+		cfg.SSLMode = "require"
+		slog.Warn("database: sslmode not configured; defaulting to require")
+	}
+
 	// Enforce SSL/TLS in production
 	if shouldEnforceSSL(cfg) {
 		configureSSL(poolCfg, cfg)
@@ -192,6 +201,23 @@ func NewPostgres(ctx context.Context, cfg *config.DatabaseConfig) (*Postgres, er
 	poolCfg.MinConns = int32(maxIdle)
 	poolCfg.MaxConnLifetime = maxLifetime
 	poolCfg.MaxConnIdleTime = maxIdleTime
+
+	// Reset the RLS session variable (app.current_user_id) whenever a
+	// connection returns to the pool. Session-level state set by the auth
+	// session middleware would otherwise be inherited by the next acquirer of
+	// the connection — a cross-tenant data leak. Connections that fail to
+	// reset are discarded so their state cannot be reused.
+	poolCfg.AfterRelease = func(conn *pgx.Conn) bool {
+		// Bound the reset so a wedged connection cannot stall the caller's
+		// Release() (often a deferred call at the end of a request).
+		resetCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(resetCtx, "SELECT set_config('app.current_user_id', NULL, false)"); err != nil {
+			slog.Warn("database: failed to reset RLS session variable; discarding connection", "error", err)
+			return false
+		}
+		return true
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -249,10 +275,21 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 			InsecureSkipVerify: false,
 			MinVersion:         tls.VersionTLS12,
 		}
-	case "verify-ca", "verify-full":
+	case "verify-ca":
+		// libpq "verify-ca" semantics: verify the certificate CHAIN against the
+		// CA but do NOT verify the hostname. Go has no "skip hostname only"
+		// switch — InsecureSkipVerify=true disables ALL validation, so chain
+		// validation must be restored explicitly via VerifyPeerCertificate.
+		poolCfg.ConnConfig.TLSConfig = &tls.Config{
+			ServerName:            cfg.Host,
+			InsecureSkipVerify:    true, // required to disable hostname check; chain verified below
+			VerifyPeerCertificate: verifyChainOnly,
+			MinVersion:            tls.VersionTLS12,
+		}
+	case "verify-full":
 		poolCfg.ConnConfig.TLSConfig = &tls.Config{
 			ServerName:         cfg.Host,
-			InsecureSkipVerify: false, // InsecureSkipVerify=true would skip ALL cert validation, not just hostname
+			InsecureSkipVerify: false,
 			MinVersion:         tls.VersionTLS12,
 		}
 	case "prefer":
@@ -262,6 +299,44 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 			MinVersion:         tls.VersionTLS12,
 		}
 	}
+}
+
+// verifyChainOnly verifies the presented certificate chain against the system
+// root pool without checking the hostname. It implements libpq-style
+// "verify-ca" semantics on top of Go's crypto/tls, where InsecureSkipVerify=true
+// would otherwise disable all validation.
+func verifyChainOnly(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	if len(rawCerts) == 0 {
+		return errors.New("verify-ca: no server certificate presented")
+	}
+
+	roots, err := x509.SystemCertPool()
+	if err != nil || roots == nil {
+		return errors.New("verify-ca: unable to load system CA pool")
+	}
+
+	leaf, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return fmt.Errorf("verify-ca: parse server certificate: %w", err)
+	}
+
+	intermediates := x509.NewCertPool()
+	for _, raw := range rawCerts[1:] {
+		ic, err := x509.ParseCertificate(raw)
+		if err != nil {
+			return fmt.Errorf("verify-ca: parse intermediate certificate: %w", err)
+		}
+		intermediates.AddCert(ic)
+	}
+
+	if _, err := leaf.Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		return fmt.Errorf("verify-ca: certificate chain verification failed: %w", err)
+	}
+	return nil
 }
 
 // Conn returns a context-aware connection wrapper that checks for dedicated
@@ -840,17 +915,25 @@ func RetryQueryRow(ctx context.Context, cfg RetryConfig, fn func(ctx context.Con
 	if cfg.MaxAttempts <= 0 {
 		cfg = DefaultRetryConfig()
 	}
+	// Preserve the old never-panic-on-nil behavior: callers that pass a nil
+	// context would otherwise panic on r.ctx.Done() inside retryRow.Scan.
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
 		row := fn(ctx)
 		// We can't know if the row has an error without scanning, so we wrap
 		// the row with a retry-aware wrapper that only retries on Scan.
-		return &retryRow{row: row, fn: fn, cfg: cfg, attempt: attempt}
+		return &retryRow{ctx: ctx, row: row, fn: fn, cfg: cfg, attempt: attempt}
 	}
 	return &errRow{err: errors.New("retry: no attempts configured")}
 }
 
 // retryRow wraps a pgx.Row and retries on Scan if the error is retryable.
+// It retains the original context so retry waits honor cancellation and the
+// re-invoked fn runs with the request's deadline, not context.Background().
 type retryRow struct {
+	ctx     context.Context
 	row     pgx.Row
 	fn      func(ctx context.Context) pgx.Row
 	cfg     RetryConfig
@@ -870,19 +953,15 @@ func (r *retryRow) Scan(dest ...any) error {
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:
-		case <-r.ctx().Done():
+		case <-r.ctx.Done():
 			timer.Stop()
-			return r.ctx().Err()
+			return r.ctx.Err()
 		}
 		next := r.attempt + 1
-		newRow := r.fn(r.ctx())
-		return (&retryRow{row: newRow, fn: r.fn, cfg: r.cfg, attempt: next}).Scan(dest...)
+		newRow := r.fn(r.ctx)
+		return (&retryRow{ctx: r.ctx, row: newRow, fn: r.fn, cfg: r.cfg, attempt: next}).Scan(dest...)
 	}
 	return err
-}
-
-func (r *retryRow) ctx() context.Context {
-	return context.Background()
 }
 
 // RetryQuery wraps a function that returns (pgx.Rows, error) with retry logic.

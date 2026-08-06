@@ -75,24 +75,24 @@ func (rl *RateLimiter) Middleware(keyFunc func(r *http.Request) string) func(htt
 				now,
 			).Int64Slice()
 			if err != nil {
-
+				slog.Warn("rate limit check failed", "error", err, "key", key)
 				next.ServeHTTP(w, r)
 				return
-			}				count := result[0]
-				retryAfter := result[1]
+			}
 
-				w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(rl.limit, 10))
-				w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(max(0, rl.limit-count), 10))
-				w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(now+int64(rl.window.Seconds()), 10))
+			count := result[0]
+			retryAfter := result[1]
 
-				// The Lua script returns retryAfter > 0 exactly when the request was
-				// denied. count alone cannot distinguish: the last allowed request and
-				// the first denied request both report count == limit.
-				if retryAfter > 0 {
+			w.Header().Set("X-RateLimit-Limit", strconv.FormatInt(rl.limit, 10))
+			w.Header().Set("X-RateLimit-Remaining", strconv.FormatInt(max(0, rl.limit-count), 10))
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(now+int64(rl.window.Seconds()), 10))
+
+			// The Lua script returns retryAfter > 0 exactly when the request was
+			// denied. count alone cannot distinguish: the last allowed request and
+			// the first denied request both report count == limit.
+			if retryAfter > 0 {
 				slog.Warn("rate limit exceeded", "key", key, "limit", rl.limit, "remote", r.RemoteAddr)
-				if retryAfter > 0 {
-					w.Header().Set("Retry-After", strconv.FormatInt(retryAfter, 10))
-				}
+				w.Header().Set("Retry-After", strconv.FormatInt(retryAfter, 10))
 				response.JSON(w, http.StatusTooManyRequests, map[string]string{
 					"code":  "INFRA_001",
 					"error": "rate limit exceeded",
@@ -545,7 +545,9 @@ func (l *LoginRateLimiter) isLockedRedis(ctx context.Context, ip, email string) 
 	key := "login_lockout:" + ip + ":" + email
 	val, err := l.redis.Get(ctx, key).Result()
 	if err != nil {
-		return false
+		// Fail closed: a Redis outage must not silently disable login lockout.
+		slog.Warn("login rate limiter: lockout read failed, failing closed", "error", err)
+		return true
 	}
 	level, _ := strconv.Atoi(val)
 	return level >= 0
@@ -684,15 +686,17 @@ func (l *LoginRateLimiter) Middleware() func(http.Handler) http.Handler {
 			if r.Method != http.MethodPost {
 				next.ServeHTTP(w, r)
 				return
-			}				var email string
-				if r.Body != nil {
-					// Cap the read so an oversized login body cannot exhaust memory.
-					bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-					r.Body.Close()
-					// Always restore the body so downstream handlers can still read it,
-					// even if reading or unmarshalling failed.
-					r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-					if err == nil {
+			}
+
+			var email string
+			if r.Body != nil {
+				// Cap the read so an oversized login body cannot exhaust memory.
+				bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+				r.Body.Close()
+				// Always restore the body so downstream handlers can still read it,
+				// even if reading or unmarshalling failed.
+				r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				if err == nil {
 					var input struct {
 						Email string `json:"email"`
 					}
@@ -971,17 +975,22 @@ func (p *PlanAwareRateLimiter) Middleware(orgPlanFn OrgPlanFunc) func(http.Handl
 
 			if limits.RequestsPerDay > 0 {
 				dayKey := fmt.Sprintf("ratelimit:org:%s:day:%s", orgID, time.Now().Format("2006-01-02"))
+				// The pre-read is only a fast path; the Lua script below is the
+				// atomic decision point (it re-checks under the same lock Redis
+				// serializes, closing the check-then-increment race).
 				current, _ := p.client.Get(r.Context(), dayKey).Int64()
 				if int(current) >= limits.RequestsPerDay {
-					response.JSON(w, http.StatusTooManyRequests, map[string]interface{}{
-						"code":    "RATE_002",
-						"error":   "daily quota exceeded",
-						"plan":    plan,
-						"message": "Upgrade your plan for more daily requests",
-					})
+					p.quotaExceeded(w, plan)
 					return
 				}
 
+				// Returns {newval, incremented}: incremented=0 means the counter
+				// was already at/over the limit and was NOT incremented (deny).
+				// incremented=1 means this request was counted, so even newval ==
+				// limit is allowed (the exact limit-th request). Comparing counts
+				// alone cannot distinguish these two cases, which is why the
+				// original `count > limit` check let limit+1 requests through and
+				// a plain `>=` check would wrongly deny the limit-th request.
 				luaScript := redis.NewScript(`
 					local current = redis.call('GET', KEYS[1])
 					if current == false then
@@ -990,24 +999,19 @@ func (p *PlanAwareRateLimiter) Middleware(orgPlanFn OrgPlanFunc) func(http.Handl
 						current = tonumber(current)
 					end
 					if current >= tonumber(ARGV[1]) then
-						return current
+						return {current, 0}
 					end
 					local newval = redis.call('INCR', KEYS[1])
 					if newval == 1 then
 						redis.call('EXPIRE', KEYS[1], ARGV[2])
 					end
-					return newval
+					return {newval, 1}
 				`)
-				count, err := luaScript.Run(r.Context(), p.client, []string{dayKey}, limits.RequestsPerDay, int(25*time.Hour/time.Second)).Int64()
+				vals, err := luaScript.Run(r.Context(), p.client, []string{dayKey}, limits.RequestsPerDay, int(25*time.Hour/time.Second)).Int64Slice()
 				if err != nil {
 					slog.Warn("daily quota check failed, allowing request", "error", err)
-				} else if int(count) > limits.RequestsPerDay {
-					response.JSON(w, http.StatusTooManyRequests, map[string]interface{}{
-						"code":    "RATE_002",
-						"error":   "daily quota exceeded",
-						"plan":    plan,
-						"message": "Upgrade your plan for more daily requests",
-					})
+				} else if len(vals) < 2 || vals[1] == 0 {
+					p.quotaExceeded(w, plan)
 					return
 				}
 			}
@@ -1021,6 +1025,16 @@ func (p *PlanAwareRateLimiter) Middleware(orgPlanFn OrgPlanFunc) func(http.Handl
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// quotaExceeded writes the RATE_002 daily-quota response.
+func (p *PlanAwareRateLimiter) quotaExceeded(w http.ResponseWriter, plan PlanTier) {
+	response.JSON(w, http.StatusTooManyRequests, map[string]interface{}{
+		"code":    "RATE_002",
+		"error":   "daily quota exceeded",
+		"plan":    plan,
+		"message": "Upgrade your plan for more daily requests",
+	})
 }
 
 // checkMinuteLimit uses simple INCR + EXPIRE for minute-based rate limiting.

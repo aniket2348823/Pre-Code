@@ -326,12 +326,23 @@ func TestFingerprintBinding(t *testing.T) {
 		}
 	})
 
-	t.Run("no fingerprint in token — binding skipped", func(t *testing.T) {
+	t.Run("no fingerprint in token — rejected when binding enabled", func(t *testing.T) {
+		// Binding is enabled, so a token minted without a fingerprint must NOT
+		// bypass the IP/User-Agent binding control.
 		j := newTestJWTWithBinding(true, true)
 		token, _ := j.GenerateToken("user-1", "a@test.com", "user", "org-1")
 		_, err := j.ValidateTokenWithFingerprint(token, "10.0.0.1", "Changed-Agent")
+		if err != ErrFingerprintMismatch {
+			t.Fatalf("expected ErrFingerprintMismatch when binding enabled and token has no fingerprint, got %v", err)
+		}
+	})
+
+	t.Run("no fingerprint in token — accepted when binding disabled", func(t *testing.T) {
+		j := newTestJWTWithBinding(false, false)
+		token, _ := j.GenerateToken("user-1", "a@test.com", "user", "org-1")
+		_, err := j.ValidateTokenWithFingerprint(token, "10.0.0.1", "Changed-Agent")
 		if err != nil {
-			t.Fatalf("expected no error when no fingerprint in token, got %v", err)
+			t.Fatalf("expected no error when binding disabled, got %v", err)
 		}
 	})
 

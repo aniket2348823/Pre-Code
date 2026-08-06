@@ -123,7 +123,9 @@ async function configureProviderWizard(context: vscode.ExtensionContext): Promis
     // Try to fetch providers from the API, fall back to static list
     let providers: ProviderInfo[] = KNOWN_PROVIDERS;
     try {
-        const resp = await fetch(`${backendUrl}/api/v1/providers`);
+        const resp = await fetch(`${backendUrl}/api/v1/providers`, {
+            signal: AbortSignal.timeout(10000),
+        });
         if (resp.ok) {
             const data = await resp.json() as { providers: ProviderInfo[] };
             if (data.providers && data.providers.length > 0) {
@@ -177,7 +179,9 @@ async function configureProviderWizard(context: vscode.ExtensionContext): Promis
 
     // Try to fetch models from the API
     try {
-        const resp = await fetch(`${backendUrl}/api/v1/providers/${selectedProvider.id}/models`);
+        const resp = await fetch(`${backendUrl}/api/v1/providers/${selectedProvider.id}/models`, {
+            signal: AbortSignal.timeout(10000),
+        });
         if (resp.ok) {
             const data = await resp.json() as ProviderModelsResponse;
             if (data.models) {
@@ -391,6 +395,7 @@ function formatDualEngineWebview(result: Record<string, unknown>, filename: stri
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
     <style>
         body { font-family: var(--vscode-font-family); padding: 20px; color: var(--vscode-foreground); }
         h1 { color: var(--vscode-textLink-foreground); }
@@ -414,22 +419,22 @@ function formatDualEngineWebview(result: Record<string, unknown>, filename: stri
 </head>
 <body>
     <h1>🛡️ Dual-Engine Analysis — ${escapeHtml(filename)}</h1>
-    <div class="grade grade-${grade.toLowerCase()}">Grade ${escapeHtml(grade)} — ${score}%</div>
+    <div class="grade grade-${escapeHtml(grade.toLowerCase())}">Grade ${escapeHtml(grade)} — ${escapeHtml(String(score))}%</div>
     
     <div class="stats">
         <div class="stat-box">
             <div class="stat-label">Deterministic Engine</div>
-            <div class="stat-value">${det.findings_count || 0} findings</div>
-            <div class="stat-label">${det.latency_ms || 0}ms</div>
+            <div class="stat-value">${escapeHtml(String(det.findings_count ?? 0))} findings</div>
+            <div class="stat-label">${escapeHtml(String(det.latency_ms ?? 0))}ms</div>
         </div>
         <div class="stat-box">
             <div class="stat-label">LLM Engine</div>
-            <div class="stat-value">${llm.findings_count || 0} findings</div>
-            <div class="stat-label">${llm.latency_ms || 0}ms (${llm.model || 'unknown'})</div>
+            <div class="stat-value">${escapeHtml(String(llm.findings_count ?? 0))} findings</div>
+            <div class="stat-label">${escapeHtml(String(llm.latency_ms ?? 0))}ms (${escapeHtml(String(llm.model ?? 'unknown'))})</div>
         </div>
         <div class="stat-box">
             <div class="stat-label">Total Latency</div>
-            <div class="stat-value">${Number(stats.total_latency_ms || 0).toFixed(0)}ms</div>
+            <div class="stat-value">${escapeHtml(Number(stats.total_latency_ms || 0).toFixed(0))}ms</div>
         </div>
     </div>
     
@@ -444,7 +449,10 @@ function formatDualEngineWebview(result: Record<string, unknown>, filename: stri
 function formatResultsWebview(result: Record<string, unknown>, filename: string): string {
     const confidence = (result.confidence as Record<string, unknown>) || {};
     const grade = (confidence.grade as string) || 'N/A';
-    const confScore = confidence.confidence as number;
+    // Coerce to a number so a malicious/non-numeric backend value cannot flow
+    // through to the HTML template (string * 100 → NaN, not injection, but
+    // Number() + toFixed keeps rendering deterministic).
+    const confScore = Number(confidence.confidence) || 0;
     const score = confScore ? `${(confScore * 100).toFixed(0)}%` : 'N/A';
     const reviewers = (result.reviewers as Record<string, unknown>[]) || [];
     const findings = (result.deterministic_findings as Record<string, unknown>[]) || [];
@@ -474,7 +482,7 @@ function formatResultsWebview(result: Record<string, unknown>, filename: string)
         findingsHtml = `<h2>Deterministic Findings (${findings.length})</h2>`;
         for (const f of findings) {
             const fix = f.fix ? `<br><em>Fix: ${escapeHtml(f.fix as string)}</em>` : '';
-            const line = f.line ? `<br><small>Line ${f.line}</small>` : '';
+            const line = f.line ? `<br><small>Line ${escapeHtml(String(f.line))}</small>` : '';
             findingsHtml += `
         <div class="finding ${escapeHtml(f.severity as string)}">
             <strong>[${escapeHtml((f.severity as string).toUpperCase())}]</strong> ${escapeHtml(f.message as string)}
@@ -489,6 +497,7 @@ function formatResultsWebview(result: Record<string, unknown>, filename: string)
 <html>
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
     <style>
         body { font-family: var(--vscode-font-family); padding: 20px; color: var(--vscode-foreground); }
         h1 { color: var(--vscode-textLink-foreground); }
@@ -511,7 +520,7 @@ function formatResultsWebview(result: Record<string, unknown>, filename: string)
 </head>
 <body>
     <h1>🛡️ VigilAgent Results — ${escapeHtml(filename)}</h1>
-    <div class="grade grade-${grade.toLowerCase()}">${escapeHtml(grade)} — ${escapeHtml(score)}</div>
+    <div class="grade grade-${escapeHtml(grade.toLowerCase())}">${escapeHtml(grade)} — ${escapeHtml(score)}</div>
     ${reviewerHtml}
     ${findingsHtml}
     ${outputHtml}

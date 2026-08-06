@@ -119,12 +119,8 @@ export class VigilAgentClient {
                 return secret;
             }
         }
-        // Fallback to workspace configuration
-        const config = vscode.workspace.getConfiguration('vigilagent');
-        const apiKey = config.get<string>('apiKey', '');
-        if (apiKey) {
-            return apiKey;
-        }
+        // Keys must live in SecretStorage — never in settings.json, which can
+        // be committed to source control or synced to other machines.
         throw new Error('VigilAgent API key not configured. Run "VigilAgent: Configure API Keys" from the Command Palette.');
     }
 
@@ -141,17 +137,14 @@ export class VigilAgentClient {
                 const key = await this.extensionContext.secrets.get(`vigilagent.llmKey.${storedProvider}`);
                 if (key) { return key; }
             }
-            // Fallback: try each provider in order
-            const providers = ['NVIDIA NIM', 'OpenAI', 'Anthropic', 'Google Gemini', 'Mistral', 'Groq', 'Cohere'];
-            for (const p of providers) {
+            // Fallback: try each provider ID in order (must match the IDs the
+            // configure wizard stores under, e.g. 'nvidia_nim', not 'NVIDIA NIM').
+            const providerIds = ['nvidia_nim', 'openai', 'anthropic', 'gemini', 'mistral', 'groq', 'cohere', 'openrouter'];
+            for (const p of providerIds) {
                 const key = await this.extensionContext.secrets.get(`vigilagent.llmKey.${p}`);
                 if (key) { return key; }
             }
         }
-        // Final fallback: read from workspace settings (settings.json)
-        const config = vscode.workspace.getConfiguration('vigilagent');
-        const settingsKey = config.get<string>('llmApiKey', '');
-        if (settingsKey) { return settingsKey; }
         return undefined;
     }
 
@@ -180,6 +173,9 @@ export class VigilAgentClient {
         const llmKey = await this.getLLMKey();
         const provider = await this.getSelectedProvider();
         const model = await this.getSelectedModel();
+        // Never transmit provider API keys over plaintext HTTP outside localhost.
+        assertSecureBackendUrl(this.backendUrl);
+
         const url = `${this.backendUrl}${path}`;
 
         const headers: Record<string, string> = {
@@ -202,6 +198,8 @@ export class VigilAgentClient {
             method: 'POST',
             headers,
             body: JSON.stringify(body),
+            // A hung backend must not leave the command/chat hanging forever.
+            signal: AbortSignal.timeout(15000),
         });
 
         if (!response.ok) {
@@ -236,7 +234,9 @@ export class VigilAgentClient {
     }
 
     async dualEngine(code: string, language: string): Promise<DualEngineResult> {
-        return this.request<DualEngineResult>('/v1/deep-analyze', {
+        // Deep-analyze is a protected route (auth required) and the router mounts
+        // all v1 routes under /api/v1 — calling /v1/deep-analyze would 404.
+        return this.request<DualEngineResult>('/api/v1/deep-analyze', {
             code,
             language,
         });
@@ -259,8 +259,10 @@ export class VigilAgentClient {
     async healthCheck(): Promise<boolean> {
         try {
             const apiKey = await this.getApiKey();
+            assertSecureBackendUrl(this.backendUrl);
             const response = await fetch(`${this.backendUrl}/api/v1/health`, {
                 headers: { 'Authorization': `Bearer ${apiKey}` },
+                signal: AbortSignal.timeout(10000),
             });
             return response.ok;
         } catch {
@@ -275,5 +277,29 @@ export class VigilAgentClient {
         } catch {
             return false;
         }
+    }
+}
+
+// Rejects plain-HTTP backend URLs unless they point at the local machine.
+// The extension forwards the user's LLM provider API key to the backend, so
+// sending it unencrypted to a remote host would expose it on the wire.
+function assertSecureBackendUrl(backendUrl: string): void {
+    let parsed: URL;
+    try {
+        parsed = new URL(backendUrl);
+    } catch {
+        throw new Error(`Invalid VigilAgent backend URL: ${backendUrl}`);
+    }
+
+    // Node's URL.hostname returns IPv6 addresses WITH brackets ('[::1]'), so
+    // strip them before comparing.
+    const host = parsed.hostname.replace(/^\[|\]$/g, '');
+    const isLocalhost =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '::1';
+
+    if (parsed.protocol === 'http:' && !isLocalhost) {
+        throw new Error('VigilAgent refuses to send API keys over plain HTTP. Use an https:// backend URL for remote servers (http://localhost is allowed for local development).');
     }
 }

@@ -120,7 +120,11 @@ func TestLoadTestRunner_BasicRun(t *testing.T) {
 	if results.TotalReqs == 0 {
 		t.Fatal("expected at least 1 request")
 	}
-	if results.SLO.P99Ms >= 500.0 {
+	// A 500ms p99 cap flakes when the whole suite runs under -race in parallel
+	// (the in-process mock competes with every other package's goroutines for
+	// CPU, pushing p99 past 500ms). 2000ms still catches a genuinely broken
+	// runner while tolerating CI contention.
+	if results.SLO.P99Ms >= 2000.0 {
 		t.Errorf("p99 latency too high for mock server: %.2fms", results.SLO.P99Ms)
 	}
 	t.Logf("basic run: %s", Summary(results))

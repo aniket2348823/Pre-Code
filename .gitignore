@@ -12,6 +12,9 @@
 *.out
 *.html
 
+# Cross-compiled release binaries
+/dist/
+
 # Dependency directories
 vendor/
 

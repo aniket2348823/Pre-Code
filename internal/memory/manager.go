@@ -65,13 +65,17 @@ func NewManagerWithEmbedder(pool *database.Conn, embedder Embedder) *Manager {
 		}
 	}
 
-	return &Manager{
+	m := &Manager{
 		episodic:   NewEpisodicStore(pool),
 		semantic:   NewSemanticStore(pool),
 		procedural: NewProceduralStore(),
 		embedder:   embedder,
 		pool:       pool,
 	}
+	// Initialize working memory in the constructor so Recall() can never
+	// dereference a nil atomic pointer (which would panic on the first recall).
+	m.initWorkingMemory()
+	return m
 }
 
 func (m *Manager) initWorkingMemory() {
@@ -84,14 +88,16 @@ func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]Memory
 
 	// Layer 1: Check working memory (current session)
 	working := m.working.Load()
-	workingMsgs := working.Search(query, limit)
-	for _, msg := range workingMsgs {
-		results = append(results, MemoryResult{
-			Type:     "working",
-			Content:  msg.Content,
-			Score:    0.9,
-			Metadata: map[string]interface{}{"role": msg.Role},
-		})
+	if working != nil {
+		workingMsgs := working.Search(query, limit)
+		for _, msg := range workingMsgs {
+			results = append(results, MemoryResult{
+				Type:     "working",
+				Content:  msg.Content,
+				Score:    0.9,
+				Metadata: map[string]interface{}{"role": msg.Role},
+			})
+		}
 	}
 	if len(results) >= limit {
 		return results, nil
@@ -341,7 +347,7 @@ func (s *EpisodicStore) Search(ctx context.Context, userID string, embedding pgv
 		       importance, access_count, tags, created_at,
 		       1 - (embedding <=> $1) as similarity
 		FROM memory_episodes
-		WHERE user_id = $2 AND (expires_at IS NULL OR expires_at > NOW())
+		WHERE ($2 = '' OR user_id = $2) AND (expires_at IS NULL OR expires_at > NOW())
 		ORDER BY embedding <=> $1
 		LIMIT $3
 	`
@@ -440,7 +446,7 @@ func (s *SemanticStore) Search(ctx context.Context, projectID string, embedding 
 		       observation_count, file_patterns, created_at,
 		       1 - (embedding <=> $1) as similarity
 		FROM memory_patterns
-		WHERE project_id = $2
+		WHERE ($2 = '' OR project_id = $2)
 		ORDER BY embedding <=> $1
 		LIMIT $3
 	`
@@ -541,7 +547,8 @@ func (wm *WorkingMemory) loadFromRedis() {
 	if wm.rds == nil || wm.sessionID == "" {
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	data, err := wm.rds.Get(ctx, workingMemoryKey(wm.sessionID)).Bytes()
 	if err != nil {
 		return // key doesn't exist or Redis error — start empty
@@ -571,7 +578,8 @@ func (wm *WorkingMemory) persistToRedis() {
 		slog.Warn("failed to marshal working memory", "error", err)
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	key := workingMemoryKey(wm.sessionID)
 	ttl := wm.ttl
 	if ttl <= 0 {

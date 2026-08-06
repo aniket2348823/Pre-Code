@@ -188,6 +188,217 @@ func TestBuiltinAnalyzer_RequireContext_Present(t *testing.T) {
 	assert.True(t, found, "command_injection should fire with req. context")
 }
 
+// ── Go string-concat SQL / shell-concat command injection (sample_scan.go gaps) ──
+
+func TestBuiltinAnalyzer_SqlInjectionStringConcat_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `query := "SELECT id, email FROM users WHERE username = '" + username + "'"`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "dao.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "sql_injection_string_concat" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "SQL literal followed by + concatenation should fire sql_injection_string_concat")
+}
+
+func TestBuiltinAnalyzer_SqlInjectionStringConcat_NoFalsePositive(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `rows, err := db.Query("SELECT * FROM users WHERE id = $1", id)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "db.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "sql_injection_string_concat", f.RuleID,
+			"parameterized query must not fire sql_injection_string_concat")
+	}
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellConcat_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("sh", "-c", "ping -c 3 "+targetHost)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_concat" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "exec.Command(\"sh\", \"-c\", ... + var) should fire command_injection_shell_concat")
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellConcat_NoFalsePositive(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("ls", "-la")`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "command_injection_shell_concat", f.RuleID,
+			"non-shell exec.Command must not fire command_injection_shell_concat")
+	}
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("sh", "-c", cmdVar)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_variable" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "exec.Command(\"sh\", \"-c\", var) should fire command_injection_shell_variable")
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_FiresBashBin(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("/bin/bash", "-c", buildCmd)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_variable" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "exec.Command(\"/bin/bash\", \"-c\", var) should fire command_injection_shell_variable")
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_NoFPLiteral(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("sh", "-c", "echo hello")`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "command_injection_shell_variable", f.RuleID,
+			"string-literal shell command must not fire command_injection_shell_variable")
+	}
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_FiresContextCommand(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.CommandContext(ctx, "sh", "-c", script)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_variable" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "exec.CommandContext(ctx, \"sh\", \"-c\", var) should fire command_injection_shell_variable")
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_FiresCmdC(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("cmd", "/c", cmdVar)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_variable" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "exec.Command(\"cmd\", \"/c\", var) should fire command_injection_shell_variable")
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_FiresPowerShell(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("powershell", "-Command", script)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_variable" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "exec.Command(\"powershell\", \"-Command\", var) should fire command_injection_shell_variable")
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_NoFPLiteralCmd(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("cmd", "/c", "dir")`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "command_injection_shell_variable", f.RuleID,
+			"string-literal cmd /c command must not fire command_injection_shell_variable")
+	}
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellConcat_FiresCmdC(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("cmd", "/c", "dir "+targetHost)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_concat" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "exec.Command(\"cmd\", \"/c\", \"...\" + var) should fire command_injection_shell_concat")
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_FiresFullPath(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("/usr/bin/bash", "-c", cmdVar)
+cmd2 := exec.Command("C:\\Windows\\System32\\cmd.exe", "/c", cmdVar2)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_variable" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "full-path shell binaries should fire command_injection_shell_variable")
+}
+
+func TestBuiltinAnalyzer_CommandInjectionShellConcat_FiresFullPath(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cmd := exec.Command("/usr/bin/bash", "-c", "echo "+host)
+cmd2 := exec.Command("C:\\Windows\\System32\\cmd.exe", "/c", "dir "+path)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "command_injection_shell_concat" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "full-path shell binaries with concat should fire command_injection_shell_concat")
+}
+
+// (?i:...) is scoped to the shell literals only — exec.Command must stay
+// case-sensitive so a method named Exec.Command does not false-positive.
+func TestBuiltinAnalyzer_CommandInjectionShellVariable_CaseSensitiveExec(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `Exec.Command("sh", "-c", cmdVar)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "cmd.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "command_injection_shell_variable", f.RuleID,
+			"capitalized Exec.Command must not fire command_injection_shell_variable")
+	}
+}
+
 func TestBuiltinAnalyzer_RequireContext_Absent(t *testing.T) {
 	a := NewBuiltinAnalyzer()
 	code := `exec.Command("sh", "-c", "echo hello")`
@@ -298,4 +509,171 @@ InsecureSkipVerify: true`
 	assert.True(t, ruleIDs["hardcoded_password"], "should detect hardcoded_password")
 	assert.True(t, ruleIDs["weak_hash_md5"], "should detect weak_hash_md5")
 	assert.True(t, ruleIDs["insecure_tls"], "should detect insecure_tls")
+}
+
+// ── Python rules (deterministic engine must cover the VSCode extension's
+// primary BYOK scan target) ────────────────────────────────────────────────
+
+func TestBuiltinAnalyzer_PythonCommandInjection_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `import os
+os.system(request.args.get("cmd"))`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "vuln.py", Language: "python"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_command_injection" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "python_command_injection should fire for os.system(request.args...)")
+}
+
+func TestBuiltinAnalyzer_PythonCommandInjection_NoUserInput(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `import os
+os.system("ls -la")`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "ok.py"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "python_command_injection", f.RuleID,
+			"python_command_injection must not fire without user-input context")
+	}
+}
+
+func TestBuiltinAnalyzer_PythonSubprocessShellTrue_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `import subprocess
+subprocess.run(request.form["cmd"], shell=True)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "sub.py"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_command_injection" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "subprocess(..., shell=True) with user input should fire python_command_injection")
+}
+
+func TestBuiltinAnalyzer_PythonEvalExec_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `result = eval(request.args.get("expr"))`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "eval.py"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_eval_exec" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "eval() with request context should fire python_eval_exec")
+}
+
+func TestBuiltinAnalyzer_PythonPickleLoad_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `data = pickle.loads(raw_bytes)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "pickle.py"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_pickle_load" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "pickle.loads should fire python_pickle_load unconditionally")
+}
+
+func TestBuiltinAnalyzer_PythonUnsafeYaml_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cfg = yaml.load(open("config.yaml"))`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "conf.py"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_unsafe_yaml" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "yaml.load should fire python_unsafe_yaml")
+}
+
+func TestBuiltinAnalyzer_PythonSqlInjectionFstring_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cursor.execute(f"SELECT * FROM users WHERE id = {uid}")`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "db.py"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_sql_injection_fstring" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "cursor.execute(f\"...\") should fire python_sql_injection_fstring")
+}
+
+func TestBuiltinAnalyzer_PythonSqlInjectionFormat_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `cursor.execute("SELECT * FROM users WHERE id = %s" % uid)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "db.py"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_sql_injection_format" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "%-formatting in cursor.execute should fire python_sql_injection_format")
+}
+
+func TestBuiltinAnalyzer_PythonSsrf_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `resp = requests.get(request.args.get("url"))`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "http.py"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_ssrf" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "requests.get(request.args...) should fire python_ssrf")
+}
+
+func TestBuiltinAnalyzer_PythonPathTraversal_Fires(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `with open(request.files["f"].filename, "wb") as fh:`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "upload.py"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "python_path_traversal" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "open() with user-controlled filename should fire python_path_traversal")
+}
+
+// Regression: the rule must NOT match Go's capitalized os.Open/os.Remove/os.Rename
+// (the scanner's primary language). Case-sensitivity is deliberate.
+func TestBuiltinAnalyzer_PythonPathTraversal_NoGoCollision(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `f, err := os.Open(filename)
+os.Remove(filename)
+os.Rename(oldName, newName)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "handler.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "python_path_traversal", f.RuleID,
+			"python_path_traversal must not fire on Go's capitalized os.* APIs")
+	}
 }

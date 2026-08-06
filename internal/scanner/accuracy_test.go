@@ -752,6 +752,41 @@ func getExtraBaselineCases() []baselineCase {
 			expectRules: []string{"log_injection"},
 			minFindings: 1,
 		},
+		{
+			name:        "sql_injection_string_concat",
+			filename:    "dao.go",
+			code:        `query := "SELECT id FROM users WHERE name = '" + name + "'"`,
+			expectRules: []string{"sql_injection_string_concat"},
+			minFindings: 1,
+		},
+		{
+			name:        "command_injection_shell_concat",
+			filename:    "cmd.go",
+			code:        `cmd := exec.Command("sh", "-c", "ping -c 3 "+host)`,
+			expectRules: []string{"command_injection_shell_concat"},
+			minFindings: 1,
+		},
+		{
+			name:        "command_injection_shell_variable",
+			filename:    "cmd.go",
+			code:        `cmd := exec.Command("sh", "-c", cmdVar)`,
+			expectRules: []string{"command_injection_shell_variable"},
+			minFindings: 1,
+		},
+		{
+			name:        "command_injection_shell_variable_cmd",
+			filename:    "cmd.go",
+			code:        `cmd := exec.Command("cmd", "/c", cmdVar)`,
+			expectRules: []string{"command_injection_shell_variable"},
+			minFindings: 1,
+		},
+		{
+			name:        "command_injection_shell_concat_cmd",
+			filename:    "cmd.go",
+			code:        `cmd := exec.Command("cmd", "/c", "dir "+host)`,
+			expectRules: []string{"command_injection_shell_concat"},
+			minFindings: 1,
+		},
 
 		// ── path traversal ──────────────────────────────────────
 		{
@@ -853,6 +888,64 @@ func getExtraBaselineCases() []baselineCase {
 			filename:    "handler.go",
 			code:        `time.Sleep(5 * time.Second)`,
 			expectRules: []string{"time_sleep_in_handler"},
+			minFindings: 1,
+		},
+
+		// ── python (deterministic engine covers VSCode extension BYOK target) ──
+		{
+			name:        "python_command_injection",
+			filename:    "app.py",
+			code:        `import os; os.system(request.args.get("cmd"))`,
+			expectRules: []string{"python_command_injection"},
+			minFindings: 1,
+		},
+		{
+			name:        "python_eval_exec",
+			filename:    "app.py",
+			code:        `result = eval(request.args.get("expr"))`,
+			expectRules: []string{"python_eval_exec"},
+			minFindings: 1,
+		},
+		{
+			name:        "python_pickle_load",
+			filename:    "app.py",
+			code:        `data = pickle.loads(raw_bytes)`,
+			expectRules: []string{"python_pickle_load"},
+			minFindings: 1,
+		},
+		{
+			name:        "python_unsafe_yaml",
+			filename:    "app.py",
+			code:        `cfg = yaml.load(stream)`,
+			expectRules: []string{"python_unsafe_yaml"},
+			minFindings: 1,
+		},
+		{
+			name:        "python_sql_injection_fstring",
+			filename:    "app.py",
+			code:        `cursor.execute(f"SELECT * FROM users WHERE id = {uid}")`,
+			expectRules: []string{"python_sql_injection_fstring"},
+			minFindings: 1,
+		},
+		{
+			name:        "python_sql_injection_format",
+			filename:    "app.py",
+			code:        `cursor.execute("SELECT * FROM users WHERE id = %s" % uid)`,
+			expectRules: []string{"python_sql_injection_format"},
+			minFindings: 1,
+		},
+		{
+			name:        "python_ssrf",
+			filename:    "app.py",
+			code:        `resp = requests.get(request.args.get("url"))`,
+			expectRules: []string{"python_ssrf"},
+			minFindings: 1,
+		},
+		{
+			name:        "python_path_traversal",
+			filename:    "app.py",
+			code:        `with open(request.files["f"].filename, "wb") as fh: pass`,
+			expectRules: []string{"python_path_traversal"},
 			minFindings: 1,
 		},
 	}

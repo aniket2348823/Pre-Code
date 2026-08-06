@@ -1,6 +1,32 @@
 import * as vscode from 'vscode';
 import { VigilAgentClient } from './client';
 
+// Sanitize server-derived text before it becomes chat markdown. Finding
+// messages can embed snippets of scanned (untrusted) code; neutralizing
+// markdown image syntax and javascript: URLs stops an attacker-controlled
+// snippet from turning into an exfiltrating image load or a clickable URL
+// inside the chat view.
+function sanitizeMarkdown(text: string | undefined | null): string {
+    if (!text) {
+        return '';
+    }
+    const out = String(text)
+        .replace(/!\[/g, '[')
+        // \b prevents mangling words that merely end in "data:" (e.g. "metadata:").
+        .replace(/\b(?:javascript|vbscript|data)\s*:/gi, '');
+    // Drop C0/C1 control characters (except tab) — avoids embedding raw
+    // control bytes and keeps the regex lint-clean.
+    let cleaned = '';
+    for (const ch of out) {
+        const code = ch.charCodeAt(0);
+        if ((code < 0x20 && code !== 0x09) || code === 0x7f) {
+            continue;
+        }
+        cleaned += ch;
+    }
+    return cleaned;
+}
+
 export class VigilAgentChatParticipant {
     private client: VigilAgentClient;
 
@@ -93,7 +119,7 @@ export class VigilAgentChatParticipant {
             if (err.message?.includes('API key not configured')) {
                 stream.markdown('⚠️ VigilAgent API key not configured.\n\nRun **VigilAgent: Configure API Keys** from the Command Palette.');
             } else {
-                stream.markdown(`❌ Scan failed: ${err.message}`);
+                stream.markdown(`❌ Scan failed: ${sanitizeMarkdown(err.message)}`);
             }
         }
 
@@ -130,7 +156,7 @@ export class VigilAgentChatParticipant {
             if (err.message?.includes('API key not configured')) {
                 stream.markdown('⚠️ VigilAgent API key not configured.\n\nRun **VigilAgent: Configure API Keys** from the Command Palette.');
             } else {
-                stream.markdown(`❌ Verification failed: ${err.message}`);
+                stream.markdown(`❌ Verification failed: ${sanitizeMarkdown(err.message)}`);
             }
         }
 
@@ -167,7 +193,7 @@ export class VigilAgentChatParticipant {
             if (err.message?.includes('API key not configured')) {
                 stream.markdown('⚠️ VigilAgent API key not configured.\n\nRun **VigilAgent: Configure API Keys** from the Command Palette.');
             } else {
-                stream.markdown(`❌ Dual-engine analysis failed: ${err.message}`);
+                stream.markdown(`❌ Dual-engine analysis failed: ${sanitizeMarkdown(err.message)}`);
             }
         }
 
@@ -193,7 +219,7 @@ export class VigilAgentChatParticipant {
                 const result = await this.client.verify(code, prompt, language, filename);
                 this.formatReviewResult(result, stream, filename);
             } catch (err: any) {
-                stream.markdown(`❌ Verification failed: ${err.message}\n\nTry typing \`help\` for available commands.`);
+                stream.markdown(`❌ Verification failed: ${sanitizeMarkdown(err.message)}\n\nTry typing \`help\` for available commands.`);
             }
         } else {
             stream.markdown(this.getHelpText());
@@ -237,8 +263,8 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
         stream.markdown(`## 🛡️ Dual-Engine Analysis — ${filename}\n\n`);
 
         // Grade and score
-        const grade = (result.grade as string) || 'N/A';
-        const score = (result.score as number) || 0;
+        const grade = sanitizeMarkdown((result.grade as string) || 'N/A');
+        const score = Number(result.score) || 0;
         const gradeIcon = this.gradeIcon(grade);
         stream.markdown(`${gradeIcon} **Grade:** ${grade} (${score}%)\n\n`);
 
@@ -247,16 +273,16 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
         if (stats) {
             const det = stats.deterministic as Record<string, unknown> | undefined;
             const llm = stats.llm as Record<string, unknown> | undefined;
-            const total = stats.total_latency_ms as number | undefined;
+            const total = Number(stats.total_latency_ms) || 0;
 
             stream.markdown('### Engine Statistics\n\n');
             if (det) {
-                stream.markdown(`- **Deterministic:** ${det.findings_count || 0} findings in ${det.latency_ms || 0}ms\n`);
+                stream.markdown(`- **Deterministic:** ${sanitizeMarkdown(String(det.findings_count ?? 0))} findings in ${sanitizeMarkdown(String(det.latency_ms ?? 0))}ms\n`);
             }
             if (llm) {
-                stream.markdown(`- **LLM Engine:** ${llm.findings_count || 0} findings in ${llm.latency_ms || 0}ms (${llm.model || 'unknown'})\n`);
+                stream.markdown(`- **LLM Engine:** ${sanitizeMarkdown(String(llm.findings_count ?? 0))} findings in ${sanitizeMarkdown(String(llm.latency_ms ?? 0))}ms (${sanitizeMarkdown(String(llm.model ?? 'unknown'))})\n`);
             }
-            if (total) {
+            if (total > 0) {
                 stream.markdown(`- **Total Latency:** ${total.toFixed(0)}ms\n`);
             }
             stream.markdown('\n');
@@ -275,11 +301,11 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
             for (const f of findings) {
                 const severity = (f.severity as string) || 'unknown';
                 const engine = (f.engine as string) || 'unknown';
-                const message = (f.message as string) || '';
-                const fix = f.fix as string | undefined;
+                const message = sanitizeMarkdown((f.message as string) || '');
+                const fix = f.fix ? sanitizeMarkdown(f.fix as string) : undefined;
                 const icon = this.severityIcon(severity);
                 const corroboratedMark = (f.rule_id as string || '').endsWith('+llm') ? ' ✓' : '';
-                stream.markdown(`${icon} **[${severity.toUpperCase()}]** (${engine})${corroboratedMark}\n   ${message}\n`);
+                stream.markdown(`${icon} **[${sanitizeMarkdown(severity.toUpperCase())}]** (${sanitizeMarkdown(engine)})${corroboratedMark}\n   ${message}\n`);
                 if (fix) {
                     stream.markdown(`   💡 *Fix:* ${fix}\n`);
                 }
@@ -301,19 +327,19 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
 
         if (pipelineResult) {
             const passed = pipelineResult.passed as boolean;
-            const confidence = pipelineResult.confidence as number;
+            const confidence = Number(pipelineResult.confidence) || 0;
             const icon = passed ? '✅' : '❌';
-            stream.markdown(`${icon} **Pipeline:** ${passed ? 'PASSED' : 'FAILED'} (confidence: ${((confidence || 0) * 100).toFixed(0)}%)\n\n`);
+            stream.markdown(`${icon} **Pipeline:** ${passed ? 'PASSED' : 'FAILED'} (confidence: ${(confidence * 100).toFixed(0)}%)\n\n`);
         }
 
         if (findings && findings.length > 0) {
             stream.markdown(`### Findings (${findings.length})\n\n`);
             for (const f of findings) {
                 const severity = (f.severity as string) || 'unknown';
-                const message = (f.message as string) || 'No message';
-                const fix = f.fix as string | undefined;
+                const message = sanitizeMarkdown((f.message as string) || 'No message');
+                const fix = f.fix ? sanitizeMarkdown(f.fix as string) : undefined;
                 const sevIcon = this.severityIcon(severity);
-                stream.markdown(`${sevIcon} **[${severity.toUpperCase()}]** ${message}\n`);
+                stream.markdown(`${sevIcon} **[${sanitizeMarkdown(severity.toUpperCase())}]** ${message}\n`);
                 if (fix) {
                     stream.markdown(`   💡 *Fix:* ${fix}\n`);
                 }
@@ -335,11 +361,11 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
         // Confidence
         const confidence = result.confidence as Record<string, unknown> | undefined;
         if (confidence) {
-            const grade = (confidence.grade as string) || 'N/A';
-            const score = confidence.confidence as number;
-            const reason = (confidence.reason as string) || '';
+            const grade = sanitizeMarkdown((confidence.grade as string) || 'N/A');
+            const score = Number(confidence.confidence) || 0;
+            const reason = sanitizeMarkdown((confidence.reason as string) || '');
             const gradeIcon = this.gradeIcon(grade);
-            stream.markdown(`${gradeIcon} **Confidence:** ${grade} (${((score || 0) * 100).toFixed(0)}%)\n`);
+            stream.markdown(`${gradeIcon} **Confidence:** ${grade} (${(score * 100).toFixed(0)}%)\n`);
             if (reason) {
                 stream.markdown(`> ${reason}\n\n`);
             }
@@ -350,18 +376,18 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
         if (reviewers && reviewers.length > 0) {
             stream.markdown('### Reviewer Verdicts\n\n');
             for (const r of reviewers) {
-                const name = (r.name as string) || 'unknown';
-                const role = (r.role as string) || '';
+                const name = sanitizeMarkdown((r.name as string) || 'unknown');
+                const role = sanitizeMarkdown((r.role as string) || '');
                 const verdict = (r.verdict as string) || 'unknown';
                 const icon = this.verdictIcon(verdict);
-                stream.markdown(`${icon} **${name}** (${role}): ${verdict.toUpperCase()}\n`);
+                stream.markdown(`${icon} **${name}** (${role}): ${sanitizeMarkdown(verdict.toUpperCase())}\n`);
                 const rFindings = (r.findings as string[]) || [];
                 for (const f of rFindings) {
-                    stream.markdown(`   • ${f}\n`);
+                    stream.markdown(`   • ${sanitizeMarkdown(f)}\n`);
                 }
                 const rSuggestions = (r.suggestions as string[]) || [];
                 if (rSuggestions.length > 0) {
-                    stream.markdown(`   *Suggestions:* ${rSuggestions.join('; ')}\n`);
+                    stream.markdown(`   *Suggestions:* ${rSuggestions.map(s => sanitizeMarkdown(s)).join('; ')}\n`);
                 }
                 stream.markdown('\n');
             }
@@ -373,11 +399,11 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
             stream.markdown(`### Deterministic Findings (${findings.length})\n\n`);
             for (const f of findings) {
                 const severity = (f.severity as string) || 'unknown';
-                const message = (f.message as string) || '';
+                const message = sanitizeMarkdown((f.message as string) || '');
                 const line = f.line as number | undefined;
-                const fix = f.fix as string | undefined;
+                const fix = f.fix ? sanitizeMarkdown(f.fix as string) : undefined;
                 const icon = this.severityIcon(severity);
-                stream.markdown(`${icon} **[${severity.toUpperCase()}]** ${message}${line ? ` (line ${line})` : ''}\n`);
+                stream.markdown(`${icon} **[${sanitizeMarkdown(severity.toUpperCase())}]** ${message}${line ? ` (line ${Number(line)})` : ''}\n`);
                 if (fix) {
                     stream.markdown(`   💡 *Fix:* ${fix}\n`);
                 }
@@ -388,14 +414,16 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
         // Summary
         const summary = result.summary as string | undefined;
         if (summary) {
-            stream.markdown(`### Summary\n${summary}\n`);
+            stream.markdown(`### Summary\n${sanitizeMarkdown(summary)}\n`);
         }
 
         // Final output
         const finalOutput = result.final_output as string | undefined;
         const mainResponse = result.main_llm_response as string | undefined;
         if (finalOutput && finalOutput !== mainResponse) {
-            stream.markdown(`### 📝 Improved Output\n\n\`\`\`\n${finalOutput}\n\`\`\`\n`);
+            // Collapse triple-backtick runs so untrusted output cannot close
+            // the code fence and render the remainder as markdown.
+            stream.markdown(`### 📝 Improved Output\n\n\`\`\`\n${finalOutput.replace(/`{3,}/g, '``')}\n\`\`\`\n`);
         }
     }
 

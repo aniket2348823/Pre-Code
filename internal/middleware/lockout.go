@@ -170,7 +170,11 @@ func (al *RedisAccountLockout) attemptKey(identifier string) string {
 func (al *RedisAccountLockout) IsLocked(ctx context.Context, identifier string) bool {
 	val, err := al.client.Get(ctx, al.lockoutKey(identifier)).Result()
 	if err != nil {
-		return false
+		// Fail closed: if Redis is unavailable we cannot confirm the account is
+		// unlocked. Treating a Redis outage as "unlocked" would silently disable
+		// brute-force protection exactly when attackers can retry freely.
+		slog.Warn("redis lockout: IsLocked read failed, failing closed", "error", err)
+		return true
 	}
 	locked, _ := strconv.ParseBool(val)
 	return locked

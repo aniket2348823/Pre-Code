@@ -115,6 +115,30 @@ docker-build:
 docker-run:
 	@docker run -p 8080:8080 --env-file .env $(DOCKER_IMAGE):$(DOCKER_TAG)
 
+# ── VSCode Extension ─────────────────────────────────────
+extension-package:
+	@echo "Building VSIX package..."
+	@cd vscode-extension && npm run compile && npm run lint && npx @vscode/vsce package
+	@echo "→ vscode-extension/vigilagent-*.vsix"
+
+extension-publish:
+	@echo "Publishing to Open VSX + VS Code Marketplace..."
+	@cd vscode-extension && npm run compile && npx ovsx publish && npx @vscode/vsce publish
+	@echo "Published."
+
+# ── MCP Server ────────────────────────────────────────────
+mcp-binary:
+	@echo "Cross-compiling MCP server binaries..."
+	@./scripts/build-mcp-binaries.sh
+
+mcp-package:
+	@echo "Building + packing vigilagent-mcp npm package..."
+	@cd mcp-server && npm run build && npm pack
+
+mcp-publish:
+	@echo "Publishing vigilagent-mcp to npm..."
+	@cd mcp-server && npm publish --access public
+
 # ── Clean ────────────────────────────────────────────────
 clean:
 	@rm -rf $(BINARY_DIR)

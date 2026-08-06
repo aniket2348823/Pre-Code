@@ -32,7 +32,12 @@ func TestRecordOutcome(t *testing.T) {
 	f := Finding{Severity: "high", Message: "hardcoded password", Fix: "use env vars"}
 	skill, _ := e.ExtractFromFinding(f)
 	e.RecordOutcome(skill.ID, true)
-	if skill.SuccessRate <= 0 {
+	// ExtractFromFinding returns a copy; re-fetch to observe the mutation.
+	updated, ok := e.FindByTrigger(f.Message)
+	if !ok {
+		t.Fatal("expected skill to exist after outcome record")
+	}
+	if updated.SuccessRate <= 0 {
 		t.Fatal("success rate should increase after acceptance")
 	}
 }
@@ -63,7 +68,10 @@ func TestFindByTrigger(t *testing.T) {
 	e := NewEngine()
 	e.ExtractFromFinding(Finding{Message: "sql injection found"})
 	s, ok := e.FindByTrigger("sql injection found")
-	if !ok || s == nil {
+	if !ok {
 		t.Fatal("expected to find skill by trigger")
+	}
+	if s.Name != "sql injection found" {
+		t.Errorf("expected skill name, got %q", s.Name)
 	}
 }

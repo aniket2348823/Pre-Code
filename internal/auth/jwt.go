@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -157,8 +158,12 @@ func (j *JWT) ValidateTokenWithFingerprint(tokenStr, ip, userAgent string) (*Cla
 		return claims, nil
 	}
 
+	// Binding is enabled: a token without a fingerprint must be rejected.
+	// Accepting it would let any token minted via GenerateToken (no fingerprint)
+	// bypass the IP/User-Agent binding control entirely.
 	if claims.Fingerprint == "" {
-		return claims, nil
+		slog.Warn("jwt: binding enabled but token has no fingerprint", "user_id", claims.UserID)
+		return nil, ErrFingerprintMismatch
 	}
 
 	var expectedFingerprint string
@@ -171,7 +176,12 @@ func (j *JWT) ValidateTokenWithFingerprint(tokenStr, ip, userAgent string) (*Cla
 		expectedFingerprint = ComputeFingerprint("", userAgent)
 	}
 
-	if claims.Fingerprint != expectedFingerprint {
+	// Constant-time comparison: the fingerprint is derived from attacker-
+	// observable inputs (IP, User-Agent), so timing must not leak the stored
+	// value during the comparison.
+	expected := sha256.Sum256([]byte(expectedFingerprint))
+	actual := sha256.Sum256([]byte(claims.Fingerprint))
+	if subtle.ConstantTimeCompare(expected[:], actual[:]) != 1 {
 		slog.Warn("jwt: fingerprint mismatch",
 			"user_id", claims.UserID,
 			"expected", expectedFingerprint,

@@ -101,14 +101,28 @@ func (r *RAGEngine) HybridSearch(ctx context.Context, query SearchQuery) (*RAGRe
 		slog.Warn("RAG: embedding failed, falling back to BM25 only", "error", err)
 		embedding = make([]float32, r.embedder.Dimensions())
 	}
-	pgVec := pgvector.NewVector(embedding)
+
+	// Guard: an all-zero embedding (embedder failure / NoOpEmbedder) makes
+	// pgvector cosine distance undefined (NaN similarities, garbage ordering).
+	// Skip the vector search entirely and return BM25-only results.
+	isZeroVector := true
+	for _, v := range embedding {
+		if v != 0 {
+			isZeroVector = false
+			break
+		}
+	}
 
 	// Step 3: Parallel hybrid search
 	vectorCh := make(chan []scoredResult, 1)
 	bm25Ch := make(chan []scoredResult, 1)
 
 	go func() {
-		results, err := r.vectorSearch(ctx, pgVec, query, 50)
+		if isZeroVector {
+			vectorCh <- nil
+			return
+		}
+		results, err := r.vectorSearch(ctx, pgvector.NewVector(embedding), query, 50)
 		if err != nil {
 			slog.Warn("RAG: vector search failed", "error", err)
 			vectorCh <- nil
@@ -587,12 +601,20 @@ func (r *RAGEngine) GetByCategory(ctx context.Context) ([]CategoryCount, error) 
 }
 
 // buildTsQuery converts user input to a tsquery-compatible string.
+// All tsquery metacharacters are stripped from tokens so user input can
+// never inject boolean operators (& | !), grouping, or phrasal syntax into
+// the query (which would cause tsquery syntax errors or unintended matches).
 func buildTsQuery(query string) string {
 	words := strings.Fields(query)
 	var tsWords []string
 	for _, word := range words {
-		word = strings.ReplaceAll(word, "'", "")
-		word = strings.ReplaceAll(word, ":", "")
+		word = strings.Map(func(r rune) rune {
+			switch r {
+			case '&', '|', '!', '(', ')', ':', '*', '<', '>', '\'', '"':
+				return -1
+			}
+			return r
+		}, word)
 		if word != "" {
 			tsWords = append(tsWords, word+":*")
 		}
@@ -631,11 +653,13 @@ func EnsureRequiredTables(ctx context.Context, pool *database.Conn) error {
 	`)
 	if err != nil {
 		slog.Warn("HNSW index creation failed, trying IVFFlat", "error", err)
-		_, _ = pool.Exec(ctx, `
+		if _, fallbackErr := pool.Exec(ctx, `
 			CREATE INDEX IF NOT EXISTS idx_skill_embeddings_ivfflat
 			ON skill_embeddings USING ivfflat (embedding vector_cosine_ops)
 			WITH (lists = 100)
-		`)
+		`); fallbackErr != nil {
+			slog.Warn("IVFFlat index creation failed", "error", fallbackErr)
+		}
 	}
 
 	return nil

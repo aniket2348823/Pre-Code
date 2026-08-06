@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -24,8 +25,13 @@ func main() {
 	targetURL := flag.String("url", "http://localhost:9090/v1/chat/completions", "Target URL to load test")
 	totalReqs := flag.Int("n", 30000, "Total number of requests to execute")
 	concurrency := flag.Int("c", 1000, "Number of concurrent workers")
-	apiKey := flag.String("key", "test-secret-key", "Authorization API Key")
+	apiKey := flag.String("key", "", "Authorization API Key (required)")
+	insecureTLS := flag.Bool("insecure-tls", false, "Skip TLS certificate verification (DANGEROUS: MITM vulnerable — only for throwaway test environments)")
 	flag.Parse()
+	if *apiKey == "" {
+		fmt.Println("error: -key is required (the proxy refuses well-known default credentials)")
+		os.Exit(1)
+	}
 
 	fmt.Printf("=====================================================\n")
 	fmt.Printf("🚀 VIGILAGENT HIGH-THROUGHPUT LOAD TESTING SUITE\n")
@@ -47,14 +53,14 @@ func main() {
 		MaxConnsPerHost:     10000,
 		IdleConnTimeout:     90 * time.Second,
 		DisableKeepAlives:   false,
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig:     &tls.Config{InsecureSkipVerify: *insecureTLS},
 	}
 	client := &http.Client{
 		Transport: tr,
 		Timeout:   30 * time.Second,
 	}
 
-	payload := []byte(`{"model":"mock","messages":[{"role":"user","content":"Write a python function to query a database by user id"}]}`)
+	payload := []byte(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Write a python function to query a database by user id"}]}`)
 
 	jobs := make(chan int, *totalReqs)
 	results := make(chan Result, *totalReqs)

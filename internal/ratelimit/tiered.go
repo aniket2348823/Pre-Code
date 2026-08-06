@@ -104,7 +104,12 @@ func (l *TieredRateLimiter) Middleware(keyFunc func(*http.Request) string, tierF
 
 			bucket.mu.Lock()
 			bucket.refill(tier)
-			if bucket.minuteTokens <= 0 || bucket.hourTokens <= 0 || bucket.dayTokens <= 0 {
+			// Each request consumes exactly 1 token. The refill is continuous, so
+			// even a few nanoseconds of elapsed time leaves a fractional token
+			// (> 0 but < 1). Checking <= 0 would let those fractional tokens leak
+			// extra requests past the limit (rate-limit bypass); require a full
+			// token instead. Mirrors the check in ratelimit.go.
+			if bucket.minuteTokens < 1 || bucket.hourTokens < 1 || bucket.dayTokens < 1 {
 				bucket.mu.Unlock()
 				w.Header().Set("X-RateLimit-Limit", strconv.Itoa(tier.RequestsPerMinute))
 				w.Header().Set("X-RateLimit-Remaining", "0")

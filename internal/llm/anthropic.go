@@ -41,14 +41,20 @@ func (a *AnthropicAdapter) HealthCheck(ctx context.Context) error {
 	req.Header.Set("x-api-key", a.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := a.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("anthropic health check failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Any non-2xx means degraded/erroring — a health check that reports
+	// "healthy" on 429/5xx would keep the provider in rotation while it is
+	// failing. Keep the 401-specific message for fast diagnosis.
 	if resp.StatusCode == 401 {
 		return fmt.Errorf("anthropic: invalid API key")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("anthropic health check returned status %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -214,7 +220,10 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 		})
 	}
 
-	body, _ := json.Marshal(anthReq)
+	body, err := json.Marshal(anthReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", a.httpAddr+"/v1/messages", strings.NewReader(string(body)))
 	if err != nil {
 		return nil, err
@@ -238,6 +247,15 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 		defer close(ch)
 		defer resp.Body.Close()
 
+		send := func(c *ChatChunk) bool {
+			select {
+			case ch <- c:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+
 		limitedBody := io.LimitReader(resp.Body, 10<<20) // 10MB limit
 		scanner := bufio.NewScanner(limitedBody)
 		var eventType string
@@ -246,7 +264,9 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 			line := scanner.Text()
 			if line == "" {
 				if dataBuffer.Len() > 0 && eventType != "" {
-					processAnthropicEvent(eventType, dataBuffer.String(), ch)
+					if !processAnthropicEvent(eventType, dataBuffer.String(), ch, send) {
+						return
+					}
 					dataBuffer.Reset()
 					eventType = ""
 				}
@@ -260,30 +280,37 @@ func (a *AnthropicAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan
 			}
 		}
 		if dataBuffer.Len() > 0 && eventType != "" {
-			processAnthropicEvent(eventType, dataBuffer.String(), ch)
+			processAnthropicEvent(eventType, dataBuffer.String(), ch, send)
 		}
-		ch <- &ChatChunk{Finish: true}
+		send(&ChatChunk{Finish: true})
 	}()
 
 	return ch, nil
 }
 
-func processAnthropicEvent(eventType, data string, ch chan<- *ChatChunk) {
+// processAnthropicEvent handles a single SSE event. Returns false if the
+// consumer has gone away (ctx cancelled) so the stream goroutine can exit
+// instead of blocking on a full channel forever.
+func processAnthropicEvent(eventType, data string, ch chan<- *ChatChunk, send func(*ChatChunk) bool) bool {
 	var event anthropicStreamEvent
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
-		return
+		return true
 	}
 	switch eventType {
 	case "content_block_delta":
 		if event.Delta.Text != "" {
-			ch <- &ChatChunk{Content: event.Delta.Text}
+			if !send(&ChatChunk{Content: event.Delta.Text}) {
+				return false
+			}
 		}
 		if event.Delta.PartialJSON != "" {
 			// Tool call streaming - accumulate partial JSON
-			ch <- &ChatChunk{Content: event.Delta.PartialJSON}
+			if !send(&ChatChunk{Content: event.Delta.PartialJSON}) {
+				return false
+			}
 		}
 	case "message_stop":
-		ch <- &ChatChunk{Finish: true}
+		send(&ChatChunk{Finish: true})
 	case "content_block_start":
 		if event.Delta.Type == "tool_use" {
 			// Tool call started - could emit a chunk with tool call info
@@ -292,6 +319,7 @@ func processAnthropicEvent(eventType, data string, ch chan<- *ChatChunk) {
 	case "content_block_stop":
 		// Tool call completed
 	}
+	return true
 }
 
 func calculateAnthropicCost(model string, inputTokens, outputTokens int) float64 {

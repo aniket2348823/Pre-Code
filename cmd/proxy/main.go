@@ -29,7 +29,9 @@ func main() {
 			}
 			apiKey := os.Getenv("VIGILAGENT_API_KEY")
 			if apiKey == "" {
-				apiKey = "test-secret-key"
+				// Fail closed: a well-known default key would let anyone call the
+				// proxy without credentials.
+				log.Fatal("error: VIGILAGENT_API_KEY environment variable is required")
 			}
 
 			cfg := proxy.Config{
@@ -58,8 +60,14 @@ func main() {
 
 			addr := fmt.Sprintf(":%s", port)
 			httpServer := &http.Server{
-				Addr:    addr,
-				Handler: server.Router(),
+				Addr:              addr,
+				Handler:           server.Router(),
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       30 * time.Second,
+				IdleTimeout:       2 * time.Minute,
+				MaxHeaderBytes:    1 << 20,
+				// No global WriteTimeout: /v1/chat/completions streams SSE responses
+				// that legitimately outlive any fixed write deadline.
 			}
 
 			serverErr := make(chan error, 1)

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -92,7 +93,9 @@ type vaultWriteRequest struct {
 }
 
 func (v *VaultSecretsManager) url(path string) string {
-	return fmt.Sprintf("%s/v1/%s/data/%s", v.addr, v.mount, path)
+	// Escape each segment so a secret name cannot traverse the Vault API path
+	// (e.g. "../../admin" must stay a literal secret name).
+	return fmt.Sprintf("%s/v1/%s/data/%s", v.addr, v.mount, url.PathEscape(path))
 }
 
 func (v *VaultSecretsManager) doRequest(method, url string, body interface{}) (*http.Response, error) {

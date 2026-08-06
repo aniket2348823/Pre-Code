@@ -55,12 +55,30 @@ func validateCommand(command string, security *CommandSecurityConfig) error {
 	if len(security.Allowlist) > 0 {
 		for _, allowed := range security.Allowlist {
 			if cmd == allowed {
+				// Strict mode: the allowlist only gates the first token, but the
+				// full string executes in a shell. Reject shell metacharacters so an
+				// allowlisted binary cannot be chained into arbitrary commands
+				// (e.g. "git; rm -rf /").
+				if err := rejectShellInjection(command); err != nil {
+					return err
+				}
 				return nil
 			}
 		}
 		return fmt.Errorf("command %q is not in the allowlist", cmd)
 	}
 
+	return nil
+}
+
+// rejectShellInjection rejects commands that use shell metacharacters to chain
+// or substitute arbitrary commands.
+func rejectShellInjection(command string) error {
+	for _, tok := range []string{";", "&&", "||", "|", ">", "<", "`", "$(", "${"} {
+		if strings.Contains(command, tok) {
+			return fmt.Errorf("command contains shell metacharacter %q which is not allowed in strict (allowlist) mode", tok)
+		}
+	}
 	return nil
 }
 
@@ -116,6 +134,10 @@ func (t *RunCommandTool) Execute(ctx context.Context, params map[string]interfac
 	timeout := 30
 	if ts, ok := params["timeout_seconds"].(float64); ok && ts > 0 {
 		timeout = int(ts)
+	}
+	// Hard cap so a runaway command cannot consume resources indefinitely.
+	if timeout > 300 {
+		timeout = 300
 	}
 
 	cancelCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)

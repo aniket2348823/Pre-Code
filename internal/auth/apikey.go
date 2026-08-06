@@ -49,8 +49,10 @@ func (s *APIKeyService) GenerateKey() (plaintext string, hashed string, prefix s
 	// Create the plaintext key: prefix + hex(random bytes)
 	plaintext = s.prefix + hex.EncodeToString(bytes)
 
-	// Create a short prefix for identification (first 8 chars after the prefix)
-	prefix = plaintext[:min(len(s.prefix)+8, len(plaintext))]
+	// Create a short prefix for identification (first 8 chars after the prefix).
+	// Must fit the DB column: prefix is VARCHAR(10) in the api_keys schema, so
+	// cap the total at 10 chars (e.g. "va_abc1234").
+	prefix = shortPrefix(plaintext, s.prefix)
 
 	// Hash with SHA-256 first to avoid bcrypt 72-byte truncation
 	keyHash := sha256.Sum256([]byte(plaintext))
@@ -72,10 +74,22 @@ func (s *APIKeyService) VerifyKey(plaintext, hash string) bool {
 
 // ExtractPrefix returns the prefix portion of an API key string.
 func (s *APIKeyService) ExtractPrefix(plaintext string) string {
-	if len(plaintext) < len(s.prefix)+8 {
+	return shortPrefix(plaintext, s.prefix)
+}
+
+// shortPrefix returns the identifying prefix of a plaintext key, capped at 10
+// chars (the api_keys.prefix column width): the service prefix + up to 7 hex
+// chars. Keeping this in one place guarantees GenerateKey and ExtractPrefix
+// agree with the schema.
+func shortPrefix(plaintext, servicePrefix string) string {
+	if len(plaintext) < len(servicePrefix)+1 {
 		return plaintext
 	}
-	return plaintext[:min(len(s.prefix)+8, len(plaintext))]
+	maxLen := 10
+	if maxLen > len(plaintext) {
+		maxLen = len(plaintext)
+	}
+	return plaintext[:maxLen]
 }
 
 // SHA256Hash returns the HMAC-SHA256 hex digest of a string (for indexing).

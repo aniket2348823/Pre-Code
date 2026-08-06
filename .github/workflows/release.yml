@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+env:
+  GOTOOLCHAIN: auto
+
+jobs:
+  # ── 1. BUILD ALL RELEASE ASSETS ──
+  build:
+    name: Build release assets (MCP binaries + VSIX)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+
+      - name: Cross-compile MCP server binaries
+        run: |
+          chmod +x scripts/build-mcp-binaries.sh
+          ./scripts/build-mcp-binaries.sh
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Build extension VSIX
+        working-directory: vscode-extension
+        run: |
+          npm ci
+          npm pkg set version="${GITHUB_REF_NAME#v}"
+          npm run typecheck
+          npm run lint
+          npx @vscode/vsce package
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            dist/vigilagent-mcp-*
+            vscode-extension/*.vsix
+          if-no-files-found: error
+
+  # ── 2. CREATE GITHUB RELEASE + PUBLISH EVERYWHERE ──
+  release:
+    name: GitHub Release + Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: assets
+
+      - name: Create GitHub Release with binaries + VSIX
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            assets/dist/vigilagent-mcp-*
+            assets/vscode-extension/*.vsix
+          generate_release_notes: true
+          # Make re-runs of the same tag idempotent: without this, a workflow
+          # re-run fails because the release already exists.
+          update_release_body: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install extension dependencies
+        working-directory: vscode-extension
+        run: npm ci
+
+      - name: Publish MCP server to npm
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        working-directory: mcp-server
+        run: |
+          npm pkg set version="${GITHUB_REF_NAME#v}"
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish extension to Open VSX
+        if: ${{ secrets.OVSX_TOKEN != '' }}
+        working-directory: vscode-extension
+        run: npx ovsx publish "../assets/vscode-extension/vigilagent-${GITHUB_REF_NAME#v}.vsix" -p "$OVSX_TOKEN"
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+
+      - name: Publish extension to VS Code Marketplace
+        if: ${{ secrets.VSCE_PAT != '' }}
+        working-directory: vscode-extension
+        run: npx @vscode/vsce publish --packagePath "../assets/vscode-extension/vigilagent-${GITHUB_REF_NAME#v}.vsix" -p "$VSCE_PAT"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

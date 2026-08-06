@@ -2,7 +2,9 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -85,8 +87,14 @@ func (o *OpenAIAdapter) Chat(ctx context.Context, req *ChatRequest) (*ChatRespon
 		for _, tc := range msg.ToolCalls {
 			args := make(map[string]interface{})
 			if tc.Function.Arguments != "" {
-				// Try to parse; on failure store raw string
-				args["raw"] = tc.Function.Arguments
+				// OpenAI returns tool arguments as a JSON string. Parse it into a
+				// structured map like the other adapters do; on failure, keep the
+				// raw string so downstream executors still receive the arguments.
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+					slog.Warn("openai: failed to parse tool call arguments, keeping raw string",
+						"name", tc.Function.Name, "error", err)
+					args["raw"] = tc.Function.Arguments
+				}
 			}
 			toolCalls = append(toolCalls, ToolCall{
 				ID:        tc.ID,
@@ -130,18 +138,29 @@ func (o *OpenAIAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan *C
 		defer close(ch)
 		defer stream.Close()
 
+		send := func(c *ChatChunk) bool {
+			select {
+			case ch <- c:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+
 		for {
 			resp, err := stream.Recv()
 			if err != nil {
-				ch <- &ChatChunk{Finish: true}
+				send(&ChatChunk{Finish: true})
 				return
 			}
 			if len(resp.Choices) > 0 {
 				delta := resp.Choices[0].Delta
-				ch <- &ChatChunk{
+				if !send(&ChatChunk{
 					Content:    delta.Content,
 					StopReason: string(resp.Choices[0].FinishReason),
 					Finish:     resp.Choices[0].FinishReason != "",
+				}) {
+					return
 				}
 			}
 		}

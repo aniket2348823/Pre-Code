@@ -73,17 +73,17 @@ func SanitizeMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// SQLi/XSS patterns in query params are logged but NOT blocked: they are
+		// harmless against parameterized queries, and blocking rejects legitimate
+		// traffic (e.g. searching for the text "DROP TABLE"). Only path
+		// traversal (above) and null bytes are hard-blocked.
 		for key, values := range r.URL.Query() {
 			for _, v := range values {
 				if DetectSQLInjection(v) {
-					slog.Warn("security: injection attempt blocked", "type", "sql_injection", "remote", r.RemoteAddr, "param", key, "value", v)
-					http.Error(w, "invalid query parameter: "+key, http.StatusBadRequest)
-					return
+					slog.Warn("security: potential sql injection in query param", "remote", r.RemoteAddr, "param", key)
 				}
 				if DetectXSS(v) {
-					slog.Warn("security: injection attempt blocked", "type", "xss", "remote", r.RemoteAddr, "param", key, "value", v)
-					http.Error(w, "invalid query parameter: "+key, http.StatusBadRequest)
-					return
+					slog.Warn("security: potential xss in query param", "remote", r.RemoteAddr, "param", key)
 				}
 			}
 		}
@@ -144,29 +144,31 @@ func CSRFProtect(cfg *CSRFConfig) func(http.Handler) http.Handler {
 			}
 
 			cookieToken, _ := r.Cookie(cfg.CookieName)
-			headerToken := r.Header.Get(cfg.HeaderName)				if isIgnored {
-					if cookieToken != nil && headerToken != "" {
-						if !compareTokens(cookieToken.Value, headerToken) {
-							http.Error(w, "CSRF token mismatch", http.StatusForbidden)
-							return
-						}
-					}
+			headerToken := r.Header.Get(cfg.HeaderName)
 
-					// Reuse an existing cookie token instead of regenerating on every
-					// GET — regenerating invalidates previously issued header tokens and
-					// breaks SPA flows that fetch a token then POST after another GET.
-					token := ""
-					if cookieToken != nil && cookieToken.Value != "" {
-						token = cookieToken.Value
-					} else {
-						var genErr error
-						token, genErr = GenerateCSRFToken(cfg.TokenLength)
-						if genErr != nil {
-							http.Error(w, "failed to generate CSRF token", http.StatusInternalServerError)
-							return
-						}
+			if isIgnored {
+				if cookieToken != nil && headerToken != "" {
+					if !compareTokens(cookieToken.Value, headerToken) {
+						http.Error(w, "CSRF token mismatch", http.StatusForbidden)
+						return
 					}
-					http.SetCookie(w, &http.Cookie{
+				}
+
+				// Reuse an existing cookie token instead of regenerating on every
+				// GET — regenerating invalidates previously issued header tokens and
+				// breaks SPA flows that fetch a token then POST after another GET.
+				token := ""
+				if cookieToken != nil && cookieToken.Value != "" {
+					token = cookieToken.Value
+				} else {
+					var genErr error
+					token, genErr = GenerateCSRFToken(cfg.TokenLength)
+					if genErr != nil {
+						http.Error(w, "failed to generate CSRF token", http.StatusInternalServerError)
+						return
+					}
+				}
+				http.SetCookie(w, &http.Cookie{
 					Name:     cfg.CookieName,
 					Value:    token,
 					Path:     "/",

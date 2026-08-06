@@ -208,14 +208,14 @@ type RouterConfig struct {
 
 // NewModelRouter creates a new model router.
 func NewModelRouter(cfg *RouterConfig) *ModelRouter {
-	r := &ModelRouter{			providers:       make(map[string]Provider),
-			healthMonitor:   NewHealthMonitor(),
-			circuitBreakers: make(map[string]*CircuitBreaker),
-			config:          cfg,
-			// Snapshot, not a reference: SetPrice mutates the global PriceTable
-			// under priceTableMu, while routers read through r.mu — sharing the
-			// map directly would be a concurrent map read/write data race.
-			prices: AllPrices(),
+	r := &ModelRouter{providers: make(map[string]Provider),
+		healthMonitor:   NewHealthMonitor(),
+		circuitBreakers: make(map[string]*CircuitBreaker),
+		config:          cfg,
+		// Snapshot, not a reference: SetPrice mutates the global PriceTable
+		// under priceTableMu, while routers read through r.mu — sharing the
+		// map directly would be a concurrent map read/write data race.
+		prices: AllPrices(),
 	}
 	if r.config == nil {
 		r.config = &RouterConfig{DefaultModel: "claude-sonnet-4-20250514", BudgetPerTask: 1.00}

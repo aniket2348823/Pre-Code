@@ -66,17 +66,16 @@ func (r *Router) createAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 		r.apiKeyCreateRateLimiter.Record(req.Context(), claims.UserID)
 	}
 
-	// Dispatch webhook notification
-	if r.webhookEngine != nil {
-		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
-			Type: "apikey.created",
-			Payload: map[string]interface{}{
-				"key_id":  key.ID,
-				"name":    key.Name,
-				"user_id": claims.UserID,
-			},
-		})
-	}
+	// Dispatch webhook notification (best-effort; engine is nil when no DB is
+	// configured, e.g. dev/mock mode)
+	r.dispatchWebhook(req.Context(), webhook.Event{
+		Type: "apikey.created",
+		Payload: map[string]interface{}{
+			"key_id":  key.ID,
+			"name":    key.Name,
+			"user_id": claims.UserID,
+		},
+	})
 
 	// Return the plaintext key ONCE - it will never be shown again
 	response.Created(w, map[string]interface{}{
@@ -145,17 +144,16 @@ func (r *Router) rotateAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Dispatch webhook notification
-	if r.webhookEngine != nil {
-		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
-			Type: "apikey.rotated",
-			Payload: map[string]interface{}{
-				"old_key_id": keyID,
-				"new_key_id": newKey.ID,
-				"user_id":    claims.UserID,
-			},
-		})
-	}
+	// Dispatch webhook notification (best-effort; engine is nil when no DB is
+	// configured, e.g. dev/mock mode)
+	r.dispatchWebhook(req.Context(), webhook.Event{
+		Type: "apikey.rotated",
+		Payload: map[string]interface{}{
+			"old_key_id": keyID,
+			"new_key_id": newKey.ID,
+			"user_id":    claims.UserID,
+		},
+	})
 
 	response.Created(w, map[string]interface{}{
 		"id":                  newKey.ID,
@@ -185,16 +183,15 @@ func (r *Router) deleteAPIKeyHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Dispatch webhook notification
-	if r.webhookEngine != nil {
-		r.webhookEngine.Dispatch(req.Context(), webhook.Event{
-			Type: "apikey.deleted",
-			Payload: map[string]interface{}{
-				"key_id":  keyID,
-				"user_id": claims.UserID,
-			},
-		})
-	}
+	// Dispatch webhook notification (best-effort; engine is nil when no DB is
+	// configured, e.g. dev/mock mode)
+	r.dispatchWebhook(req.Context(), webhook.Event{
+		Type: "apikey.deleted",
+		Payload: map[string]interface{}{
+			"key_id":  keyID,
+			"user_id": claims.UserID,
+		},
+	})
 
 	response.NoContent(w)
 }

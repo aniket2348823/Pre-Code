@@ -147,12 +147,12 @@ func TestAuthMiddleware_HealthSkipsAuth(t *testing.T) {
 	}
 }
 
-func TestAuthMiddleware_NoKeysDisablesAuth(t *testing.T) {
+func TestAuthMiddleware_NoKeysRejectsAll(t *testing.T) {
 	cfg := Config{
 		Port:           "0",
 		BackendURL:     "http://localhost:9999",
-		APIKey:         "test-backend",
-		AllowedAPIKeys: "", // no keys = auth disabled
+		APIKey:         "",
+		AllowedAPIKeys: "", // no keys configured
 	}
 	server := NewServer(cfg)
 
@@ -160,8 +160,37 @@ func TestAuthMiddleware_NoKeysDisablesAuth(t *testing.T) {
 	w := httptest.NewRecorder()
 	server.Router().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected 200 with auth disabled, got %d", w.Code)
+	// Fail closed: with no allowed keys configured, every request is rejected
+	// rather than opening an unauthenticated proxy.
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 with no keys configured, got %d", w.Code)
+	}
+}
+
+func TestAuthMiddleware_APIFallsBackToAPIKey(t *testing.T) {
+	// When only APIKey is configured, it becomes the accepted credential.
+	cfg := Config{
+		Port:       "0",
+		BackendURL: "http://localhost:9999",
+		APIKey:     "test-backend",
+	}
+	server := NewServer(cfg)
+
+	// Without the key → 401
+	req := httptest.NewRequest("GET", "/v1/providers", nil)
+	w := httptest.NewRecorder()
+	server.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 without key, got %d", w.Code)
+	}
+
+	// With the fallback key → 200
+	req2 := httptest.NewRequest("GET", "/v1/providers", nil)
+	req2.Header.Set("X-API-Key", "test-backend")
+	w2 := httptest.NewRecorder()
+	server.Router().ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Errorf("Expected 200 with fallback key, got %d", w2.Code)
 	}
 }
 
@@ -207,6 +236,7 @@ func TestUsageEndpoint(t *testing.T) {
 	server.recordUsage("key-b", 0.05, 100, false)
 
 	req := httptest.NewRequest("GET", "/v1/usage", nil)
+	req.Header.Set("X-API-Key", cfg.APIKey) // proxy is fail-closed: authenticated request
 	w := httptest.NewRecorder()
 	server.Router().ServeHTTP(w, req)
 

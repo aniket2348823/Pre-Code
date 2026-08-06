@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/compression"
 	"github.com/vigilagent/vigilagent/internal/cors"
@@ -107,15 +108,21 @@ func (r *Router) setupObservabilityMiddleware(cfg *MiddlewareConfig) {
 func NewWithMiddleware(opts Options, mcfg *MiddlewareConfig) *Router {
 	r := newRouter(opts)
 
-	if r.db != nil && r.db.Pool != nil {
-		r.authSessionMiddleware = mw.NewAuthSessionMiddleware(r.db.Conn())
-	}
+	// Security-critical dependencies must be wired before routes are registered:
+	// setupRoutes() dereferences r.apiKeyCreateRateLimiter and r.loginRateLimiter
+	// when registering their routes, so leaving these nil panics at startup/request
+	// time (previously only New() initialized them).
+	r.initSecurityDependencies()
 
 	// Build handlers using shared logic.
 	r.initHandlers()
 
 	// Wire compression (outermost, before security)
 	r.Use(compression.Middleware)
+
+	// Panic recovery: without this, a handler panic bubbles up past the
+	// TimeoutHandler and crashes the request with a raw 500 + stack trace.
+	r.Use(middleware.Recoverer)
 
 	// Wire security middleware first (outermost)
 	r.setupSecurityMiddleware(mcfg)
@@ -296,7 +303,9 @@ func (r *Router) runMiddlewarePipeline(req *http.Request, input middlewareInput)
 				Analyzers:  f.Analyzers,
 				Confidence: f.Confidence,
 			})
-			result.SkillsExtracted = append(result.SkillsExtracted, skill)
+			// skill is a per-iteration copy; &skill is safe (registry holds its
+			// own lock-guarded copy).
+			result.SkillsExtracted = append(result.SkillsExtracted, &skill)
 		}
 	}
 

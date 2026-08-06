@@ -15,9 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -48,45 +46,13 @@ func NewServer(apiURL, apiKey, llmKey string) *Server {
 	return s
 }
 
-// Run starts the MCP server on stdio transport with EOF detection
-// to prevent zombie processes when parent crashes.
+// Run starts the MCP server on the stdio transport.
+// mcp-go's ServeStdio already exits cleanly when stdin closes (EOF -> return
+// nil, see StdioServer.processInputStream), so no extra EOF watcher is needed.
+// A concurrent reader on os.Stdin would race with mcp-go's own bufio reader
+// and steal bytes from the JSON-RPC stream, corrupting the protocol.
 func (s *Server) Run() error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Detect stdin EOF to exit cleanly when parent process crashes.
-	// Uses a channel signal instead of os.Exit to allow deferred cleanup.
-	quit := make(chan struct{}, 1)
-	go func() {
-		defer cancel() // stop the stdin reader when server exits
-		buf := make([]byte, 1)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			_, err := io.ReadAtLeast(os.Stdin, buf, 1)
-			if err != nil {
-				slog.Info("MCP server: stdin closed/EOF, shutting down")
-				quit <- struct{}{}
-				return
-			}
-		}
-	}()
-
-	// Run server in goroutine, watch for EOF signal.
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- server.ServeStdio(s.mcpServer)
-	}()
-
-	select {
-	case <-quit:
-		return nil
-	case err := <-errCh:
-		return err
-	}
+	return server.ServeStdio(s.mcpServer)
 }
 
 // ─── MCP Server Construction ─────────────────────────────────────────────
@@ -216,6 +182,30 @@ func (s *Server) buildMCPServer() *server.MCPServer {
 			),
 		),
 		s.handleDualEngine,
+	)
+
+	// Tool 7: vigil_improve — Improve AI-generated code via the verification pipeline
+	srv.AddTool(
+		mcp.NewTool("vigil_improve",
+			mcp.WithDescription("Improve an AI-generated code snippet using VigilAgent's dual-engine verification pipeline. Runs deterministic analysis and LLM review in parallel, then returns the improved code with the issues found and fixed. Use this after an LLM produces code, to harden and correct it."),
+			mcp.WithString("code",
+				mcp.Required(),
+				mcp.Description("The AI-generated source code to improve"),
+			),
+			mcp.WithString("prompt",
+				mcp.Description("The original request the code was generated for (context)"),
+			),
+			mcp.WithString("language",
+				mcp.Description("Programming language: go, python, javascript, typescript, rust, java"),
+			),
+			mcp.WithString("filename",
+				mcp.Description("Filename for context-aware scanning"),
+			),
+			mcp.WithString("api_key",
+				mcp.Description("Your LLM provider API key. When provided, the backend uses your key for the review pipeline."),
+			),
+		),
+		s.handleImprove,
 	)
 
 	return srv
@@ -393,6 +383,64 @@ func (s *Server) handleProcess(ctx context.Context, req mcp.CallToolRequest) (*m
 }
 
 // handleDualEngine runs the parallel dual-engine analysis (deterministic + LLM).
+func (s *Server) handleImprove(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 90s for the improvement pipeline.
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	code, _ := req.RequireString("code")
+	if code == "" {
+		return mcp.NewToolResultError("code is required"), nil
+	}
+	prompt := req.GetString("prompt", "")
+	language := req.GetString("language", "")
+	filename := req.GetString("filename", "")
+	apiKey := s.resolveLLMKey(req.GetString("api_key", ""))
+
+	payload := map[string]interface{}{
+		"code":     code,
+		"prompt":   prompt,
+		"language": language,
+		"filename": filename,
+	}
+
+	resp, err := s.callBackendWithKey(ctx, "/api/v1/review", payload, apiKey)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return mcp.NewToolResultError("VigilAgent improve timed out (90s limit)"), nil
+		}
+		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent improve failed: %v", err)), nil
+	}
+
+	result, _ := resp.(map[string]interface{})
+	finalOutput, _ := result["final_output"].(string)
+	if finalOutput == "" {
+		// No improved output produced — surface the full report instead.
+		pretty, err := json.MarshalIndent(resp, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultText(fmt.Sprintf("%v", resp)), nil
+		}
+		return mcp.NewToolResultText(string(pretty)), nil
+	}
+
+	return mcp.NewToolResultText(formatImproveSummary(result, finalOutput)), nil
+}
+
+// formatImproveSummary renders the improved code with a confidence summary.
+func formatImproveSummary(result map[string]interface{}, finalOutput string) string {
+	var b strings.Builder
+	b.WriteString("## Improved Code\n\n```\n")
+	b.WriteString(finalOutput)
+	b.WriteString("\n```\n")
+
+	if score, ok := result["confidence"].(map[string]interface{}); ok {
+		if grade, ok := score["grade"].(string); ok {
+			fmt.Fprintf(&b, "\nConfidence grade: **%s**\n", grade)
+		}
+	}
+	return b.String()
+}
+
 func (s *Server) handleDualEngine(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// MCP tool execution timeout: 60s for dual-engine analysis (LLM pass can be slow).
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -410,7 +458,9 @@ func (s *Server) handleDualEngine(ctx context.Context, req mcp.CallToolRequest) 
 		"language": language,
 	}
 
-	resp, err := s.callBackendWithKey(ctx, "/v1/deep-analyze", payload, apiKey)
+	// Deep-analyze is a protected route mounted at /api/v1 (the bare /v1
+	// path 404s against the main API router).
+	resp, err := s.callBackendWithKey(ctx, "/api/v1/deep-analyze", payload, apiKey)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return mcp.NewToolResultError("VigilAgent dual-engine analysis timed out (60s limit)"), nil

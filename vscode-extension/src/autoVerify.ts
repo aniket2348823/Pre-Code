@@ -91,22 +91,25 @@ export class AutoVerifier {
         }, 1500);
     }
     
-    // Run the analysis
+    // Run the analysis using the dual-engine pipeline (deterministic + LLM in
+    // parallel) so auto-verification surfaces corroborated findings.
     private async analyze(document: vscode.TextDocument): Promise<void> {
         const uri = document.uri;
         const code = document.getText();
-        const filename = uri.path.split(/[/\\]/).pop() || 'unknown';
         const language = document.languageId;
         
         try {
-            const result = await this.client.scan(code, language, filename);
+            const result = await this.client.dualEngine(code, language);
             
-            let findings: any[] = [];
-            if (result.scan_result && result.scan_result.findings) {
-                findings = result.scan_result.findings;
-            } else if (result.deterministic_findings && Array.isArray(result.deterministic_findings)) {
-                findings = result.deterministic_findings;
-            }
+            // DualEngineResult.findings carry rule_id/engine metadata; map them to
+            // the shape DiagnosticManager expects (severity, message, line, fix).
+            const findings: any[] = (result.findings || []).map((f: any) => ({
+                severity: f.severity || 'info',
+                message: f.message || '',
+                line: f.line || 0,
+                fix: f.fix || '',
+                confidence: f.confidence || 0,
+            }));
             
             this.diagnosticManager.updateDiagnostics(uri, findings);
         } catch (error) {

@@ -28,7 +28,8 @@ type Config struct {
 	BackendURL string
 	APIKey     string
 	// Proxy auth: comma-separated list of allowed API keys for the proxy itself.
-	// Empty means auth is disabled (open proxy).
+	// Empty falls back to APIKey. If both are empty, the proxy rejects all
+	// requests (fail closed — no open-proxy mode).
 	AllowedAPIKeys string
 	// TLS
 	TLSCertFile string
@@ -79,12 +80,26 @@ func NewServer(cfg Config) *ProxyServer {
 		router:      chi.NewRouter(),
 		client:      &http.Client{Timeout: 120 * time.Second},
 		usageByKey:  make(map[string]*KeyUsage),
-		allowedKeys: parseAllowedKeys(cfg.AllowedAPIKeys),
+		allowedKeys: resolveAllowedKeys(cfg),
 		sharedCache: llm.NewInMemoryCache(5 * time.Minute),
 	}
 	s.setupMiddleware()
 	s.routes()
 	return s
+}
+
+// resolveAllowedKeys returns the set of API keys the proxy accepts. Fail closed:
+// AllowedAPIKeys takes precedence; otherwise the single proxy APIKey is used.
+// If neither is configured, the returned set is empty and the auth middleware
+// rejects every request (no open-proxy mode).
+func resolveAllowedKeys(cfg Config) map[string]struct{} {
+	if cfg.AllowedAPIKeys != "" {
+		return parseAllowedKeys(cfg.AllowedAPIKeys)
+	}
+	if cfg.APIKey != "" {
+		return map[string]struct{}{cfg.APIKey: {}}
+	}
+	return map[string]struct{}{}
 }
 
 // parseAllowedKeys splits a comma-separated key list into a set.
@@ -122,9 +137,10 @@ func (s *ProxyServer) setupMiddleware() {
 	s.router.Use(s.loggingMiddleware)
 	s.router.Use(s.metricsMiddleware)
 	s.router.Use(s.rateLimitMiddleware)
-	if len(s.allowedKeys) > 0 {
-		s.router.Use(s.authMiddleware)
-	}
+	// Auth is always enforced — fail closed. If no allowed keys are configured,
+	// every request is rejected rather than opening an unauthenticated proxy
+	// that would burn the operator's provider keys.
+	s.router.Use(s.authMiddleware)
 }
 
 // authMiddleware validates the proxy's own API key via X-API-Key or Authorization header.
@@ -494,23 +510,11 @@ func (s *ProxyServer) handleProxyRequest(w http.ResponseWriter, r *http.Request,
 
 	resp, err := modelRouter.ExecuteWithFailover(r.Context(), task)
 	if err != nil {
-		if req.Model == "mock" || req.Model == "test" || strings.HasPrefix(req.Model, "mock") {
-			resp = &llm.ChatResponse{
-				Content:      "Here is the requested Python database query function:\n\n```python\ndef query_user(user_id):\n    return db.execute(\"SELECT * FROM users WHERE id = \" + str(user_id))\n\n```\n",
-				InputTokens:  25,
-				OutputTokens: 35,
-				Cost:         0.0,
-				Model:        req.Model,
-				Provider:     "mock",
-				StopReason:   "stop",
-			}
-		} else {
-			slog.Error("model router execution failed", "error", err)
-			s.recordUsage(getAPIKey(r.Context()), 0, 0, true)
-			errJSON, _ := json.Marshal(map[string]string{"error": "llm request failed: " + err.Error()})
-			http.Error(w, string(errJSON), http.StatusBadGateway)
-			return
-		}
+		slog.Error("model router execution failed", "error", err)
+		s.recordUsage(getAPIKey(r.Context()), 0, 0, true)
+		errJSON, _ := json.Marshal(map[string]string{"error": "llm request failed: " + err.Error()})
+		http.Error(w, string(errJSON), http.StatusBadGateway)
+		return
 	}
 
 	// Track usage
@@ -683,38 +687,9 @@ func (s *ProxyServer) buildRouter(llmKey, hintProvider string) *llm.ModelRouter 
 	if s.cfg.DeepSeekKey != "" {
 		router.RegisterProvider("deepseek", llm.NewDeepSeek(s.cfg.DeepSeekKey))
 	}
-	router.RegisterProvider("mock", &mockLLMProvider{})
 
 	return router
 }
-
-type mockLLMProvider struct{}
-
-func (m *mockLLMProvider) Chat(ctx context.Context, req *llm.ChatRequest) (*llm.ChatResponse, error) {
-	return &llm.ChatResponse{
-		Content:      "Here is the requested Python database query function:\n\n```python\ndef query_user(user_id):\n    return db.execute(\"SELECT * FROM users WHERE id = \" + str(user_id))\n\n```\n",
-		InputTokens:  25,
-		OutputTokens: 35,
-		Cost:         0.0,
-		Model:        req.Model,
-		Provider:     "mock",
-		StopReason:   "stop",
-	}, nil
-}
-
-func (m *mockLLMProvider) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan *llm.ChatChunk, error) {
-	ch := make(chan *llm.ChatChunk, 1)
-	ch <- &llm.ChatChunk{
-		Content:    "Here is the requested Python database query function:\n\n```python\ndef query_user(user_id):\n    return db.execute(\"SELECT * FROM users WHERE id = \" + str(user_id))\n```",
-		StopReason: "stop",
-		Finish:     true,
-	}
-	close(ch)
-	return ch, nil
-}
-
-func (m *mockLLMProvider) HealthCheck(ctx context.Context) error { return nil }
-func (m *mockLLMProvider) Name() string                          { return "mock" }
 
 // resolveProviderID determines the provider from the API key prefix or hint.
 func resolveProviderID(apiKey, hint string) llm.ProviderID {

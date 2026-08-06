@@ -124,6 +124,16 @@ func (r *Router) getSubscriptionHandler(w http.ResponseWriter, req *http.Request
 		response.BadRequest(w, "org_id query parameter is required")
 		return
 	}
+
+	// Billing is only real when Stripe is configured; without it, claiming an
+	// active subscription would fabricate billing state. Fail fast before the
+	// membership check so unconfigured billing returns 503 for everyone.
+	if r.cfg == nil || r.cfg.Stripe.SecretKey == "" {
+		response.ErrorR(w, req, http.StatusServiceUnavailable, "BILL_001",
+			"Stripe integration not configured. Set VIGILAGENT_STRIPE_SECRET_KEY to enable.")
+		return
+	}
+
 	member, err := r.orgs.IsMember(req.Context(), orgID, claims.UserID)
 	if err != nil || !member {
 		response.Forbidden(w, "access denied")

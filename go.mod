@@ -1,6 +1,6 @@
 module github.com/vigilagent/vigilagent
 
-go 1.26.3
+go 1.26.5
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0

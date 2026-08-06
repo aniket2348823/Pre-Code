@@ -78,6 +78,16 @@ func TestCostOverrideHandler_NoAuth(t *testing.T) {
 // adminClaims is used for admin-gated handlers (cost overrides, feature flags).
 var adminClaims = &auth.Claims{UserID: "admin-1", Email: "admin@example.com", Role: "admin"}
 
+// Regression test: audit log cleanup is not implemented yet and must report
+// 501 rather than a 200 that implies cleanup ran.
+func TestCleanupAuditLogsHandler_NotImplemented(t *testing.T) {
+	r := extendedTestRouter()
+	req := reqWithClaims("GET", "/admin/audit/cleanup?days=30", nil, adminClaims)
+	w := httptest.NewRecorder()
+	r.cleanupAuditLogsHandler(w, req)
+	assert.Equal(t, http.StatusNotImplemented, w.Code)
+}
+
 func TestCostOverrideHandler_RejectsNonAdmin(t *testing.T) {
 	r := extendedTestRouter()
 	req := reqWithClaims("POST", "/providers/cost-override", map[string]interface{}{

@@ -93,12 +93,12 @@ func NewCostTracker() *CostTracker {
 			Subsystem: "llm",
 			Name:      "cost_dollars_total",
 			Help:      "Total LLM cost in dollars",
-		}, []string{"model", "user_id", "org_id"}),			tokenMetric: promauto.NewCounterVec(prometheus.CounterOpts{
-				Namespace: "vigilagent",
-				Subsystem: "llm",
-				Name:      "tokens_by_user_total",
-				Help:      "Total LLM tokens consumed, attributed per user/org",
-			}, []string{"model", "type", "user_id", "org_id"}),
+		}, []string{"model", "user_id", "org_id"}), tokenMetric: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "vigilagent",
+			Subsystem: "llm",
+			Name:      "tokens_by_user_total",
+			Help:      "Total LLM tokens consumed, attributed per user/org",
+		}, []string{"model", "type", "user_id", "org_id"}),
 	}
 	return ct
 }

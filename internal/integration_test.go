@@ -202,8 +202,11 @@ func TestAgentExecutionFlow(t *testing.T) {
 	if result.Steps == 0 {
 		t.Error("agent executed 0 steps")
 	}
-	if result.Duration <= 0 {
-		t.Error("agent duration should be positive")
+	// Duration is not reliably > 0 for a mocked, sub-millisecond execution
+	// (coarse OS timers can report exactly 0). Only a negative value indicates
+	// a genuinely broken clock.
+	if result.Duration < 0 {
+		t.Error("agent duration should not be negative")
 	}
 }
 

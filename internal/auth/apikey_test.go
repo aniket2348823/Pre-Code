@@ -84,7 +84,9 @@ func TestExtractPrefix(t *testing.T) {
 	t.Run("returns expected prefix length", func(t *testing.T) {
 		plaintext, _, _, _ := svc.GenerateKey()
 		prefix := svc.ExtractPrefix(plaintext)
-		expectedLen := len("va_") + 8 // prefix + 8 chars
+		// The api_keys.prefix column is VARCHAR(10); the identifying prefix must
+		// fit it: service prefix ("va_") + 7 hex chars.
+		expectedLen := 10
 		if len(prefix) != expectedLen {
 			t.Fatalf("expected prefix length %d, got %d", expectedLen, len(prefix))
 		}

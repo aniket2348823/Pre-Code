@@ -60,7 +60,20 @@ func (r *Router) scanHandler(w http.ResponseWriter, req *http.Request) {
 		Code:     input.Code,
 		Filename: input.Filename,
 	})
-	response.JSON(w, http.StatusOK, report)
+
+	// Add a 0-100 score and A-F grade to the report. The browser extension's
+	// badge renders result.grade; without it every scan shows "Grade: A" even
+	// when critical findings exist. The scoring mirrors the dual-engine
+	// endpoint so both surfaces report the same grade for the same findings.
+	score, grade := gradeFromFindings(report.Findings)
+	response.JSON(w, http.StatusOK, map[string]interface{}{
+		"findings":          report.Findings,
+		"analyzers_run":     report.AnalyzersRun,
+		"analyzers_skipped": report.AnalyzersSkipped,
+		"analyzer_errors":   report.AnalyzerErrors,
+		"grade":             grade,
+		"score":             score,
+	})
 
 	// Dispatch webhook notification for scan completion
 	if r.webhookEngine != nil {
@@ -73,6 +86,42 @@ func (r *Router) scanHandler(w http.ResponseWriter, req *http.Request) {
 			},
 		})
 	}
+}
+
+// gradeFromFindings computes a 0-100 score and A-F letter grade from a set of
+// findings by deducting points per severity, matching the scoring used by the
+// dual-engine endpoint (deepAnalyzeHandler).
+func gradeFromFindings(findings []scanner.Finding) (int, string) {
+	score := 100
+	for _, f := range findings {
+		switch f.Severity {
+		case scanner.SeverityCritical:
+			score -= 25
+		case scanner.SeverityHigh:
+			score -= 15
+		case scanner.SeverityMedium:
+			score -= 10
+		case scanner.SeverityLow:
+			score -= 5
+		}
+	}
+	if score < 0 {
+		score = 0
+	}
+	grade := "A"
+	switch {
+	case score >= 90:
+		grade = "A"
+	case score >= 75:
+		grade = "B"
+	case score >= 60:
+		grade = "C"
+	case score >= 45:
+		grade = "D"
+	default:
+		grade = "F"
+	}
+	return score, grade
 }
 
 // dualFinding represents a single finding from either engine.
@@ -88,11 +137,13 @@ type dualFinding struct {
 	Snippet    string  `json:"snippet,omitempty"`
 }
 
-// deepAnalyzeHandler is the public dual-engine analysis endpoint.
-// It does NOT require JWT auth (accepts any Bearer token for dev/extension use).
+// deepAnalyzeHandler is the dual-engine analysis endpoint.
+// It REQUIRES authentication (JWT or API key) — the route is registered under
+// the protected group so unauthenticated callers cannot burn LLM quota. The
+// VSCode extension always sends its VigilAgent API key via the Authorization
+// header (see client.ts dualEngine).
 // Runs BOTH deterministic scanner + LLM engine IN PARALLEL and merges results.
 //
-// POST /v1/deep-analyze
 // POST /api/v1/deep-analyze
 func (r *Router) deepAnalyzeHandler(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()

@@ -207,13 +207,14 @@ func ResponseCacheMiddleware(cache *ResponseCache) func(http.Handler) http.Handl
 				return
 			}
 
-			if entry, ok := cache.Get(key); ok {					if match := r.Header.Get("If-None-Match"); match != "" {
-						if match == entry.ETag || match == "*" {
-							// 304 must not carry a body.
-							w.WriteHeader(http.StatusNotModified)
-							return
-						}
+			if entry, ok := cache.Get(key); ok {
+				if match := r.Header.Get("If-None-Match"); match != "" {
+					if match == entry.ETag || match == "*" {
+						// 304 must not carry a body.
+						w.WriteHeader(http.StatusNotModified)
+						return
 					}
+				}
 
 				w.Header().Set("Content-Type", entry.ContentType)
 				w.Header().Set("ETag", entry.ETag)

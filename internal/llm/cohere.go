@@ -145,13 +145,16 @@ func (c *CohereAdapter) Chat(ctx context.Context, req *ChatRequest) (*ChatRespon
 func (c *CohereAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan *ChatChunk, error) {
 	msgs := buildCohereMessages(req.System, req.Messages)
 
-	body, _ := json.Marshal(cohereRequest{
+	body, err := json.Marshal(cohereRequest{
 		Model:       req.Model,
 		Messages:    msgs,
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		Stream:      true,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal stream request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", "https://api.cohere.com/v2/chat", bytes.NewReader(body))
 	if err != nil {
@@ -176,6 +179,15 @@ func (c *CohereAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan *C
 		defer close(ch)
 		defer resp.Body.Close()
 
+		send := func(c *ChatChunk) bool {
+			select {
+			case ch <- c:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+
 		decoder := json.NewDecoder(resp.Body)
 		for {
 			var event struct {
@@ -189,15 +201,17 @@ func (c *CohereAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan *C
 				} `json:"delta"`
 			}
 			if err := decoder.Decode(&event); err != nil {
-				ch <- &ChatChunk{Finish: true}
+				send(&ChatChunk{Finish: true})
 				return
 			}
 			if event.Type == "content-delta" {
-				ch <- &ChatChunk{
+				if !send(&ChatChunk{
 					Content: event.Delta.Message.Content.Text,
+				}) {
+					return
 				}
 			} else if event.Type == "message-end" {
-				ch <- &ChatChunk{Finish: true}
+				send(&ChatChunk{Finish: true})
 				return
 			}
 		}

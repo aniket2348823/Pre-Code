@@ -1,0 +1,38 @@
+{
+  "name": "vigilagent-mcp",
+  "version": "0.0.1",
+  "description": "VigilAgent MCP server — verify, review and improve AI-generated code from Cursor, Claude Desktop, Cline and any MCP client",
+  "license": "MIT",
+  "author": "VigilAgent",
+  "homepage": "https://github.com/vigilagent/vigilagent",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vigilagent/vigilagent.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "code-review",
+    "security",
+    "verification",
+    "llm",
+    "cursor",
+    "claude"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "bin": {
+    "vigilagent-mcp": "bin/vigilagent-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "build": "node scripts/build-binaries.js",
+    "pack:npm": "npm pack --dry-run"
+  }
+}

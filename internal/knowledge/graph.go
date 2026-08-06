@@ -119,7 +119,9 @@ func (g *Graph) ensureTables(ctx context.Context) error {
 	}
 
 	// Ensure pg_trgm extension for trigram search
-	_, _ = g.pool.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS pg_trgm")
+	if _, err := g.pool.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS pg_trgm"); err != nil {
+		slog.Warn("failed to ensure pg_trgm extension", "error", err)
+	}
 
 	_, err := g.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS kg_nodes (

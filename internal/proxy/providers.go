@@ -47,9 +47,7 @@ func validateTargetURL(rawURL string) error {
 // RouteRequest determines the provider from the model name prefix.
 // Used as fallback when no BYOK header is provided.
 func RouteRequest(model string, cfg *Config) *ProviderConfig {
-	if model == "mock" || model == "test" || strings.HasPrefix(model, "mock") {
-		return &ProviderConfig{Name: "mock", BaseURL: "http://localhost:8080", APIKey: "mock-key"}
-	}
+	// No mock/test provider path: every route targets a real upstream or nil.
 	if cfg.OpenRouterKey != "" && (strings.Contains(model, "/") || strings.HasSuffix(model, ":free")) {
 		return &ProviderConfig{Name: "openrouter", BaseURL: "https://openrouter.ai/api", APIKey: cfg.OpenRouterKey}
 	}

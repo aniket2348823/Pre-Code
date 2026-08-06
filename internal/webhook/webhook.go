@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -61,7 +62,17 @@ type Engine struct {
 	cacheExpiry time.Time
 	validator   *SSRFValidator
 	mu          sync.RWMutex
+	// slots bounds how many deliveries can be in flight at once. A single event
+	// fanned out to many endpoints must not spawn an unbounded number of
+	// goroutines (amplification vector when many endpoints are registered).
+	slots chan struct{}
+	// lastDropLog throttles the saturated-pool warning to once per second so a
+	// sustained overload does not spam the log with one line per dropped delivery.
+	lastDropLog atomic.Int64
 }
+
+// maxConcurrentDeliveries caps concurrent webhook deliveries per engine.
+const maxConcurrentDeliveries = 64
 
 // NewEngine creates a DB-backed webhook engine.
 func NewEngine(pool *pgxpool.Pool) *Engine {
@@ -77,6 +88,7 @@ func NewEngine(pool *pgxpool.Pool) *Engine {
 		},
 		maxRetry:  3,
 		validator: NewSSRFValidator(),
+		slots:     make(chan struct{}, maxConcurrentDeliveries),
 	}
 }
 
@@ -219,6 +231,11 @@ func (e *Engine) cachedEndpoints(ctx context.Context) ([]Endpoint, error) {
 
 // Dispatch sends an event to all matching active endpoints asynchronously.
 func (e *Engine) Dispatch(ctx context.Context, event Event) {
+	// Defensive: the engine is nil when the server runs without a database
+	// (dev/mock mode), and many handlers call Dispatch without a nil check.
+	if e == nil || e.pool == nil {
+		return
+	}
 	if event.CreatedAt.IsZero() {
 		event.CreatedAt = time.Now()
 	}
@@ -236,7 +253,26 @@ func (e *Engine) Dispatch(ctx context.Context, event Event) {
 		}
 		for _, sub := range ep.Events {
 			if sub == event.Type || sub == "*" {
-				go e.deliver(ctx, ep, event, 0)
+				// Detach from the caller's request context: async deliveries must
+				// survive the originating HTTP request, or they get cancelled
+				// mid-flight and results are never recorded. The retry path
+				// already uses a fresh background context for the same reason.
+				deliverCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				// Bound concurrent deliveries. If the pool is saturated, skip this
+				// delivery with a log — webhook notification is best-effort and a
+				// slow endpoint must not block the whole fan-out or grow the
+				// goroutine count without limit.
+				select {
+				case e.slots <- struct{}{}:
+					go func() {
+						defer func() { <-e.slots }()
+						defer cancel()
+						e.deliver(deliverCtx, ep, event, 0)
+					}()
+				default:
+					cancel()
+					e.logSaturated("webhook: delivery pool saturated, skipping delivery", ep.ID, event.Type)
+				}
 				break
 			}
 		}
@@ -291,12 +327,7 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 
 		// Retry with exponential backoff, capped at maxRetry.
 		if retryCount < e.maxRetry {
-			delay := time.Duration(1<<uint(retryCount)) * time.Second
-			time.AfterFunc(delay, func() {
-				retryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				e.deliver(retryCtx, ep, event, retryCount+1)
-			})
+			e.scheduleRetry(ep, event, retryCount)
 		}
 		return
 	}
@@ -311,18 +342,45 @@ func (e *Engine) deliver(ctx context.Context, ep *Endpoint, event Event, retryCo
 		result.Error = fmt.Sprintf("status %d: %s", resp.StatusCode, string(body))
 
 		if retryCount < e.maxRetry {
-			delay := time.Duration(1<<uint(retryCount)) * time.Second
-			time.AfterFunc(delay, func() {
-				retryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				e.deliver(retryCtx, ep, event, retryCount+1)
-			})
+			e.scheduleRetry(ep, event, retryCount)
 		}
 	}
 
 	e.recordResult(ctx, result)
-	// Update last_triggered_at on the endpoint
-	_, _ = e.pool.Exec(ctx, `UPDATE webhook_endpoints SET last_triggered_at = NOW() WHERE id = $1`, ep.ID)
+	// Update last_triggered_at on the endpoint (best-effort; failure is not fatal).
+	if _, err := e.pool.Exec(ctx, `UPDATE webhook_endpoints SET last_triggered_at = NOW() WHERE id = $1`, ep.ID); err != nil {
+		slog.Warn("webhook: failed to update last_triggered_at", "error", err, "endpoint_id", ep.ID)
+	}
+}
+
+// scheduleRetry retries a delivery after an exponential backoff delay. The retry
+// acquires a slot from the same concurrent-delivery pool as the initial attempt,
+// so the fan-out bound also covers the retry path (a delivery whose initial run
+// failed cannot bypass the pool via time.AfterFunc).
+func (e *Engine) scheduleRetry(ep *Endpoint, event Event, retryCount int) {
+	delay := time.Duration(1<<uint(retryCount)) * time.Second
+	time.AfterFunc(delay, func() {
+		select {
+		case e.slots <- struct{}{}:
+			defer func() { <-e.slots }()
+			retryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			e.deliver(retryCtx, ep, event, retryCount+1)
+		default:
+			e.logSaturated("webhook: delivery pool saturated, skipping retry", ep.ID, event.Type)
+		}
+	})
+}
+
+// logSaturated reports a saturated delivery pool at most once per second at
+// Warn level; the remainder of the drops degrade to Debug to avoid log spam.
+func (e *Engine) logSaturated(msg string, epID, eventType string) {
+	sec := time.Now().Unix()
+	if e.lastDropLog.Load() != sec && e.lastDropLog.CompareAndSwap(e.lastDropLog.Load(), sec) {
+		slog.Warn(msg, "endpoint_id", epID, "event_type", eventType)
+		return
+	}
+	slog.Debug(msg, "endpoint_id", epID, "event_type", eventType)
 }
 
 // recordResult inserts a delivery result into the webhook_deliveries table.

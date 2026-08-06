@@ -66,8 +66,8 @@ func NewEngine() *Engine {
 
 // ExtractFromFinding attempts to convert a finding into a skill.
 // If a matching skill already exists, it updates the existing skill's metrics.
-// Returns the skill and whether it was newly created.
-func (e *Engine) ExtractFromFinding(f Finding) (*Skill, bool) {
+// Returns a copy of the skill and whether it was newly created.
+func (e *Engine) ExtractFromFinding(f Finding) (Skill, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -78,7 +78,7 @@ func (e *Engine) ExtractFromFinding(f Finding) (*Skill, bool) {
 	if existing, ok := e.triggerIndex[trigger]; ok {
 		existing.UsageCount++
 		existing.UpdatedAt = time.Now()
-		return existing, false
+		return *existing, false
 	}
 
 	// Create new skill
@@ -98,7 +98,7 @@ func (e *Engine) ExtractFromFinding(f Finding) (*Skill, bool) {
 
 	e.skills[skill.ID] = skill
 	e.triggerIndex[trigger] = skill
-	return skill, true
+	return *skill, true
 }
 
 // RecordOutcome records whether a skill's fix was accepted or rejected.
@@ -129,23 +129,30 @@ func (e *Engine) RecordOutcome(skillID string, accepted bool) {
 }
 
 // FindByTrigger looks up a skill by its trigger pattern.
-func (e *Engine) FindByTrigger(trigger string) (*Skill, bool) {
+// Returns a copy so callers cannot mutate registry entries without the lock
+// (RecordOutcome/ExtractFromFinding mutate under e.mu — returning the live
+// pointer would be a data race for concurrent readers).
+func (e *Engine) FindByTrigger(trigger string) (Skill, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	s, ok := e.triggerIndex[normalizeTrigger(trigger)]
-	return s, ok
+	if !ok {
+		return Skill{}, false
+	}
+	return *s, true
 }
 
-// GetAllSkills returns all skills sorted by composite score (descending).
-func (e *Engine) GetAllSkills() []*Skill {
+// GetAllSkills returns copies of all skills sorted by composite score (descending).
+// Copies are returned so callers cannot mutate registry entries without the lock.
+func (e *Engine) GetAllSkills() []Skill {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	out := make([]*Skill, 0, len(e.skills))
+	out := make([]Skill, 0, len(e.skills))
 	for _, s := range e.skills {
-		out = append(out, s)
+		out = append(out, *s)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return e.scoreSkill(out[i]) > e.scoreSkill(out[j])
+		return e.scoreSkill(&out[i]) > e.scoreSkill(&out[j])
 	})
 	return out
 }

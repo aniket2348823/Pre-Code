@@ -104,8 +104,11 @@ func TestSanitizeMiddleware_SQL(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api?q='+OR+'1'='1", nil)
 	rec := httptest.NewRecorder()
 	SanitizeMiddleware(handler).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", rec.Code)
+	// SQLi patterns in query params are logged, not blocked: parameterized
+	// queries make them harmless, and blocking rejects legitimate traffic
+	// (e.g. searching for the text "DROP TABLE").
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 pass-through, got %d", rec.Code)
 	}
 }
 
@@ -114,8 +117,10 @@ func TestSanitizeMiddleware_XSS(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api?q=<script>alert(1)</script>", nil)
 	rec := httptest.NewRecorder()
 	SanitizeMiddleware(handler).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", rec.Code)
+	// XSS patterns in query params are logged, not blocked — output encoding
+	// at render time is the correct defense, not rejecting requests.
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 pass-through, got %d", rec.Code)
 	}
 }
 
@@ -315,8 +320,9 @@ func TestSanitizeMiddleware_MultiParam(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api?q=hello&q=SELECT+FROM+users", nil)
 	rec := httptest.NewRecorder()
 	SanitizeMiddleware(handler).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for SQL in second param, got %d", rec.Code)
+	// All values pass through; nothing is blocked based on query content alone.
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 pass-through, got %d", rec.Code)
 	}
 }
 

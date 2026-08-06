@@ -27,9 +27,57 @@ func NewAPIKeyAuth(pool *database.Conn) *APIKeyAuth {
 	return &APIKeyAuth{pool: pool}
 }
 
+// hashKey returns the plain SHA-256 hex digest of a key. Retained for test
+// compatibility; the database stores bcrypt(SHA-256(plaintext)) via
+// auth.APIKeyService.GenerateKey, so authentication uses bcrypt comparison
+// (findAPIKeyByHash) rather than this digest.
 func hashKey(plaintext string) string {
 	h := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(h[:])
+}
+
+// findAPIKeyByHash retrieves the stored key row whose bcrypt hash matches the
+// presented key. Keys are stored as bcrypt(SHA-256(plaintext)) (see
+// auth.GenerateKey), so a direct key_hash equality lookup can never match —
+// scan the active keys and bcrypt-compare in constant time. Returns
+// (rowFound, err); rowFound=false + nil means no match.
+func (a *APIKeyAuth) findAPIKeyByHash(ctx context.Context, plaintext string) (bool, apiKeyRow, error) {
+	rows, err := a.pool.Query(ctx, `
+		SELECT id, user_id, key_hash, is_active, expires_at, scopes
+		FROM api_keys
+		WHERE is_active = TRUE
+	`)
+	if err != nil {
+		return false, apiKeyRow{}, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var row apiKeyRow
+		if err := rows.Scan(&row.id, &row.userID, &row.keyHash, &row.isActive, &row.expires, &row.scopes); err != nil {
+			return false, apiKeyRow{}, err
+		}
+		// Constant-time bcrypt comparison against the stored hash. The digest is
+		// pre-hashed with SHA-256 before bcrypt by auth.GenerateKey; VerifyKey
+		// recomputes that digest internally.
+		if auth.NewAPIKeyService("").VerifyKey(plaintext, row.keyHash) {
+			return true, row, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, apiKeyRow{}, err
+	}
+	return false, apiKeyRow{}, nil
+}
+
+// apiKeyRow is the minimal set of columns needed to authenticate an API key.
+type apiKeyRow struct {
+	id       string
+	userID   string
+	keyHash  string
+	isActive bool
+	expires  *time.Time
+	scopes   []string
 }
 
 // Authenticate validates an API key and returns user claims.
@@ -41,28 +89,20 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 		return nil, nil
 	}
 
-	keyHash := hashKey(plaintext)
-
-	var (
-		id       string
-		userID   string
-		isActive bool
-		expires  *time.Time
-		scopes   []string
-	)
-
-	// Primary lookup: match by key_hash (normal path)
-	query := `
-		SELECT id, user_id, is_active, expires_at, scopes
-		FROM api_keys
-		WHERE key_hash = $1
-	`
-	err := a.pool.QueryRow(r.Context(), query, keyHash).Scan(
-		&id, &userID, &isActive, &expires, &scopes,
-	)
+	// Keys are stored as bcrypt(SHA-256(plaintext)) (see auth.GenerateKey), so a
+	// direct key_hash equality lookup can never match. Scan the user's active
+	// keys and bcrypt-compare in constant time.
+	found, row, err := a.findAPIKeyByHash(r.Context(), plaintext)
 	if err != nil {
+		slog.Warn("api-key: lookup failed", "error", err)
+		return nil, ErrInvalidAPIKey
+	}
+
+	id, userID, isActive, expires, scopes := row.id, row.userID, row.isActive, row.expires, row.scopes
+
+	if !found {
 		// Key hash not found — could be an old rotated key still valid during grace period.
-		// Try rotation_token_hash lookup: the client may be sending the rotation token.
+		// The rotation token is stored as HMAC(SHA-256(plaintext)); compare directly.
 		rotHash := auth.SHA256Hash(plaintext)
 		rotQuery := `
 			SELECT id, user_id, is_active, expires_at, scopes
@@ -86,6 +126,12 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 	}
 
 	go func() {
+		// Never let a background bookkeeping failure crash the process.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("api-key: last_used_at update panicked", "panic", r)
+			}
+		}()
 		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, _ = a.pool.Exec(bgCtx, `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`, id)
@@ -130,7 +176,10 @@ func extractAPIKey(r *http.Request) string {
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
 			token := parts[1]
-			if strings.HasPrefix(token, "va_") {
+			// API keys are marked by an underscore-containing prefix and are never
+			// JWTs (which always contain '.'). This mirrors isAPIKeyRequest in
+			// security.go and stays correct for any configured key prefix.
+			if strings.Contains(token, "_") && !strings.Contains(token, ".") {
 				return token
 			}
 		}
@@ -175,31 +224,36 @@ func (m *AuthSessionMiddleware) Middleware(next http.Handler) http.Handler {
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
-		}			poolConn, err := m.conn.Pool().Acquire(r.Context())
-			if err != nil {
-				slog.Warn("auth-session: failed to acquire connection", "error", err)
-				next.ServeHTTP(w, r)
-				return
-			}
+		}
 
-			_, err = poolConn.Exec(r.Context(), "SELECT app_auth.set_current_user_id($1)", claims.UserID)
-			if err != nil {
-				poolConn.Release()
-				slog.Warn("auth-session: failed to set user ID", "error", err, "user_id", claims.UserID)
-				next.ServeHTTP(w, r)
-				return
-			}
+		poolConn, err := m.conn.Pool().Acquire(r.Context())
+		if err != nil {
+			slog.Warn("auth-session: failed to acquire connection", "error", err)
+			next.ServeHTTP(w, r)
+			return
+		} // Set the session variable at SESSION scope. The app_auth.set_current_user_id
+		// function uses set_config(..., is_local=true), so a standalone autocommit
+		// call would be discarded as soon as its implicit transaction commits.
+		// The pool's AfterRelease hook resets the variable on release, so no stale
+		// identity survives to the next request.
+		_, err = poolConn.Exec(r.Context(), "SELECT set_config('app.current_user_id', $1::text, false)", claims.UserID)
+		if err != nil {
+			poolConn.Release()
+			slog.Warn("auth-session: failed to set user ID", "error", err, "user_id", claims.UserID)
+			next.ServeHTTP(w, r)
+			return
+		}
 
-			// Keep the dedicated connection in the request context for the whole
-			// request so RLS sees app.current_user_id on every query (the Conn
-			// wrapper routes through ConnFromContext). Release it afterwards — a
-			// session variable set on a released pooled connection is a no-op.
-			ctx := database.WithConn(r.Context(), poolConn)
-			defer poolConn.Release()
+		// Keep the dedicated connection in the request context for the whole
+		// request so RLS sees app.current_user_id on every query (the Conn
+		// wrapper routes through ConnFromContext). Release it afterwards — a
+		// session variable set on a released pooled connection is a no-op.
+		ctx := database.WithConn(r.Context(), poolConn)
+		defer poolConn.Release()
 
-			slog.Debug("auth-session: set user ID", "user_id", claims.UserID)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+		slog.Debug("auth-session: set user ID", "user_id", claims.UserID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // AuthSessionCheckHandler checks if the session variable is set correctly.
@@ -217,7 +271,7 @@ func (m *AuthSessionMiddleware) AuthSessionCheckHandler(w http.ResponseWriter, r
 	}
 	defer poolConn.Release()
 
-	_, err = poolConn.Exec(r.Context(), "SELECT app_auth.set_current_user_id($1)", claims.UserID)
+	_, err = poolConn.Exec(r.Context(), "SELECT set_config('app.current_user_id', $1::text, false)", claims.UserID)
 	if err != nil {
 		response.InternalError(w, "failed to set session: "+err.Error())
 		return

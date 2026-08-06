@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -112,9 +113,15 @@ func joinAddrs(addrs []string) string {
 	return result
 }
 
+var boundaryCounter atomic.Uint64
+
 func generateBoundary() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is effectively fatal for MIME uniqueness; fall
+		// back to a time+sequence nonce rather than emitting a zero boundary.
+		b = []byte(fmt.Sprintf("b-%d-%d", time.Now().UnixNano(), boundaryCounter.Add(1)))
+	}
 	return hex.EncodeToString(b)
 }
 

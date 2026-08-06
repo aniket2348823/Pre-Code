@@ -148,6 +148,19 @@ func builtinRules() []builtinRule {
 			fix:         "Pass parameters as separate arguments to Exec/Query instead of formatting the query string",
 			category:    "injection",
 		},
+		// SQL keyword inside a string literal followed by + concatenation.
+		// The base sql_injection rule requires the concat operator BEFORE the
+		// SQL keyword, so `"SELECT ... '" + username` slips through — this
+		// variant catches string-first concatenation regardless of variable
+		// source (inherently defeats parameterization).
+		{
+			name:        "sql_injection_string_concat",
+			description: "Potential SQL injection via string concatenation after a SQL literal",
+			severity:    SeverityCritical,
+			pattern:     regexp.MustCompile(`(?i)"[^"]*\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|EXEC(?:UTE)?)\b[^"]*"\s*\+`),
+			fix:         "Use parameterized queries ($1, $2) instead of concatenating the query string",
+			category:    "injection",
+		},
 		{
 			name:           "command_injection",
 			description:    "Potential command injection via unsanitized input in exec.Command",
@@ -156,6 +169,42 @@ func builtinRules() []builtinRule {
 			fix:            "Use allowlists for commands; never pass user input directly to exec.Command arguments",
 			category:       "injection",
 			requireContext: []string{"req.", "r.", "params.", "input.", "fmt.Sprintf"},
+		}, // Shell-spawning exec.Command with string concatenation in its args.
+		// `exec.Command("sh", "-c", "ping -c 3 "+host)` (Unix) or
+		// `exec.Command("cmd", "/c", "dir "+path)` (Windows) builds a shell
+		// command string — concatenation here is the classic injection pattern
+		// even when the tainted variable is a local copy of user input.
+		// The shell-name branch tolerates full paths (e.g. "/usr/bin/bash",
+		// "C:\\Windows\\System32\\cmd.exe"). (?i:...) is scoped to the shell
+		// literals only so exec.Command stays case-sensitive.
+		{
+			name:        "command_injection_shell_concat",
+			description: "Shell command built via string concatenation in exec.Command — command injection risk",
+			severity:    SeverityCritical,
+			pattern:     regexp.MustCompile(`exec\.Command\s*\([^)]*(?i:"(?:[^"]*/)?(?:sh|bash)"\s*,\s*"-c"|"(?:[^"]*[\\/])?cmd(?:\.exe)?"\s*,\s*"/c"|"(?:[^"]*[\\/])?powershell(?:\.exe)?"\s*,\s*"-Command")[^)]*\+`),
+			fix:         "Pass command arguments as a string slice (no shell), or validate/allowlist the input; never concatenate into a shell command string",
+			category:    "injection",
+		},
+		// Shell command passed as a VARIABLE or EXPRESSION:
+		// `exec.Command("sh", "-c", cmdVar)` / `exec.CommandContext(ctx, "sh", "-c", expr)`
+		// (Windows: `exec.Command("cmd", "/c", cmdVar)`, `powershell -Command`).
+		// No concat marker on the line, so the tainted origin is invisible to
+		// line-based scanning — any variable fed to a shell is a shell-parse risk
+		// (GoSec G204 pattern). Covers both exec.Command and exec.CommandContext
+		// (the latter tolerates the leading ctx argument). The shell-name branch
+		// tolerates full paths (e.g. "/usr/bin/bash", "C:\\Windows\\System32\\cmd.exe")
+		// and (?i:...) is scoped so exec.Command stays case-sensitive. `[^"\s]`
+		// keeps string-literal commands ("echo hi") from firing while still
+		// catching identifiers and call expressions. (Plain `[^"]` would
+		// backtrack to match the space after the comma, falsely flagging
+		// literal commands.)
+		{
+			name:        "command_injection_shell_variable",
+			description: "Shell command passed as a variable or expression to exec.Command(\"sh\", \"-c\", ...) / (\"cmd\", \"/c\", ...) — command injection risk",
+			severity:    SeverityCritical,
+			pattern:     regexp.MustCompile(`exec\.Command(?:Context)?\s*\(\s*(?:ctx,\s*)?(?i:"(?:[^"]*/)?(?:sh|bash)"\s*,\s*"-c"|"(?:[^"]*[\\/])?cmd(?:\.exe)?"\s*,\s*"/c"|"(?:[^"]*[\\/])?powershell(?:\.exe)?"\s*,\s*"-Command")\s*,\s*[^"\s]`),
+			fix:         "Pass command arguments as a string slice (no shell), or validate the command string against a strict allowlist before execution",
+			category:    "injection",
 		},
 		{
 			name:        "xss_unsafe_html",
@@ -199,6 +248,88 @@ func builtinRules() []builtinRule {
 			fix:            "Sanitize user input before logging; use structured logging with key-value pairs",
 			category:       "injection",
 			requireContext: []string{"req.", "r.", "input.", "user."},
+		},
+
+		// ════════════════════════════════════════════════════════════════
+		// PYTHON (CWE-78, CWE-94, CWE-502, CWE-918)
+		// The deterministic engine must cover Python — the VSCode extension's
+		// primary BYOK scan target. Rules use requireContext so they only fire
+		// when user-input markers are present on the same line (low FP).
+		// ════════════════════════════════════════════════════════════════
+		{
+			name:           "python_command_injection",
+			description:    "Potential command injection via unsanitized input in os.system/os.popen/subprocess",
+			severity:       SeverityCritical,
+			pattern:        regexp.MustCompile(`(?i)(?:os\.system\s*\(|os\.popen\s*\(|commands\.getoutput\s*\(|subprocess\.(?:Popen|run|call|check_call|check_output)\s*\([^)]*shell\s*=\s*True)`),
+			fix:            "Never pass user input to a shell; use subprocess with a string list and shell=False, and validate arguments against an allowlist",
+			category:       "injection",
+			requireContext: []string{"request.args", "request.form", "request.json", "request.get_json", "input(", "sys.argv", "os.environ", "getenv("},
+		},
+		{
+			name:           "python_eval_exec",
+			description:    "eval()/exec() with user-controllable input allows arbitrary code execution",
+			severity:       SeverityCritical,
+			pattern:        regexp.MustCompile(`(?i)\b(?:eval|exec)\s*\(`),
+			fix:            "Avoid eval/exec entirely; use ast.literal_eval for safe literal parsing or a dedicated parser",
+			category:       "injection",
+			requireContext: []string{"request.args", "request.form", "request.json", "input(", "sys.argv", "os.environ", "getenv("},
+		},
+		{
+			name:        "python_pickle_load",
+			description: "Unpickling untrusted data can execute arbitrary code (CWE-502)",
+			severity:    SeverityHigh,
+			pattern:     regexp.MustCompile(`(?i)\b(?:pickle\.loads|pickle\.load|cPickle\.loads|cPickle\.load)\s*\(`),
+			fix:         "Never unpickle untrusted data; use JSON or a safe serialization format",
+			category:    "deserialization",
+		},
+		{
+			name:        "python_unsafe_yaml",
+			description: "yaml.load without a safe Loader can execute arbitrary code",
+			severity:    SeverityHigh,
+			pattern:     regexp.MustCompile(`(?i)yaml\.load\s*\(`),
+			fix:         "Use yaml.safe_load or yaml.load with Loader=yaml.SafeLoader",
+			category:    "deserialization",
+		},
+		// SQL-string formatting is inherently injection-prone regardless of the
+		// variable source (bandit B608 behavior): f-string interpolation and
+		// %-formatting into a query both defeat parameterization.
+		{
+			name:        "python_sql_injection_fstring",
+			description: "Potential SQL injection via f-string interpolation in a query",
+			severity:    SeverityCritical,
+			pattern:     regexp.MustCompile(`(?i)(?:cursor\.execute|cursor\.executemany|\.execute_query)\s*\(\s*f["'][^"']*\{`),
+			fix:         "Use parameterized queries (?, %s placeholders with a params tuple) instead of f-string interpolation",
+			category:    "injection",
+		},
+		{
+			name:        "python_sql_injection_format",
+			description: "Potential SQL injection via %-formatting into a query",
+			severity:    SeverityCritical,
+			pattern:     regexp.MustCompile(`(?i)(?:cursor\.execute|cursor\.executemany|\.execute_query)\s*\(\s*r?["'][^"']*%[sd]["']\s*%`),
+			fix:         "Use parameterized queries with a params tuple instead of %-formatting the query string",
+			category:    "injection",
+		},
+		{
+			name:           "python_ssrf",
+			description:    "Potential SSRF — user-controlled URL passed to an HTTP client",
+			severity:       SeverityHigh,
+			pattern:        regexp.MustCompile(`(?i)\b(?:requests\.(?:get|post|put|delete|head|patch)|urllib\.(?:request\.urlopen|urlopen)|httpx\.(?:get|post|put|delete)|aiohttp\.ClientSession)\s*\(`),
+			fix:            "Validate URLs against an allowlist; block private/internal IP ranges before making the request",
+			category:       "ssrf",
+			requireContext: []string{"request.args", "request.form", "request.json", "input(", "sys.argv", "getenv("},
+		},
+		// NOTE: intentionally NOT case-insensitive — Python sinks are lowercase
+		// (open, os.remove, ...) while Go capitalizes them (os.Open, os.Remove).
+		// (?i) would make this rule match Go's os.Open/os.Remove/os.Rename and
+		// fire Python findings on Go code — the scanner's primary language.
+		{
+			name:           "python_path_traversal",
+			description:    "Potential path traversal via user-controlled filename in file operations",
+			severity:       SeverityHigh,
+			pattern:        regexp.MustCompile(`\b(?:open\s*\(|os\.open\s*\(|os\.remove\s*\(|os\.rename\s*\(|shutil\.(?:copy|move|rmtree)\s*\(|send_file\s*\(|send_from_directory\s*\()`),
+			fix:            "Validate the resolved path stays within an allowed base directory using os.path.realpath",
+			category:       "path_traversal",
+			requireContext: []string{"request.args", "request.form", "request.files", "filename", "input(", "sys.argv"},
 		},
 
 		// ════════════════════════════════════════════════════════════════

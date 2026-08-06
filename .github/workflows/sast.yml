@@ -13,7 +13,9 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: '1.22'
+  # go.mod requires go 1.26.5; allow Go to select the exact toolchain from go.mod.
+  GO_VERSION: '1.26.5'
+  GOTOOLCHAIN: auto
 
 jobs:
   # ── 1. STATIC APPLICATION SECURITY TESTING (SAST) ──
@@ -61,10 +63,17 @@ jobs:
 
       - name: Check for hardcoded secrets
         run: |
-          # Scan for common secret patterns
-          grep -rn "password\s*=\s*\"[^\"]\"" --include="*.go" . && echo "FOUND HARDCODED PASSWORDS" || true
-          grep -rn "api_key\s*=\s*\"[^\"]\"" --include="*.go" . && echo "FOUND HARDCODED API KEYS" || true
-          grep -rn "secret\s*=\s*\"[^\"]\"" --include="*.go" . && echo "FOUND HARDCODED SECRETS" || true
+          # Scan for common secret patterns (8+ char quoted values). Report-only:
+          # never fails the build on test fixtures that intentionally hold fake keys.
+          if grep -rnE \
+              -e "(password|passwd|secret|api[_-]?key|apikey|token)[[:space:]]*[:=][[:space:]]*[\"'][^\"']{8,}[\"']" \
+              --include='*.go' --include='*.ts' --include='*.js' --include='*.yaml' \
+              --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist \
+              --exclude-dir=bin --exclude-dir=coverage --exclude-dir=vendor .; then
+            echo "⚠️ FOUND CANDIDATE HARDCODED SECRETS — review the lines above"
+          else
+            echo "✅ No obvious hardcoded secrets found"
+          fi
 
   # ── 2. CONTAINER IMAGE SCANNING ──
   container-scan:
