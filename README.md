@@ -1,16 +1,21 @@
 <p align="center">
-  <h1 align="center">VigilAgent</h1>
-  <p align="center">
-    <strong>Enterprise-Grade AI Agent Orchestration & Code Intelligence Platform</strong>
-  </p>
-  <p align="center">
-    Multi-LLM Routing · Deterministic Code Analysis · Human-in-the-Loop Governance · MCP Integration
-  </p>
+  <a href="https://github.com/aniket2348823/Pre-Code"><img src="https://img.shields.io/badge/VERSION-2.0.0-brightgreen?style=for-the-badge" alt="Version"></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/GO-1.26+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go"></a>
+  <a href="https://go-chi.io"><img src="https://img.shields.io/badge/CHI-v5-purple?style=for-the-badge" alt="Chi"></a>
+  <a href="https://www.postgresql.org"><img src="https://img.shields.io/badge/POSTGRES-16-336791?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL"></a>
+  <a href="https://redis.io"><img src="https://img.shields.io/badge/REDIS-7-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/LICENSE-MIT-blue?style=for-the-badge" alt="License"></a>
 </p>
+
+# VigilAgent — Enterprise AI Agent Orchestration & Code Intelligence Platform
 
 ---
 
-## Table of Contents
+> A multi-LLM routing and autonomous agent execution platform for deterministic code analysis, vulnerability scanning, and AI-powered code review — driven by 9 LLM providers, a parallel analysis pipeline, Human-in-the-Loop governance, MCP server integration, and a real-time streaming dashboard.
+
+---
+
+## 🔗 Table of Contents
 
 - [Overview](#overview)
 - [Key Capabilities](#key-capabilities)
