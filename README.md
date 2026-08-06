@@ -1,10 +1,31 @@
+<!-- CI/CD Status Badges -->
 <p align="center">
+  <a href="https://github.com/aniket2348823/Pre-Code/actions/workflows/deploy.yml"><img src="https://img.shields.io/github/actions/workflow/status/aniket2348823/Pre-Code/deploy.yml?branch=main&style=for-the-badge&label=CI%2FCD&logo=githubactions&logoColor=white" alt="CI/CD"></a>
+  <a href="https://github.com/aniket2348823/Pre-Code/actions/workflows/sast.yml"><img src="https://img.shields.io/github/actions/workflow/status/aniket2348823/Pre-Code/sast.yml?branch=main&style=for-the-badge&label=SAST&logo=githubactions&logoColor=white" alt="SAST"></a>
   <a href="https://github.com/aniket2348823/Pre-Code"><img src="https://img.shields.io/badge/VERSION-2.0.0-brightgreen?style=for-the-badge" alt="Version"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/LICENSE-MIT-blue?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/aniket2348823/Pre-Code"><img src="https://img.shields.io/badge/MAINTAINED-YES-success?style=for-the-badge" alt="Maintained"></a>
+</p>
+
+<!-- Tech Stack Badges -->
+<p align="center">
   <a href="https://go.dev"><img src="https://img.shields.io/badge/GO-1.26+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go"></a>
   <a href="https://go-chi.io"><img src="https://img.shields.io/badge/CHI-v5-purple?style=for-the-badge" alt="Chi"></a>
   <a href="https://www.postgresql.org"><img src="https://img.shields.io/badge/POSTGRES-16-336791?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL"></a>
   <a href="https://redis.io"><img src="https://img.shields.io/badge/REDIS-7-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/LICENSE-MIT-blue?style=for-the-badge" alt="License"></a>
+  <a href="https://nats.io"><img src="https://img.shields.io/badge/NATS-JetStream-27AAE1?style=for-the-badge&logo=natsdotio&logoColor=white" alt="NATS"></a>
+  <a href="https://www.docker.com"><img src="https://img.shields.io/badge/DOCKER-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker"></a>
+  <a href="https://kubernetes.io"><img src="https://img.shields.io/badge/K8S-Helm-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white" alt="Kubernetes"></a>
+</p>
+
+<!-- Project Highlights -->
+<p align="center">
+  <img src="https://img.shields.io/badge/LLM_PROVIDERS-9-FF6F00?style=for-the-badge&logo=openai&logoColor=white" alt="LLM Providers">
+  <img src="https://img.shields.io/badge/API_ENDPOINTS-90+-8B5CF6?style=for-the-badge&logo=fastapi&logoColor=white" alt="API Endpoints">
+  <img src="https://img.shields.io/badge/TESTS-133_FILES-4CAF50?style=for-the-badge&logo=testcafe&logoColor=white" alt="Tests">
+  <img src="https://img.shields.io/badge/PACKAGES-67-E91E63?style=for-the-badge&logo=go&logoColor=white" alt="Packages">
+  <img src="https://img.shields.io/badge/PROMETHEUS-Metrics-E6522C?style=for-the-badge&logo=prometheus&logoColor=white" alt="Prometheus">
+  <img src="https://img.shields.io/badge/OpenTelemetry-Tracing-F5A800?style=for-the-badge&logo=opentelemetry&logoColor=white" alt="OpenTelemetry">
 </p>
 
 # VigilAgent — Enterprise AI Agent Orchestration & Code Intelligence Platform
