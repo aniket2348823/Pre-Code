@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -545,4 +546,78 @@ func TestShouldReport_ZeroConfidence(t *testing.T) {
 func TestShouldReport_MaxConfidence(t *testing.T) {
 	f := Finding{Confidence: 0.99}
 	assert.True(t, ShouldReport(f))
+}
+
+func TestExportSARIF(t *testing.T) {
+	findings := []Finding{
+		{RuleID: "sql_injection", Severity: SeverityCritical, Category: "injection", Message: "SQL injection via concatenation", Filename: "main.go", Line: 12, Snippet: "db.Query(sql)", Confidence: 0.9, Fingerprint: "fp-sql", Fix: "use parameters"},
+		{RuleID: "sql_injection", Severity: SeverityHigh, Message: "second occurrence", Filename: "main.go", Line: 20},
+		{RuleID: "hardcoded_secret", Severity: SeverityMedium, Message: "hardcoded secret", Filename: "config.go", Line: 3},
+		{RuleID: "info_rule", Severity: SeverityInfo, Message: "info note", Filename: "x.go", Line: 1},
+	}
+
+	out, err := ExportSARIF(findings)
+	assert.NoError(t, err)
+
+	var report struct {
+		Version string `json:"version"`
+		Runs    []struct {
+			Tool struct {
+				Driver struct {
+					Name  string `json:"name"`
+					Rules []struct {
+						ID         string                 `json:"id"`
+						Properties map[string]interface{} `json:"properties"`
+					} `json:"rules"`
+				} `json:"driver"`
+			} `json:"tool"`
+			Results []struct {
+				RuleID   string `json:"ruleId"`
+				Level    string `json:"level"`
+				Location []struct {
+					Physical struct {
+						Artifact struct {
+							URI string `json:"uri"`
+						} `json:"artifactLocation"`
+						Region *struct {
+							StartLine int `json:"startLine"`
+						} `json:"region"`
+					} `json:"physicalLocation"`
+				} `json:"locations"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	assert.NoError(t, json.Unmarshal(out, &report))
+
+	assert.Equal(t, "2.1.0", report.Version)
+	assert.Len(t, report.Runs, 1)
+	driver := report.Runs[0].Tool.Driver
+	assert.Equal(t, "VigilAgent", driver.Name)
+	assert.Len(t, driver.Rules, 3) // unique rule ids: sql_injection, hardcoded_secret, info_rule
+	assert.Equal(t, "9.0", driver.Rules[0].Properties["security-severity"], "rule severity = worst finding severity")
+
+	results := report.Runs[0].Results
+	assert.Len(t, results, 4)
+	assert.Equal(t, "error", results[0].Level)
+	assert.Equal(t, "warning", results[2].Level)
+	assert.Equal(t, "note", results[3].Level)
+	assert.Len(t, results[0].Location, 1)
+	assert.Equal(t, "main.go", results[0].Location[0].Physical.Artifact.URI)
+	assert.NotNil(t, results[0].Location[0].Physical.Region)
+	assert.Equal(t, 12, results[0].Location[0].Physical.Region.StartLine)
+}
+
+func TestExportSARIFEmpty(t *testing.T) {
+	out, err := ExportSARIF(nil)
+	assert.NoError(t, err)
+	assert.Contains(t, string(out), "\"version\": \"2.1.0\"")
+	assert.Contains(t, string(out), "\"results\": []")
+}
+
+func TestSarifLevelMapping(t *testing.T) {
+	assert.Equal(t, "error", sarifLevel(SeverityCritical))
+	assert.Equal(t, "error", sarifLevel(SeverityHigh))
+	assert.Equal(t, "warning", sarifLevel(SeverityMedium))
+	assert.Equal(t, "note", sarifLevel(SeverityLow))
+	assert.Equal(t, "note", sarifLevel(SeverityInfo))
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -125,4 +126,121 @@ func buildCanonical(method, path, query string, timestamp int64, headers http.He
 // SetClockSkew overrides the default clock skew tolerance.
 func (s *Signer) SetClockSkew(d time.Duration) {
 	s.clockSkew = d
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVENANCE RECORDS
+//
+// A provenance record is the signed audit trail for a scan decision. It is
+// explicit, verifiable metadata — never a hidden watermark in generated
+// content. The record states where the content came from (provider/model from
+// transaction metadata), what was scanned, and what the policy decided.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ProvenanceStatus describes how much is known about the content's origin.
+const (
+	// ProvenanceVerified: content was generated through the approved gateway;
+	// provider/model/request metadata is known and recorded.
+	ProvenanceVerified = "verified"
+	// ProvenanceUnverified: source is unknown (e.g. pasted code). It is scanned
+	// but never attributed to a model by stylistic guessing.
+	ProvenanceUnverified = "unverified"
+	// ProvenanceBypassed: detected outside the approved route, if policy or
+	// network telemetry can establish this.
+	ProvenanceBypassed = "bypassed"
+)
+
+// ProvenanceRecord is the signed record of one scan decision.
+type ProvenanceRecord struct {
+	ScanID           string    `json:"scan_id"`
+	RequestID        string    `json:"request_id,omitempty"`
+	Provider         string    `json:"provider,omitempty"`
+	Model            string    `json:"model,omitempty"`
+	TenantID         string    `json:"tenant_id,omitempty"`
+	UserID           string    `json:"user_id,omitempty"`
+	ProjectID        string    `json:"project_id,omitempty"`
+	ClientType       string    `json:"client_type,omitempty"`
+	ClientVersion    string    `json:"client_version,omitempty"`
+	PolicyVersion    string    `json:"policy_version,omitempty"`
+	ScannerVersion   string    `json:"scanner_version,omitempty"`
+	ProvenanceStatus string    `json:"provenance_status"`
+	ResponseHash     string    `json:"response_hash"`
+	Decision         string    `json:"decision"`
+	Mode             string    `json:"mode,omitempty"`
+	Timestamp        time.Time `json:"timestamp"`
+}
+
+// HashContent returns the SHA-256 hex digest of a content payload. It anchors
+// the record to the exact output that was scanned, so a later tamper of the
+// content invalidates the record.
+func HashContent(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+// canonicalProvenance marshals the record into a stable canonical string used
+// for signing. Only semantic fields are signed (not the timestamp's monotonic
+// clock component, which would otherwise differ between sign and verify).
+func canonicalProvenance(rec ProvenanceRecord) ([]byte, error) {
+	return json.Marshal(struct {
+		ScanID           string `json:"scan_id"`
+		RequestID        string `json:"request_id"`
+		Provider         string `json:"provider"`
+		Model            string `json:"model"`
+		TenantID         string `json:"tenant_id"`
+		UserID           string `json:"user_id"`
+		ProjectID        string `json:"project_id"`
+		ClientType       string `json:"client_type"`
+		ClientVersion    string `json:"client_version"`
+		PolicyVersion    string `json:"policy_version"`
+		ScannerVersion   string `json:"scanner_version"`
+		ProvenanceStatus string `json:"provenance_status"`
+		ResponseHash     string `json:"response_hash"`
+		Decision         string `json:"decision"`
+		Mode             string `json:"mode"`
+		Timestamp        string `json:"timestamp"`
+	}{
+		ScanID:           rec.ScanID,
+		RequestID:        rec.RequestID,
+		Provider:         rec.Provider,
+		Model:            rec.Model,
+		TenantID:         rec.TenantID,
+		UserID:           rec.UserID,
+		ProjectID:        rec.ProjectID,
+		ClientType:       rec.ClientType,
+		ClientVersion:    rec.ClientVersion,
+		PolicyVersion:    rec.PolicyVersion,
+		ScannerVersion:   rec.ScannerVersion,
+		ProvenanceStatus: rec.ProvenanceStatus,
+		ResponseHash:     rec.ResponseHash,
+		Decision:         rec.Decision,
+		Mode:             rec.Mode,
+		Timestamp:        rec.Timestamp.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// SignProvenance signs a provenance record with the server-managed secret and
+// returns the HMAC-SHA256 signature (hex).
+func SignProvenance(secret string, rec ProvenanceRecord) (string, error) {
+	if secret == "" {
+		return "", fmt.Errorf("provenance signing secret is not configured")
+	}
+	canon, err := canonicalProvenance(rec)
+	if err != nil {
+		return "", err
+	}
+	return HMACSign([]byte(secret), string(canon)), nil
+}
+
+// VerifyProvenance checks that the record's signature matches the canonical
+// form under the given secret.
+func VerifyProvenance(secret string, rec ProvenanceRecord, signature string) error {
+	expected, err := SignProvenance(secret, rec)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal([]byte(signature), []byte(expected)) {
+		return fmt.Errorf("provenance signature mismatch")
+	}
+	return nil
 }

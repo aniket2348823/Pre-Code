@@ -7,6 +7,8 @@ export interface ReviewResult {
     deterministic_findings?: Finding[];
     reviewers?: ReviewerOutput[];
     confidence?: ConfidenceScore;
+    // Line-anchored accept/reject suggestions (5 roles, 1 LLM call).
+    suggestions?: Suggestion[];
     final_output?: string;
     duration?: string;
     summary?: string;
@@ -39,6 +41,18 @@ export interface ConfidenceScore {
     failed: number;
     warned: number;
     reason: string;
+}
+
+export interface Suggestion {
+    id: string;
+    role: string;           // security | architecture | compliance | cost | red_team | deterministic
+    severity: string;       // critical | high | medium | low | info
+    line_start: number;     // 1-indexed, inclusive
+    line_end: number;       // 1-indexed, inclusive
+    message: string;
+    replacement?: string;   // exact text to swap in (empty = description only)
+    confidence: number;
+    corroborated?: boolean; // deterministic engine agreed on a nearby line
 }
 
 export interface ScanResult {
@@ -214,13 +228,17 @@ export class VigilAgentClient {
         code: string,
         prompt: string,
         language: string,
-        filename: string
+        filename: string,
+        suggestionMode: boolean = true
     ): Promise<ReviewResult> {
         return this.request<ReviewResult>('/api/v1/review', {
             code,
             prompt,
             language,
             filename,
+            // Suggestion mode: line-anchored accept/reject suggestions, no
+            // auto-rewriting of the code.
+            suggestion_mode: suggestionMode,
         });
     }
 
@@ -278,6 +296,153 @@ export class VigilAgentClient {
             return false;
         }
     }
+
+    // ── Secure AI Gateway methods (Plan-1 controlled generation) ────────────
+
+    // listGatewayModels fetches the gateway's model catalog (GET /v1/models).
+    async listGatewayModels(gatewayUrl: string): Promise<GatewayModel[]> {
+        assertSecureBackendUrl(gatewayUrl);
+        try {
+            const response = await fetch(`${gatewayUrl.replace(/\/$/, '')}/v1/models`, {
+                signal: AbortSignal.timeout(10000),
+            });
+            if (!response.ok) {
+                return [];
+            }
+            const data = await response.json() as { models?: GatewayModel[] };
+            return (data.models || []).filter(m => !m.deprecated);
+        } catch {
+            return [];
+        }
+    }
+
+    // chatViaGateway streams a chat request through the Secure AI Gateway's
+    // Responses API (/v1/responses, stream:true). The gateway runs the
+    // design-stage gate, scans every code block, applies the policy decision
+    // (balanced mode: code withheld on a held review), and signs a provenance
+    // record — all before the text is returned here.
+    //
+    // onDelta, when provided, is invoked with each incremental text chunk as
+    // it streams off the wire so callers (e.g. the language-model chat
+    // provider) can surface partial output while the scan is in flight.
+    async chatViaGateway(
+        gatewayUrl: string,
+        messages: Array<{ role: string; content: string }>,
+        model: string,
+        onDelta?: (text: string) => void
+    ): Promise<GatewayChatResult> {
+        const apiKey = await this.getApiKey();
+        const llmKey = await this.getLLMKey();
+        const provider = await this.getSelectedProvider();
+        assertSecureBackendUrl(gatewayUrl);
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'X-API-Key': apiKey,
+            'X-VigilAgent-Mode': 'balanced',
+        };
+        if (llmKey) {
+            headers['X-LLM-Key'] = llmKey;
+        }
+        if (provider) {
+            headers['X-LLM-Provider'] = provider;
+        }
+
+        const response = await fetch(`${gatewayUrl.replace(/\/$/, '')}/v1/responses`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ model, stream: true, input: messages }),
+            signal: AbortSignal.timeout(120000),
+        });
+
+        // Headers are available before the SSE body streams.
+        const scanId = response.headers.get('X-VigilAgent-Scan-ID') || undefined;
+        const provenance = response.headers.get('X-VigilAgent-Provenance') || undefined;
+        const designGate = response.headers.get('X-VigilAgent-Design-Gate') || undefined;
+
+        if (!response.ok || !response.body) {
+            const text = await response.text();
+            throw new Error(`Gateway error (${response.status}): ${text}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let text = '';
+        let failure: string | undefined;
+
+        const handleLine = (line: string): void => {
+            if (!line.startsWith('data: ')) {
+                return;
+            }
+            const payload = line.slice(6).trim();
+            if (payload === '[DONE]') {
+                return;
+            }
+            try {
+                const evt = JSON.parse(payload) as Record<string, unknown>;
+                if (evt.type === 'response.output_text.delta') {
+                    const chunk = String(evt.delta || '');
+                    text += chunk;
+                    if (onDelta && chunk) {
+                        onDelta(chunk);
+                    }
+                } else if (evt.type === 'response.completed') {
+                    const resp = evt.response as { output?: Array<{ content?: Array<{ text?: string }> }> };
+                    const out = resp.output?.[0]?.content?.[0]?.text;
+                    if (typeof out === 'string' && out.length > 0) {
+                        text = out; // authoritative full text
+                    }
+                } else if (evt.type === 'response.failed') {
+                    const resp = evt.response as { error?: { message?: string; decision?: string } };
+                    failure = resp.error?.message || 'blocked by VigilAgent policy';
+                }
+            } catch {
+                // partial/irrelevant SSE line — ignore
+            }
+        };
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+                handleLine(line.trim());
+            }
+        }
+        if (buffer.trim()) {
+            handleLine(buffer.trim());
+        }
+
+        if (failure) {
+            throw new Error(`VigilAgent blocked the response: ${failure}`);
+        }
+
+        return { text, model, scanId, provenance, designGate };
+    }
+}
+
+export interface GatewayModel {
+    id: string;
+    name: string;
+    provider: string;
+    context_window: number;
+    max_output: number;
+    capabilities: string[];
+    deprecated?: boolean;
+}
+
+export interface GatewayChatResult {
+    text: string;
+    model: string;
+    scanId?: string;
+    provenance?: string; // verified | unverified | bypassed
+    designGate?: string; // passed | constrained
 }
 
 // Rejects plain-HTTP backend URLs unless they point at the local machine.

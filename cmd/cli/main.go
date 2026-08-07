@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/vigilagent/vigilagent/internal/scanner"
 )
 
 var (
@@ -37,10 +42,173 @@ func main() {
 	rootCmd.AddCommand(
 		configCmd(),
 		versionCmd(),
+		scanCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// ─── vigil scan — deterministic scan + SARIF + fail gate (CI enforcement) ──
+// The CI layer's entry point: runs the same deterministic engine the gateway
+// uses over a workspace, writes a SARIF 2.1.0 report, and fails the process
+// when findings meet the --fail-on severity gate. This is what blocks a merge
+// on protected branches when code slipped past the IDE/gateway.
+
+// scanExtensions are the file types the CLI walker considers.
+var scanExtensions = map[string]bool{
+	".go": true, ".py": true, ".js": true, ".mjs": true, ".cjs": true,
+	".jsx": true, ".ts": true, ".tsx": true, ".rs": true, ".java": true,
+	".yaml": true, ".yml": true, ".json": true, ".sql": true, ".sh": true,
+	".tf": true,
+}
+
+// langForFile guesses the scanner language from a file extension.
+func langForFile(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".go":
+		return "go"
+	case ".py":
+		return "python"
+	case ".js", ".mjs", ".cjs", ".jsx":
+		return "javascript"
+	case ".ts", ".tsx":
+		return "typescript"
+	case ".rs":
+		return "rust"
+	case ".java":
+		return "java"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".json":
+		return "json"
+	case ".sql":
+		return "sql"
+	case ".sh":
+		return "shell"
+	case ".tf":
+		return "terraform"
+	default:
+		return ""
+	}
+}
+
+func scanCmd() *cobra.Command {
+	var (
+		path     string
+		sarifOut string
+		failOn   string
+		language string
+	)
+	cmd := &cobra.Command{
+		Use:   "scan",
+		Short: "Scan files with the deterministic engine (SARIF + fail gate)",
+		Long: `Scan a file or directory with VigilAgent's deterministic engine.
+Writes a SARIF 2.1.0 report (--sarif) and exits non-zero when findings meet
+the --fail-on severity gate — the CI enforcement layer for protected branches.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			engine := scanner.DefaultEngine()
+
+			var files []string
+			info, err := os.Stat(path)
+			if err != nil {
+				return fmt.Errorf("scan path: %w", err)
+			}
+			if !info.IsDir() {
+				files = append(files, path)
+			} else {
+				err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					if d.IsDir() {
+						// Excluded dirs are skipped during recursive discovery, but an
+						// explicitly-passed root (e.g. --path testdata/fixtures/...) is
+						// always scanned — fixtures are only excluded as nested dirs.
+						if p != path && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "dist" || d.Name() == "vendor" || d.Name() == "bin" || d.Name() == "coverage" || d.Name() == "testdata") {
+							return filepath.SkipDir
+						}
+						return nil
+					}
+					if scanExtensions[strings.ToLower(filepath.Ext(p))] {
+						files = append(files, p)
+					}
+					return nil
+				})
+				if err != nil {
+					return fmt.Errorf("walk path: %w", err)
+				}
+			}
+
+			var findings []scanner.Finding
+			seen := make(map[string]bool)
+			for _, f := range files {
+				code, err := os.ReadFile(f)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️ skip %s: %v\n", f, err)
+					continue
+				}
+				lang := language
+				if lang == "" || lang == "auto" {
+					lang = langForFile(f)
+				}
+				report := engine.Run(ctx, scanner.Input{
+					Language: lang,
+					Code:     string(code),
+					Filename: f,
+				})
+				for _, fd := range report.Findings {
+					if !scanner.ShouldReport(fd) || seen[fd.Fingerprint] {
+						continue
+					}
+					seen[fd.Fingerprint] = true
+					findings = append(findings, fd)
+				}
+			}
+
+			counts := map[scanner.Severity]int{}
+			for _, f := range findings {
+				counts[f.Severity]++
+				fmt.Printf("[%s] %s:%d — %s (%s)\n",
+					strings.ToUpper(string(f.Severity)), f.Filename, f.Line, f.Message, f.RuleID)
+			}
+			fmt.Printf("\nScanned %d file(s) — %d finding(s): %d critical, %d high, %d medium, %d low\n",
+				len(files), len(findings),
+				counts[scanner.SeverityCritical], counts[scanner.SeverityHigh],
+				counts[scanner.SeverityMedium], counts[scanner.SeverityLow])
+
+			if sarifOut != "" {
+				out, err := scanner.ExportSARIF(findings)
+				if err != nil {
+					return fmt.Errorf("export sarif: %w", err)
+				}
+				if err := os.WriteFile(sarifOut, out, 0o644); err != nil {
+					return fmt.Errorf("write sarif: %w", err)
+				}
+				fmt.Printf("📄 SARIF report written to %s\n", sarifOut)
+			}
+
+			if failOn != "" {
+				gate := map[scanner.Severity]bool{}
+				for _, s := range strings.Split(failOn, ",") {
+					gate[scanner.Severity(strings.ToLower(strings.TrimSpace(s)))] = true
+				}
+				for _, f := range findings {
+					if gate[f.Severity] {
+						return fmt.Errorf("❌ %d finding(s) meet the fail gate (--fail-on %s) — blocked by VigilAgent policy",
+							len(findings), failOn)
+					}
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&path, "path", ".", "file or directory to scan")
+	cmd.Flags().StringVar(&sarifOut, "sarif", "", "write SARIF 2.1.0 report to this file")
+	cmd.Flags().StringVar(&failOn, "fail-on", "high,critical", "comma-separated severities that fail the run (empty = never fail)")
+	cmd.Flags().StringVar(&language, "language", "auto", "language hint (auto, go, python, javascript, ...)")
+	return cmd
 }

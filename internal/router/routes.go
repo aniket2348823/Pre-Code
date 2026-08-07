@@ -16,6 +16,7 @@ func (r *Router) setupRoutes() {
 	r.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/health", r.healthHandler)
 		v1.Get("/ready", r.readinessHandler)
+		v1.Get("/csrf", r.csrfHandler)
 		v1.Get("/docs", r.swaggerUIHandler)
 		v1.Get("/docs/openapi.yaml", r.openapiSpecHandler)
 

@@ -204,3 +204,38 @@ jobs:
           name: vulnerability-report
           path: vuln-report.json
           retention-days: 30
+
+  # ── 5. VIGILAGENT POLICY SCAN (deterministic engine + SARIF fail gate) ──
+  # Runs the SAME deterministic engine the gateway uses over the workspace.
+  # Fails (blocking protected branches) only on confirmed high/critical
+  # findings; SARIF is uploaded to GitHub code scanning either way.
+  vigilagent-scan:
+    name: VigilAgent Policy Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run VigilAgent deterministic scan
+        run: |
+          go run ./cmd/cli scan --path . --sarif vigilagent.sarif --fail-on high,critical
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: vigilagent.sarif
+
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vigilagent-sarif
+          path: vigilagent.sarif
+          retention-days: 30

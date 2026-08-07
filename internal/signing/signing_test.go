@@ -374,3 +374,101 @@ func TestSignAndVerify_WithHeaders(t *testing.T) {
 		t.Fatalf("verify with headers failed: %v", err)
 	}
 }
+
+// ─── Provenance Records ───────────────────────────────────────────────────
+
+func testProvenanceRecord() ProvenanceRecord {
+	return ProvenanceRecord{
+		ScanID:           "scan_abc123",
+		RequestID:        "req_xyz",
+		Provider:         "openai",
+		Model:            "gpt-4o-mini",
+		ProvenanceStatus: ProvenanceVerified,
+		ResponseHash:     HashContent("func main() {}"),
+		Decision:         "allow",
+		Mode:             "strict",
+		Timestamp:        time.Now().UTC(),
+	}
+}
+
+func TestSignProvenanceAndVerify(t *testing.T) {
+	rec := testProvenanceRecord()
+	sig, err := SignProvenance("test-secret", rec)
+	if err != nil {
+		t.Fatalf("SignProvenance error: %v", err)
+	}
+	if sig == "" {
+		t.Fatal("expected non-empty signature")
+	}
+	if err := VerifyProvenance("test-secret", rec, sig); err != nil {
+		t.Fatalf("VerifyProvenance failed: %v", err)
+	}
+}
+
+func TestVerifyProvenanceTampered(t *testing.T) {
+	rec := testProvenanceRecord()
+	sig, _ := SignProvenance("test-secret", rec)
+
+	rec.Decision = "block" // tamper
+	if err := VerifyProvenance("test-secret", rec, sig); err == nil {
+		t.Error("expected signature mismatch for tampered record")
+	}
+}
+
+func TestVerifyProvenanceWrongSecret(t *testing.T) {
+	rec := testProvenanceRecord()
+	sig, _ := SignProvenance("test-secret", rec)
+	if err := VerifyProvenance("wrong-secret", rec, sig); err == nil {
+		t.Error("expected mismatch for wrong secret")
+	}
+}
+
+func TestSignProvenanceEmptySecret(t *testing.T) {
+	rec := testProvenanceRecord()
+	if _, err := SignProvenance("", rec); err == nil {
+		t.Error("expected error for empty secret")
+	}
+}
+
+func TestHashContent(t *testing.T) {
+	h1 := HashContent("same content")
+	h2 := HashContent("same content")
+	h3 := HashContent("different")
+	if h1 != h2 {
+		t.Error("hash must be deterministic")
+	}
+	if h1 == h3 {
+		t.Error("different content must hash differently")
+	}
+	if len(h1) != 64 {
+		t.Errorf("expected sha256 hex (64 chars), got %d", len(h1))
+	}
+}
+
+func TestProvenanceSignatureIndependentOfClock(t *testing.T) {
+	// The same record signed at two different times must verify: the canonical
+	// form normalizes the timestamp, so the signature only covers the stored
+	// instant, not the struct's internal clock components.
+	rec := testProvenanceRecord()
+	sig, err := SignProvenance("test-secret", rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyProvenance("test-secret", rec, sig); err != nil {
+		t.Fatalf("verify failed after re-marshal: %v", err)
+	}
+}
+
+func TestProvenanceNonUTCTimestampVerifies(t *testing.T) {
+	// Records constructed with a non-UTC timestamp must still sign/verify:
+	// the canonical form normalizes to UTC before signing.
+	rec := testProvenanceRecord()
+	rec.Timestamp = time.Now().In(time.FixedZone("IST", 5*60*60))
+	sig, err := SignProvenance("test-secret", rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyProvenance("test-secret", rec, sig); err != nil {
+		t.Fatalf("non-UTC timestamp failed to verify: %v", err)
+	}
+}

@@ -54,6 +54,19 @@ func mockBackend(t *testing.T) *httptest.Server {
 			"deterministic_findings": []interface{}{},
 			"final_output":           "func main() {}",
 			"summary":                "Review completed in 100ms.",
+			"suggestions": []interface{}{
+				map[string]interface{}{
+					"id":           "security:3:3",
+					"role":         "security",
+					"severity":     "critical",
+					"line_start":   3,
+					"line_end":     3,
+					"message":      "SQL injection: string concatenation with user input",
+					"replacement":  "rows, err := db.Query(ctx, sql, id)",
+					"confidence":   0.9,
+					"corroborated": true,
+				},
+			},
 		})
 	})
 
@@ -83,6 +96,56 @@ func mockBackend(t *testing.T) *httptest.Server {
 				"skills_extracted": 0.0,
 				"pipeline_passed":  true,
 			},
+		})
+	})
+
+	// Dual-engine analysis (used by analyze_code_security, analyze_design_security,
+	// validate_generated_diff).
+	mux.HandleFunc("/api/v1/deep-analyze", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": map[string]interface{}{
+				"grade":    "A",
+				"score":    95,
+				"findings": []interface{}{},
+				"engine_stats": map[string]interface{}{
+					"deterministic": map[string]interface{}{"findings_count": 0.0, "latency_ms": 1.0},
+					"llm":           map[string]interface{}{"findings_count": 0.0, "latency_ms": 2.0, "model": "gpt-4o-mini"},
+				},
+			},
+		})
+	})
+
+	// Gateway provenance/audit service endpoints.
+	mux.HandleFunc("/v1/provenance/verify", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"valid": true, "reason": ""})
+	})
+
+	mux.HandleFunc("/v1/provenance/attest", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"record": map[string]interface{}{
+				"scan_id":           "scan_mcp_1",
+				"provider":          "vigilagent-mcp",
+				"model":             "review-pipeline",
+				"decision":          "allow",
+				"provenance_status": "verified",
+				"response_hash":     "abc123",
+			},
+			"signature": "signed-hex",
 		})
 	})
 
@@ -242,6 +305,86 @@ func TestHandleConfidence(t *testing.T) {
 	}
 }
 
+func TestHandleSuggest(t *testing.T) {
+	backend := mockBackend(t)
+	defer backend.Close()
+	srv := NewServer(backend.URL, "va_test_key", "")
+
+	result, err := srv.handleSuggest(context.Background(), newTestRequest("vigil_suggest", map[string]interface{}{
+		"code":     "func main() {}",
+		"language": "go",
+	}))
+	if err != nil {
+		t.Fatalf("handleSuggest error: %v", err)
+	}
+
+	text := extractText(t, result)
+	if !strings.Contains(text, "Suggestions") {
+		t.Errorf("expected 'Suggestions' header, got: %s", text)
+	}
+	if !strings.Contains(text, "lines 3–3") {
+		t.Errorf("expected line range in output, got: %s", text)
+	}
+	if !strings.Contains(text, "SQL injection") {
+		t.Errorf("expected suggestion message in output, got: %s", text)
+	}
+}
+
+func TestHandleSuggestMissingCode(t *testing.T) {
+	srv := NewServer("http://localhost:9999", "va_test_key", "")
+	result, err := srv.handleSuggest(context.Background(), newTestRequest("vigil_suggest", map[string]interface{}{
+		"language": "go",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result for missing code")
+	}
+	text := extractText(t, result)
+	if !strings.Contains(text, "code is required") {
+		t.Errorf("expected 'code is required' error, got: %s", text)
+	}
+}
+
+func TestFormatSuggestionsSummary(t *testing.T) {
+	result := map[string]interface{}{
+		"confidence": map[string]interface{}{
+			"grade": "C", "confidence": 0.6,
+		},
+		"suggestions": []interface{}{
+			map[string]interface{}{
+				"id": "security:3:3", "role": "security", "severity": "critical",
+				"line_start": 3, "line_end": 3, "message": "SQL injection",
+				"replacement": "db.Query(ctx, sql, id)", "confidence": 0.9, "corroborated": true,
+			},
+			map[string]interface{}{
+				"id": "cost:9:9", "role": "cost", "severity": "low",
+				"line_start": 9, "line_end": 9, "message": "Over-provisioned",
+				"replacement": "", "confidence": 0.5, "corroborated": false,
+			},
+		},
+		"summary": "Review completed in 1s.",
+	}
+
+	summary := formatSuggestionsSummary(result)
+	for _, want := range []string{"Suggestions", "🔴", "SQL injection", "corroborated", "db.Query", "Over-provisioned"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary missing %q", want)
+		}
+	}
+}
+
+func TestFormatSuggestionsSummaryNoSuggestions(t *testing.T) {
+	summary := formatSuggestionsSummary(map[string]interface{}{
+		"confidence":  map[string]interface{}{"grade": "A", "confidence": 0.98},
+		"suggestions": []interface{}{},
+	})
+	if !strings.Contains(summary, "No suggestions") {
+		t.Errorf("expected 'No suggestions' message, got: %s", summary)
+	}
+}
+
 func TestHandleProcess(t *testing.T) {
 	backend := mockBackend(t)
 	defer backend.Close()
@@ -261,6 +404,207 @@ func TestHandleProcess(t *testing.T) {
 	json.Unmarshal([]byte(text), &parsed)
 	if parsed["description"] != "test" {
 		t.Errorf("expected description 'test', got %v", parsed["description"])
+	}
+}
+
+// ─── Spec-Named Tools (analyze_code_security, analyze_design_security, …) ──
+
+func TestHandleAnalyzeCodeSecurity(t *testing.T) {
+	backend := mockBackend(t)
+	defer backend.Close()
+	srv := NewServer(backend.URL, "va_test_key", "")
+
+	result, err := srv.handleDualEngine(context.Background(), newTestRequest("analyze_code_security", map[string]interface{}{
+		"code":     "func main() {}",
+		"language": "go",
+	}))
+	if err != nil {
+		t.Fatalf("analyze_code_security error: %v", err)
+	}
+	text := extractText(t, result)
+	if !strings.Contains(text, "Dual-Engine Analysis") {
+		t.Errorf("expected dual-engine header, got: %s", text)
+	}
+}
+
+func TestHandleAnalyzeDesignSecurity(t *testing.T) {
+	backend := mockBackend(t)
+	defer backend.Close()
+	srv := NewServer(backend.URL, "va_test_key", "")
+
+	result, err := srv.handleAnalyzeDesignSecurity(context.Background(), newTestRequest("analyze_design_security", map[string]interface{}{
+		"design": "Design an auth system with password: \"hunter2secret\"",
+	}))
+	if err != nil {
+		t.Fatalf("analyze_design_security error: %v", err)
+	}
+	text := extractText(t, result)
+	if !strings.Contains(text, "Dual-Engine Analysis") {
+		t.Errorf("expected dual-engine header, got: %s", text)
+	}
+}
+
+func TestHandleAnalyzeDesignSecurityMissingDesign(t *testing.T) {
+	srv := NewServer("http://localhost:9999", "va_test_key", "")
+	result, err := srv.handleAnalyzeDesignSecurity(context.Background(), newTestRequest("analyze_design_security", map[string]interface{}{}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result for missing design")
+	}
+}
+
+func TestHandleValidateGeneratedDiff(t *testing.T) {
+	backend := mockBackend(t)
+	defer backend.Close()
+	srv := NewServer(backend.URL, "va_test_key", "")
+
+	diff := "--- a/main.go\n+++ b/main.go\n@@ -1,3 +1,4 @@\n func main() {\n+    rows, err := db.Query(ctx, sql)\n+    if err != nil { panic(err) }\n }\n"
+	result, err := srv.handleValidateGeneratedDiff(context.Background(), newTestRequest("validate_generated_diff", map[string]interface{}{
+		"diff":     diff,
+		"language": "go",
+	}))
+	if err != nil {
+		t.Fatalf("validate_generated_diff error: %v", err)
+	}
+	text := extractText(t, result)
+	if !strings.Contains(text, "Dual-Engine Analysis") {
+		t.Errorf("expected dual-engine header, got: %s", text)
+	}
+}
+
+func TestHandleValidateGeneratedDiffNoAdditions(t *testing.T) {
+	backend := mockBackend(t)
+	defer backend.Close()
+	srv := NewServer(backend.URL, "va_test_key", "")
+
+	result, err := srv.handleValidateGeneratedDiff(context.Background(), newTestRequest("validate_generated_diff", map[string]interface{}{
+		"diff": "--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-func main() {}\n",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := extractText(t, result)
+	if !strings.Contains(text, "No added lines") {
+		t.Errorf("expected 'No added lines' message, got: %s", text)
+	}
+}
+
+func TestExtractAddedLinesFromDiff(t *testing.T) {
+	diff := "+++ b/main.go\n+good line\n-removed\n+another\n context\n"
+	added := extractAddedLinesFromDiff(diff)
+	if strings.Contains(added, "removed") {
+		t.Error("removed lines must not be included")
+	}
+	if !strings.Contains(added, "good line") || !strings.Contains(added, "another") {
+		t.Errorf("expected added lines, got: %q", added)
+	}
+}
+
+func TestHandleVerifyProvenance(t *testing.T) {
+	backend := mockBackend(t)
+	defer backend.Close()
+	srv := NewServer(backend.URL, "va_test_key", "")
+
+	result, err := srv.handleVerifyProvenance(context.Background(), newTestRequest("verify_provenance", map[string]interface{}{
+		"scan_id":   "scan_1",
+		"signature": "hexsig",
+	}))
+	if err != nil {
+		t.Fatalf("verify_provenance error: %v", err)
+	}
+	text := extractText(t, result)
+	if !strings.Contains(text, "verified") {
+		t.Errorf("expected verification success, got: %s", text)
+	}
+}
+
+func TestCallGatewayPrefersGatewayURL(t *testing.T) {
+	var gatewayHit atomic.Bool
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gatewayHit.Store(true)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"valid": true, "reason": ""})
+	}))
+	defer gateway.Close()
+
+	backend := mockBackend(t)
+	defer backend.Close()
+
+	srv := NewServer(backend.URL, "va_test_key", "")
+	srv.SetGatewayURL(gateway.URL)
+	_, err := srv.handleVerifyProvenance(context.Background(), newTestRequest("verify_provenance", map[string]interface{}{
+		"scan_id":   "scan_1",
+		"signature": "sig",
+	}))
+	if err != nil {
+		t.Fatalf("verify_provenance error: %v", err)
+	}
+	if !gatewayHit.Load() {
+		t.Error("expected the gateway URL to receive the provenance call")
+	}
+}
+
+func TestHandleVerifyProvenanceMissingArgs(t *testing.T) {
+	srv := NewServer("http://localhost:9999", "va_test_key", "")
+	result, err := srv.handleVerifyProvenance(context.Background(), newTestRequest("verify_provenance", map[string]interface{}{
+		"scan_id": "scan_1",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result for missing signature")
+	}
+}
+
+func TestHandleCreateScanAttestation(t *testing.T) {
+	backend := mockBackend(t)
+	defer backend.Close()
+	srv := NewServer(backend.URL, "va_test_key", "")
+
+	result, err := srv.handleCreateScanAttestation(context.Background(), newTestRequest("create_scan_attestation", map[string]interface{}{
+		"code":     "func main() {}",
+		"language": "go",
+	}))
+	if err != nil {
+		t.Fatalf("create_scan_attestation error: %v", err)
+	}
+	text := extractText(t, result)
+	if !strings.Contains(text, "scan_id") || !strings.Contains(text, "signature") {
+		t.Errorf("expected signed record in output, got: %s", text)
+	}
+}
+
+func TestHandleCreateScanAttestationMissingCode(t *testing.T) {
+	srv := NewServer("http://localhost:9999", "va_test_key", "")
+	result, err := srv.handleCreateScanAttestation(context.Background(), newTestRequest("create_scan_attestation", map[string]interface{}{
+		"language": "go",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result for missing code")
+	}
+}
+
+func TestDeriveAttestationDecision(t *testing.T) {
+	grade := func(g string) map[string]interface{} {
+		return map[string]interface{}{"confidence": map[string]interface{}{"grade": g}}
+	}
+	if got := deriveAttestationDecision(grade("A")); got != "allow" {
+		t.Errorf("A → allow, got %s", got)
+	}
+	if got := deriveAttestationDecision(grade("C")); got != "allow_with_notice" {
+		t.Errorf("C → allow_with_notice, got %s", got)
+	}
+	if got := deriveAttestationDecision(grade("F")); got != "hold_for_review" {
+		t.Errorf("F → hold_for_review, got %s", got)
+	}
+	if got := deriveAttestationDecision(map[string]interface{}{}); got != "hold_for_review" {
+		t.Errorf("missing grade → hold_for_review, got %s", got)
 	}
 }
 

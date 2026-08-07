@@ -8,7 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vigilagent/vigilagent/internal/llm"
+	"github.com/vigilagent/vigilagent/internal/signing"
 )
 
 // priceTableMu protects concurrent read-modify-write cycles on the global PriceTable.
@@ -31,6 +35,14 @@ type Config struct {
 	// Empty falls back to APIKey. If both are empty, the proxy rejects all
 	// requests (fail closed — no open-proxy mode).
 	AllowedAPIKeys string
+	// ProvenanceSecret signs the per-scan provenance/audit records (HMAC-SHA256).
+	// Falls back to APIKey, then a dev-only constant. Never exposed to clients.
+	ProvenanceSecret string
+	// AllowedModels is a comma-separated allowlist of model names/globs the
+	// gateway will serve (e.g. "gpt-4o*,claude-3*"). Empty = allow all.
+	AllowedModels string
+	// PerKeyDailyQuota caps requests per authenticated key (0 = unlimited).
+	PerKeyDailyQuota int
 	// TLS
 	TLSCertFile string
 	TLSKeyFile  string
@@ -62,6 +74,12 @@ type ProxyServer struct {
 	allowedKeys map[string]struct{}
 	// Shared response cache for all requests
 	sharedCache *llm.InMemoryCache
+	// Signed provenance/audit records for scan decisions (bounded in-memory ring).
+	provenance       *provenanceStore
+	provenanceSecret string
+	// Decision counters for the /metrics dashboard (verdict:policy → count).
+	decisionMu    sync.Mutex
+	decisionCount map[string]uint64
 }
 
 // KeyUsage tracks per-key usage metrics.
@@ -81,7 +99,9 @@ func NewServer(cfg Config) *ProxyServer {
 		client:      &http.Client{Timeout: 120 * time.Second},
 		usageByKey:  make(map[string]*KeyUsage),
 		allowedKeys: resolveAllowedKeys(cfg),
-		sharedCache: llm.NewInMemoryCache(5 * time.Minute),
+		sharedCache: llm.NewInMemoryCache(5 * time.Minute), provenance: newProvenanceStore(1000),
+		provenanceSecret: resolveProvenanceSecret(cfg),
+		decisionCount:    make(map[string]uint64),
 	}
 	s.setupMiddleware()
 	s.routes()
@@ -260,6 +280,12 @@ func (s *ProxyServer) routes() {
 	s.router.Get("/v1/usage", s.handleUsage)
 	s.router.Post("/v1/chat/completions", s.handleChatCompletions)
 	s.router.Post("/v1/messages", s.handleMessages)
+	// OpenAI Responses API surface (spec: POST /v1/responses)
+	s.router.Post("/v1/responses", s.handleResponses)
+	// Provenance / audit service
+	s.router.Get("/v1/provenance", s.handleProvenanceGet)
+	s.router.Post("/v1/provenance/verify", s.handleProvenanceVerify)
+	s.router.Post("/v1/provenance/attest", s.handleProvenanceAttest)
 	// Provider catalog endpoints
 	s.router.Get("/v1/providers", s.handleListProviders)
 	s.router.Get("/v1/providers/{providerID}/models", s.handleProviderModels)
@@ -308,6 +334,15 @@ func (s *ProxyServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	keyCount := len(s.usageByKey)
 	s.usageMu.RUnlock()
 
+	s.decisionMu.Lock()
+	decisionBreakdown := make(map[string]uint64, len(s.decisionCount))
+	var totalDecisions uint64
+	for k, v := range s.decisionCount {
+		decisionBreakdown[k] = v
+		totalDecisions += v
+	}
+	s.decisionMu.Unlock()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"requests_total": atomic.LoadUint64(&s.reqCount),
@@ -317,6 +352,10 @@ func (s *ProxyServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		"healthy":        true,
 		"service":        "vigilagent-proxy",
 		"timestamp":      time.Now().Unix(),
+		"decisions": map[string]interface{}{
+			"count":             totalDecisions,
+			"by_verdict_policy": decisionBreakdown,
+		},
 		"usage": map[string]interface{}{
 			"tracked_keys":   keyCount,
 			"total_requests": totalRequests,
@@ -470,6 +509,18 @@ func (s *ProxyServer) handleProxyRequest(w http.ResponseWriter, r *http.Request,
 		req.Model = llmModel
 	}
 
+	// ── Tenant policy checks (before any provider call) ──
+	// Per-tenant model allowlist and per-key quota are enforced before routing
+	// so unauthorized models/quotas never burn provider spend.
+	if !s.modelAllowed(req.Model) {
+		http.Error(w, `{"error":"model not allowed by tenant policy"}`, http.StatusForbidden)
+		return
+	}
+	if s.cfg.PerKeyDailyQuota > 0 && s.usageCount(getAPIKey(r.Context())) >= uint64(s.cfg.PerKeyDailyQuota) {
+		http.Error(w, `{"error":"daily request quota exceeded"}`, http.StatusTooManyRequests)
+		return
+	}
+
 	// Build per-request ModelRouter with BYOK if provided, else use backend keys
 	modelRouter := s.buildRouter(llmKey, llmProvider)
 
@@ -480,8 +531,8 @@ func (s *ProxyServer) handleProxyRequest(w http.ResponseWriter, r *http.Request,
 	if req.Model != "" {
 		priceTableMu.Lock()
 		providerID := resolveProviderID(llmKey, llmProvider)
-		if llmKey == "" && (strings.Contains(req.Model, "/") || strings.HasSuffix(req.Model, ":free")) && s.cfg.OpenRouterKey != "" {
-			providerID = llm.ProviderOpenRouter
+		if llmKey == "" {
+			providerID = inferProviderFromModel(req.Model, s.cfg)
 		}
 		existing := llm.AllPrices()
 		existing[req.Model] = llm.ModelInfo{
@@ -508,6 +559,22 @@ func (s *ProxyServer) handleProxyRequest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	// ── Design-stage gate: scan the request BEFORE generation ──
+	// If the prompt/design itself carries risks (hardcoded secrets, embedded
+	// commands, raw SQL built from user input), append policy-mandated secure
+	// constraints to the provider request. The LLM does not decide whether a
+	// security requirement is mandatory — the policy engine does.
+	mode := EnforcementMode(analysisMode)
+	if mode == "" {
+		mode = ModeObserve
+	}
+	designFindings, constrained := s.applyDesignGate(task)
+	if constrained {
+		w.Header().Set("X-VigilAgent-Design-Gate", "constrained")
+	} else if mode != ModePassthrough {
+		w.Header().Set("X-VigilAgent-Design-Gate", "passed")
+	}
+
 	resp, err := modelRouter.ExecuteWithFailover(r.Context(), task)
 	if err != nil {
 		slog.Error("model router execution failed", "error", err)
@@ -522,48 +589,59 @@ func (s *ProxyServer) handleProxyRequest(w http.ResponseWriter, r *http.Request,
 
 	// ── Extract and analyze code blocks (DUAL-ENGINE PARALLEL ANALYSIS) ──
 	content := resp.Content
-	blocks := ExtractCodeBlocks(content)
 
-	if analysisMode != "passthrough" && len(blocks) > 0 {
-		// Run dual-engine analysis on ALL code blocks in parallel
-		var allFindings []Finding
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-
-		for _, block := range blocks {
-			wg.Add(1)
-			go func(b CodeBlock) {
-				defer wg.Done()
-				result := AnalyzeWithDualEngine(
-					r.Context(),
-					modelRouter,
-					s.cfg.BackendURL,
-					s.cfg.APIKey,
-					llmKey,
-					b.Code,
-					b.Language,
-				)
-				if result != nil && len(result.Findings) > 0 {
-					mu.Lock()
-					allFindings = append(allFindings, result.Findings...)
-					mu.Unlock()
-				}
-			}(block)
-		}
-		wg.Wait()
-
-		// Build summary from merged findings
-		if len(allFindings) > 0 {
-			uniqueFindings := DeduplicateFindings(allFindings)
-			score, grade := CalculateScore(uniqueFindings)
-			corroborated := 0
-			for _, f := range uniqueFindings {
-				if strings.Contains(f.RuleID, "+llm") {
-					corroborated++
-				}
+	// Analysis outcome (advisory verdict) exposed via headers + body metadata.
+	// The policy decision is derived from the verdict under the requested mode
+	// (observe | balanced | strict) — see ComputePolicy.
+	var analysisOutcome *AnalysisOutcome
+	var analyzedFindings []Finding
+	if mode != ModePassthrough {
+		outcome, findings, summary, _ := s.analyzeAndVerdict(r.Context(), modelRouter, llmKey, content)
+		if outcome != nil {
+			outcome.Policy = ComputePolicy(*outcome, mode)
+			analysisOutcome = outcome
+			analyzedFindings = findings
+			if summary != "" {
+				resp.Content += "\n\n" + summary
 			}
-			summary := BuildSummary(uniqueFindings, score, grade, corroborated)
-			resp.Content += "\n\n" + summary
+		}
+	}
+
+	// ── Policy enforcement ──
+	// strict: block → nothing is released (HTTP 451). balanced: hold_for_review
+	// → prose passes, code blocks are withheld for human review. observe:
+	// advisory only (the verdict is carried in headers/metadata, never enforced).
+	var provenanceRec signing.ProvenanceRecord
+	var provenanceSig string
+	if analysisOutcome != nil {
+		s.recordDecision(analysisOutcome.Verdict, analysisOutcome.Policy)
+		provenanceRec, provenanceSig = s.recordProvenance(r, resp.Provider, resp.Model, analysisOutcome.Policy, mode, content, "")
+		analysisOutcome.ScanID = provenanceRec.ScanID
+
+		release, status, reason := enforcePolicy(analysisOutcome.Policy, mode)
+		if !release {
+			// Strict mode: no output is released until the scan policy allows it.
+			applyAnalysisHeaders(w, *analysisOutcome)
+			w.Header().Set("X-VigilAgent-Policy", string(analysisOutcome.Policy))
+			w.Header().Set("X-VigilAgent-Scan-ID", provenanceRec.ScanID)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":      reason,
+				"decision":   analysisOutcome.Policy,
+				"verdict":    analysisOutcome.Verdict,
+				"grade":      analysisOutcome.Grade,
+				"score":      analysisOutcome.Score,
+				"scan_id":    provenanceRec.ScanID,
+				"findings":   analyzedFindings,
+				"provenance": map[string]interface{}{"record": provenanceRec, "signature": provenanceSig},
+			})
+			return
+		}
+		if analysisOutcome.Policy == PolicyHoldForReview && mode == ModeBalanced {
+			// Balanced mode: explanatory text flows, code blocks are withheld
+			// until a human reviews and approves them.
+			resp.Content = redactCodeBlocks(resp.Content)
 		}
 	}
 
@@ -596,9 +674,92 @@ func (s *ProxyServer) handleProxyRequest(w http.ResponseWriter, r *http.Request,
 	if resp.Cost > 0 {
 		w.Header().Set("X-VigilAgent-Cost", formatFloat(resp.Cost))
 	}
+	// Advisory verdict from the dual-engine analysis (headers must be set
+	// before WriteHeader).
+	if analysisOutcome != nil {
+		applyAnalysisHeaders(w, *analysisOutcome)
+		w.Header().Set("X-VigilAgent-Policy", string(analysisOutcome.Policy))
+		oResp["vigilagent"] = *analysisOutcome
+	}
+	if designFindings != nil {
+		oResp["design_gate"] = map[string]interface{}{
+			"status":              "constrained",
+			"findings":            len(designFindings),
+			"constraints_applied": true,
+		}
+	}
+	if provenanceRec.ScanID != "" {
+		w.Header().Set("X-VigilAgent-Scan-ID", provenanceRec.ScanID)
+		w.Header().Set("X-VigilAgent-Provenance", signing.ProvenanceVerified)
+		if provenanceSig != "" {
+			w.Header().Set("X-VigilAgent-Provenance-Signature", provenanceSig)
+		}
+		oResp["provenance"] = map[string]interface{}{"record": provenanceRec, "signature": provenanceSig}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(oResp)
+}
+
+// AnalysisOutcome is the advisory verdict computed from merged dual-engine
+// findings and exposed to clients via X-VigilAgent-* headers and the
+// "vigilagent" response metadata. It is purely advisory: the proxy never
+// blocks or alters traffic — the client (extension, MCP, curl) decides
+// whether and how to enforce it.
+type AnalysisOutcome struct {
+	Verdict             string         `json:"verdict"`        // pass | warn | block
+	Grade               string         `json:"grade"`          // A-F
+	Score               int            `json:"score"`          // 0-100
+	FindingsCount       int            `json:"findings_count"` // merged findings
+	Corroborated        int            `json:"corroborated"`   // found by both engines
+	Policy              PolicyDecision `json:"policy,omitempty"`
+	ScanID              string         `json:"scan_id,omitempty"`
+	ScannersUnavailable bool           `json:"scanners_unavailable,omitempty"`
+}
+
+// ComputeVerdict maps merged findings to an advisory verdict:
+//   - block: any critical or high severity issue
+//   - warn:  any medium issue, or the score dropped below 70
+//   - pass:  otherwise
+func ComputeVerdict(findings []Finding) AnalysisOutcome {
+	score, grade := CalculateScore(findings)
+	corroborated := 0
+	hasCriticalOrHigh := false
+	hasMedium := false
+	for _, f := range findings {
+		switch f.Severity {
+		case "critical", "high":
+			hasCriticalOrHigh = true
+		case "medium":
+			hasMedium = true
+		}
+		if strings.Contains(f.RuleID, "+llm") {
+			corroborated++
+		}
+	}
+	verdict := "pass"
+	switch {
+	case hasCriticalOrHigh:
+		verdict = "block"
+	case hasMedium || score < 70:
+		verdict = "warn"
+	}
+	return AnalysisOutcome{
+		Verdict:       verdict,
+		Grade:         grade,
+		Score:         score,
+		FindingsCount: len(findings),
+		Corroborated:  corroborated,
+	}
+}
+
+// applyAnalysisHeaders writes the advisory verdict headers for a response.
+func applyAnalysisHeaders(w http.ResponseWriter, o AnalysisOutcome) {
+	w.Header().Set("X-VigilAgent-Verdict", o.Verdict)
+	w.Header().Set("X-VigilAgent-Grade", o.Grade)
+	w.Header().Set("X-VigilAgent-Score", strconv.Itoa(o.Score))
+	w.Header().Set("X-VigilAgent-Findings", strconv.Itoa(o.FindingsCount))
+	w.Header().Set("X-VigilAgent-Corroborated", strconv.Itoa(o.Corroborated))
 }
 
 // buildTask creates an llm.Task from the request body.
@@ -689,6 +850,51 @@ func (s *ProxyServer) buildRouter(llmKey, hintProvider string) *llm.ModelRouter 
 	}
 
 	return router
+}
+
+// inferProviderFromModel determines the provider from the model name and available keys.
+func inferProviderFromModel(model string, cfg Config) llm.ProviderID {
+	if cfg.OpenRouterKey != "" && (strings.Contains(model, "/") || strings.HasSuffix(model, ":free")) {
+		return llm.ProviderOpenRouter
+	}
+	switch {
+	case strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o1-") || strings.HasPrefix(model, "o3-") || strings.HasPrefix(model, "o4-") || strings.HasPrefix(model, "gpt-4.5"):
+		return llm.ProviderOpenAI
+	case strings.HasPrefix(model, "claude-"):
+		return llm.ProviderAnthropic
+	case strings.HasPrefix(model, "gemini-"):
+		return llm.ProviderGemini
+	case strings.HasPrefix(model, "llama-") || strings.HasPrefix(model, "mixtral-") || strings.HasPrefix(model, "gemma"):
+		if cfg.GroqKey != "" {
+			return llm.ProviderGroq
+		}
+		if cfg.NVIDIAKey != "" {
+			return llm.ProviderNVIDIANIM
+		}
+		return llm.ProviderGroq
+	case strings.HasPrefix(model, "mistral") || strings.HasPrefix(model, "open-mixtral") || strings.HasPrefix(model, "codestral") || strings.HasPrefix(model, "pixtral"):
+		return llm.ProviderMistral
+	case strings.HasPrefix(model, "command"):
+		return llm.ProviderCohere
+	case strings.HasPrefix(model, "nvidia/") || strings.HasPrefix(model, "meta/") || strings.HasPrefix(model, "mistralai/") || strings.HasPrefix(model, "moonshotai/") || strings.HasPrefix(model, "qwen/") || strings.HasPrefix(model, "deepseek-ai/"):
+		return llm.ProviderNVIDIANIM
+	case strings.HasPrefix(model, "deepseek-") || strings.HasPrefix(model, "kimi-"):
+		if cfg.NVIDIAKey != "" {
+			return llm.ProviderNVIDIANIM
+		}
+		return llm.ProviderDeepSeek
+	default:
+		if cfg.NVIDIAKey != "" {
+			return llm.ProviderNVIDIANIM
+		}
+		if cfg.OpenAIKey != "" {
+			return llm.ProviderOpenAI
+		}
+		if cfg.AnthropicKey != "" {
+			return llm.ProviderAnthropic
+		}
+		return llm.ProviderOpenAI
+	}
 }
 
 // resolveProviderID determines the provider from the API key prefix or hint.
@@ -805,6 +1011,44 @@ func getAPIKey(ctx context.Context) string {
 	return ""
 }
 
+// usageCount returns the recorded request count for a key.
+func (s *ProxyServer) usageCount(apiKey string) uint64 {
+	s.usageMu.RLock()
+	defer s.usageMu.RUnlock()
+	if u, ok := s.usageByKey[apiKey]; ok {
+		return u.RequestCount
+	}
+	return 0
+}
+
+// modelAllowed enforces the per-tenant model allowlist: exact match or prefix
+// glob (e.g. "gpt-4o*"), comma-separated. Empty allowlist = allow all.
+func (s *ProxyServer) modelAllowed(model string) bool {
+	if s.cfg.AllowedModels == "" || model == "" {
+		return true
+	}
+	for _, pat := range strings.Split(s.cfg.AllowedModels, ",") {
+		pat = strings.TrimSpace(pat)
+		if pat == "" {
+			continue
+		}
+		if pat == "*" || pat == model {
+			return true
+		}
+		if strings.HasSuffix(pat, "*") && strings.HasPrefix(model, strings.TrimSuffix(pat, "*")) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordDecision counts verdict+policy outcomes for the /metrics dashboard.
+func (s *ProxyServer) recordDecision(verdict string, policy PolicyDecision) {
+	s.decisionMu.Lock()
+	defer s.decisionMu.Unlock()
+	s.decisionCount[verdict+":"+string(policy)]++
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ANALYSIS ENDPOINTS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -874,4 +1118,543 @@ func (s *ProxyServer) handleDeepAnalyze(w http.ResponseWriter, r *http.Request) 
 		"model":     req.Model,
 		"timestamp": time.Now().Unix(),
 	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POLICY ENGINE
+//
+// The gateway's policy decision engine. The advisory verdict (pass/warn/block)
+// is derived from severity + confidence; the policy DECISION is derived from
+// the verdict under the requested enforcement mode. Decisions follow the
+// spec's contract: allow | allow_with_notice | require_acknowledgement |
+// hold_for_review | block | scanner_unavailable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// PolicyDecision is the release decision for a scanned generation.
+type PolicyDecision string
+
+const (
+	PolicyAllow           PolicyDecision = "allow"
+	PolicyAllowWithNotice PolicyDecision = "allow_with_notice"
+	PolicyRequireAck      PolicyDecision = "require_acknowledgement"
+	PolicyHoldForReview   PolicyDecision = "hold_for_review"
+	PolicyBlock           PolicyDecision = "block"
+	// PolicyScannerUnavailable is reserved for the fail-closed/fail-open
+	// decision on scanner outages, which the spec defers to per-tenant policy
+	// (Phase 3). Phase 1 always emits one of the decisions above.
+	PolicyScannerUnavailable PolicyDecision = "scanner_unavailable"
+)
+
+// EnforcementMode selects how strictly the policy is applied.
+type EnforcementMode string
+
+const (
+	// ModeObserve reports the verdict/policy but never restricts output. Use
+	// for pilots and evaluation only (spec: "not enforcement").
+	ModeObserve EnforcementMode = "observe"
+	// ModeBalanced lets explanatory text flow, but code blocks/patches from a
+	// held review are withheld until a human approves them.
+	ModeBalanced EnforcementMode = "balanced"
+	// ModeStrict releases nothing until the scan policy produces an allow
+	// decision. Blocked generations return HTTP 451 with the evidence.
+	ModeStrict EnforcementMode = "strict"
+	// ModePassthrough skips analysis entirely (opt-out; audit trail omitted).
+	ModePassthrough EnforcementMode = "passthrough"
+)
+
+// ComputePolicy maps the advisory verdict to a policy decision under a mode.
+//
+//	observe:  pass→allow, warn→allow_with_notice, block→hold_for_review (advisory)
+//	balanced: pass→allow, warn→allow_with_notice, block→hold_for_review (code withheld)
+//	strict:   pass→allow, warn→require_acknowledgement, block→block (nothing
+//	          released; a warning is only released with an explicit
+//	          acknowledgement in the client), scanners down→scanner_unavailable
+func ComputePolicy(o AnalysisOutcome, mode EnforcementMode) PolicyDecision {
+	if mode == ModePassthrough {
+		return PolicyAllow
+	}
+	if o.ScannersUnavailable && mode == ModeStrict {
+		// Fail closed: no output is released when the scanners could not run.
+		return PolicyScannerUnavailable
+	}
+	switch o.Verdict {
+	case "block":
+		if mode == ModeStrict {
+			return PolicyBlock
+		}
+		return PolicyHoldForReview
+	case "warn":
+		if mode == ModeStrict {
+			return PolicyRequireAck
+		}
+		return PolicyAllowWithNotice
+	default:
+		return PolicyAllow
+	}
+}
+
+// enforcePolicy decides whether content may be released and, when it may not,
+// the HTTP status and reason for the block. Strict-mode blocks return HTTP 451
+// (unavailable for legal reasons — the spec's "not released") and scanner
+// outages fail closed with HTTP 503.
+func enforcePolicy(policy PolicyDecision, mode EnforcementMode) (release bool, status int, reason string) {
+	switch {
+	case policy == PolicyBlock && mode == ModeStrict:
+		return false, http.StatusUnavailableForLegalReasons, "blocked by VigilAgent policy: output withheld until the scan findings are resolved"
+	case policy == PolicyScannerUnavailable && mode == ModeStrict:
+		return false, http.StatusServiceUnavailable, "scanner unavailable: failing closed per policy — no output released"
+	default:
+		return true, 0, ""
+	}
+}
+
+// codeFenceRe matches fenced code blocks (```lang\n...\n```).
+var codeFenceRe = regexp.MustCompile("(?s)```[^`\n]*\n.*?```")
+
+// redactCodeBlocks replaces fenced code blocks with a withheld notice. Used by
+// balanced mode so prose flows but generated code is held for human review.
+func redactCodeBlocks(content string) string {
+	return codeFenceRe.ReplaceAllString(content, "[🛡️ code withheld by VigilAgent policy — review the scan findings before applying]")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DUAL-ENGINE ANALYSIS HELPER
+// ─────────────────────────────────────────────────────────────────────────────
+
+// analyzeAndVerdict runs dual-engine analysis on all code blocks in content and
+// returns the merged advisory outcome, the findings, a summary (empty when
+// nothing was found), and whether the LLM scanner degraded. outcome is nil when
+// there is no code to analyze. When the LLM engine fails on every block AND no
+// deterministic evidence exists, the outcome is marked scanners-unavailable so
+// strict mode can fail closed.
+func (s *ProxyServer) analyzeAndVerdict(ctx context.Context, modelRouter *llm.ModelRouter, llmKey, content string) (*AnalysisOutcome, []Finding, string, bool) {
+	blocks := ExtractCodeBlocks(content)
+	if len(blocks) == 0 {
+		return nil, nil, "", false
+	}
+
+	var allFindings []Finding
+	var llmErrCount int
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, block := range blocks {
+		wg.Add(1)
+		go func(b CodeBlock) {
+			defer wg.Done()
+			result := AnalyzeWithDualEngine(
+				ctx,
+				modelRouter,
+				s.cfg.BackendURL,
+				s.cfg.APIKey,
+				llmKey,
+				b.Code,
+				b.Language,
+			)
+			if result == nil {
+				return
+			}
+			mu.Lock()
+			if len(result.Findings) > 0 {
+				allFindings = append(allFindings, result.Findings...)
+			}
+			if result.EngineStats.LLM.Error != "" {
+				llmErrCount++
+			}
+			mu.Unlock()
+		}(block)
+	}
+	wg.Wait()
+
+	unique := DeduplicateFindings(allFindings)
+	outcome := ComputeVerdict(unique)
+	if llmErrCount >= len(blocks) && len(unique) == 0 {
+		outcome.ScannersUnavailable = true
+	}
+	summary := ""
+	if len(unique) > 0 {
+		summary = BuildSummary(unique, outcome.Score, outcome.Grade, outcome.Corroborated)
+	}
+	return &outcome, unique, summary, llmErrCount > 0
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVENANCE & AUDIT SERVICE
+// ─────────────────────────────────────────────────────────────────────────────
+
+// resolveProvenanceSecret picks the signing secret: explicit config → proxy API
+// key → dev-only constant. Records are always signed, never silently unsigned.
+func resolveProvenanceSecret(cfg Config) string {
+	if cfg.ProvenanceSecret != "" {
+		return cfg.ProvenanceSecret
+	}
+	if cfg.APIKey != "" {
+		return cfg.APIKey
+	}
+	return "vigilagent-dev-provenance-secret"
+}
+
+// provenanceStore is a bounded in-memory ring of signed provenance records.
+// Production deployments should back this with durable storage; the ring keeps
+// the gateway self-contained for local and manual testing.
+type provenanceStore struct {
+	mu      sync.RWMutex
+	records map[string]signing.ProvenanceRecord
+	sigs    map[string]string
+	order   []string
+	cap     int
+}
+
+func newProvenanceStore(capacity int) *provenanceStore {
+	return &provenanceStore{
+		records: make(map[string]signing.ProvenanceRecord),
+		sigs:    make(map[string]string),
+		cap:     capacity,
+	}
+}
+
+func (p *provenanceStore) put(rec signing.ProvenanceRecord, sig string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, exists := p.records[rec.ScanID]; !exists {
+		p.order = append(p.order, rec.ScanID)
+	}
+	p.records[rec.ScanID] = rec
+	p.sigs[rec.ScanID] = sig
+	for len(p.order) > p.cap {
+		oldest := p.order[0]
+		p.order = p.order[1:]
+		delete(p.records, oldest)
+		delete(p.sigs, oldest)
+	}
+}
+
+func (p *provenanceStore) get(scanID string) (signing.ProvenanceRecord, string, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	rec, ok := p.records[scanID]
+	if !ok {
+		return signing.ProvenanceRecord{}, "", false
+	}
+	return rec, p.sigs[scanID], true
+}
+
+// newScanID generates a unique scan identifier for provenance records.
+func newScanID(s *ProxyServer) string {
+	return fmt.Sprintf("scan_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&s.reqCount, 1))
+}
+
+// recordProvenance creates, signs, and stores the signed provenance record for
+// an analyzed response. The record anchors the exact scanned output (content
+// hash) and the policy decision, so any later tamper invalidates it. When
+// scanID is empty a new one is generated (streaming callers generate it up
+// front so the X-VigilAgent-Scan-ID header is available before the first byte).
+func (s *ProxyServer) recordProvenance(r *http.Request, provider, model string, decision PolicyDecision, mode EnforcementMode, content, scanID string) (signing.ProvenanceRecord, string) {
+	if scanID == "" {
+		scanID = newScanID(s)
+	}
+	rec := signing.ProvenanceRecord{
+		ScanID:           scanID,
+		RequestID:        middleware.GetReqID(r.Context()),
+		Provider:         provider,
+		Model:            model,
+		ClientType:       r.Header.Get("X-Client-Type"),
+		ClientVersion:    r.Header.Get("X-Client-Version"),
+		ProvenanceStatus: signing.ProvenanceVerified,
+		ResponseHash:     signing.HashContent(content),
+		Decision:         string(decision),
+		Mode:             string(mode),
+		Timestamp:        time.Now().UTC(),
+	}
+	sig, err := signing.SignProvenance(s.provenanceSecret, rec)
+	if err != nil {
+		slog.Warn("provenance signing failed", "error", err)
+		sig = ""
+	}
+	if s.provenance != nil {
+		s.provenance.put(rec, sig)
+	}
+	return rec, sig
+}
+
+// handleProvenanceGet returns a stored provenance record by scan ID.
+// GET /v1/provenance?scan_id=...
+func (s *ProxyServer) handleProvenanceGet(w http.ResponseWriter, r *http.Request) {
+	scanID := r.URL.Query().Get("scan_id")
+	if scanID == "" {
+		http.Error(w, `{"error":"scan_id query parameter is required"}`, http.StatusBadRequest)
+		return
+	}
+	rec, sig, ok := s.provenance.get(scanID)
+	if !ok {
+		http.Error(w, `{"error":"unknown scan_id"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"record": rec, "signature": sig})
+}
+
+// handleProvenanceVerify validates a provenance record's signature, either by
+// submitting the full record+signature or a stored scan_id+signature.
+// POST /v1/provenance/verify
+func (s *ProxyServer) handleProvenanceVerify(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ScanID    string                    `json:"scan_id"`
+		Signature string                    `json:"signature"`
+		Record    *signing.ProvenanceRecord `json:"record,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	valid := false
+	reason := ""
+	switch {
+	case body.Record != nil:
+		if err := signing.VerifyProvenance(s.provenanceSecret, *body.Record, body.Signature); err == nil {
+			valid = true
+		} else {
+			reason = err.Error()
+		}
+	case body.ScanID != "":
+		rec, sig, ok := s.provenance.get(body.ScanID)
+		if !ok {
+			reason = "unknown scan_id"
+		} else if sig == "" {
+			reason = "record was not signed"
+		} else if err := signing.VerifyProvenance(s.provenanceSecret, rec, body.Signature); err == nil {
+			valid = true
+		} else {
+			reason = err.Error()
+		}
+	default:
+		http.Error(w, `{"error":"provide scan_id+signature or a full record"}`, http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"valid": valid, "reason": reason})
+}
+
+// handleProvenanceAttest creates and signs a provenance record for content that
+// was scanned outside the streaming gateway flow (e.g. MCP attestations).
+// POST /v1/provenance/attest
+func (s *ProxyServer) handleProvenanceAttest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Provider      string `json:"provider"`
+		Model         string `json:"model"`
+		Decision      string `json:"decision"`
+		ResponseHash  string `json:"response_hash"`
+		ClientType    string `json:"client_type,omitempty"`
+		ClientVersion string `json:"client_version,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Decision == "" || body.ResponseHash == "" {
+		http.Error(w, `{"error":"decision and response_hash are required"}`, http.StatusBadRequest)
+		return
+	}
+	rec := signing.ProvenanceRecord{
+		ScanID:           newScanID(s),
+		RequestID:        middleware.GetReqID(r.Context()),
+		Provider:         body.Provider,
+		Model:            body.Model,
+		ClientType:       body.ClientType,
+		ClientVersion:    body.ClientVersion,
+		ProvenanceStatus: signing.ProvenanceVerified,
+		ResponseHash:     body.ResponseHash,
+		Decision:         body.Decision,
+		Timestamp:        time.Now().UTC(),
+	}
+	sig, err := signing.SignProvenance(s.provenanceSecret, rec)
+	if err != nil {
+		slog.Warn("provenance signing failed", "error", err)
+		sig = ""
+	}
+	s.provenance.put(rec, sig)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"record": rec, "signature": sig})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DESIGN-STAGE GATE
+// ─────────────────────────────────────────────────────────────────────────────
+
+// applyDesignGate scans the last user message (prompt / design document) with
+// the deterministic engine BEFORE generation. When the design itself carries
+// risks (hardcoded secrets, embedded commands, raw user-input SQL), policy-
+// mandated secure constraints are appended to the provider request. The model
+// does not get to decide whether a security requirement is mandatory — the
+// policy engine does.
+func (s *ProxyServer) applyDesignGate(task *llm.Task) ([]Finding, bool) {
+	if task == nil || len(task.Messages) == 0 {
+		return nil, false
+	}
+	last := task.Messages[len(task.Messages)-1]
+	if last.Role != "user" {
+		return nil, false
+	}
+	findings := (&DualEngineAnalyzer{}).localDeterministicScan(last.Content, "design")
+	if len(findings) == 0 {
+		return nil, false
+	}
+	var b strings.Builder
+	b.WriteString("SECURE DESIGN CONSTRAINTS — policy-mandated by the design-stage scan of your request. ")
+	b.WriteString("These requirements are NOT optional suggestions; the policy engine requires them. ")
+	b.WriteString("Incorporate ALL of the following into your design and output:\n")
+	for _, f := range findings {
+		fix := f.Fix
+		if fix == "" {
+			fix = "address this requirement"
+		}
+		fmt.Fprintf(&b, "- [%s] %s Required fix: %s\n", strings.ToUpper(f.Severity), f.Message, fix)
+	}
+	task.Messages = append(task.Messages, llm.Message{Role: "system", Content: b.String()})
+	return findings, true
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OPENAI RESPONSES API (POST /v1/responses)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// handleResponses implements the OpenAI Responses API surface on top of the
+// same scan-and-release pipeline as /v1/chat/completions. Non-streaming for
+// now; streaming callers should use chat completions.
+func (s *ProxyServer) handleResponses(w http.ResponseWriter, r *http.Request) {
+	const maxRequestBodySize = 10 << 20
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBodySize+1))
+	if err != nil {
+		http.Error(w, `{"error":"failed to read request body"}`, http.StatusBadRequest)
+		return
+	}
+	if len(bodyBytes) > maxRequestBodySize {
+		http.Error(w, `{"error":"request body too large (max 10MB)"}`, http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	var req struct {
+		Model  string          `json:"model"`
+		Stream bool            `json:"stream"`
+		Input  json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Stream {
+		s.handleResponsesStream(w, r, bodyBytes, req.Model, req.Input)
+		return
+	}
+	messages, err := parseResponsesInput(req.Input)
+	if err != nil {
+		http.Error(w, `{"error":"invalid input: must be a string or an array of {role, content} messages"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Reuse the exact chat-completions pipeline by translating the request,
+	// then re-shape the response into the Responses API contract.
+	chatBody, _ := json.Marshal(map[string]interface{}{"model": req.Model, "stream": false, "messages": messages})
+	clone := r.Clone(r.Context())
+	clone.Body = io.NopCloser(bytes.NewReader(chatBody))
+	rec := httptest.NewRecorder()
+	s.handleProxyRequest(rec, clone, "openai")
+
+	// Copy the VigilAgent verdict/provenance headers through.
+	for k, vals := range rec.Header() {
+		if strings.HasPrefix(strings.ToLower(k), "x-vigilagent-") {
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	if rec.Code != http.StatusOK {
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+		return
+	}
+
+	var chat map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &chat); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"failed to translate gateway response"}`))
+		return
+	}
+
+	content := ""
+	if choices, ok := chat["choices"].([]interface{}); ok && len(choices) > 0 {
+		if c0, ok := choices[0].(map[string]interface{}); ok {
+			if msg, ok := c0["message"].(map[string]interface{}); ok {
+				content, _ = msg["content"].(string)
+			}
+		}
+	}
+
+	usage := map[string]interface{}{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+	if u, ok := chat["usage"].(map[string]interface{}); ok {
+		usage = map[string]interface{}{
+			"input_tokens":  u["prompt_tokens"],
+			"output_tokens": u["completion_tokens"],
+			"total_tokens":  u["total_tokens"],
+		}
+	}
+
+	respObj := map[string]interface{}{
+		"id":         chat["id"],
+		"object":     "response",
+		"created_at": chat["created"],
+		"model":      chat["model"],
+		"status":     "completed", "output": []map[string]interface{}{
+			{
+				"id":     "msg_" + strings.TrimPrefix(fmt.Sprintf("%v", chat["id"]), "chatcmpl-vigil-"),
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]interface{}{
+					{"type": "output_text", "text": content, "annotations": []interface{}{}},
+				},
+			}},
+		"usage": usage,
+	}
+	if vg, ok := chat["vigilagent"]; ok {
+		respObj["vigilagent"] = vg
+	}
+	if dg, ok := chat["design_gate"]; ok {
+		respObj["design_gate"] = dg
+	}
+	if p, ok := chat["provenance"].(map[string]interface{}); ok {
+		respObj["provenance"] = p
+	}
+	json.NewEncoder(w).Encode(respObj)
+}
+
+// parseResponsesInput converts the OpenAI Responses API `input` field (a string
+// or an array of {role, content} messages) into the canonical message list.
+func parseResponsesInput(input json.RawMessage) ([]llm.Message, error) {
+	if len(input) == 0 {
+		return nil, fmt.Errorf("empty input")
+	}
+	var asString string
+	if err := json.Unmarshal(input, &asString); err == nil {
+		return []llm.Message{{Role: "user", Content: asString}}, nil
+	}
+	var msgs []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(input, &msgs); err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		return nil, fmt.Errorf("empty input")
+	}
+	out := make([]llm.Message, len(msgs))
+	for i, m := range msgs {
+		out[i] = llm.Message{Role: m.Role, Content: m.Content}
+	}
+	return out, nil
 }

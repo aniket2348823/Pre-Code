@@ -24,6 +24,11 @@ func main() {
 	// Optional: user's LLM key for BYOK automation (e.g. CI/CD pipelines)
 	llmKey := os.Getenv("VIGILAGENT_LLM_KEY")
 
+	// Optional: Secure AI Gateway URL for the provenance/audit tools
+	// (verify_provenance, create_scan_attestation). When unset, those tools
+	// fall back to apiURL.
+	gatewayURL := os.Getenv("VIGILAGENT_GATEWAY_URL")
+
 	// Configure logging to stderr (stdout is reserved for MCP protocol)
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelWarn,
@@ -32,6 +37,9 @@ func main() {
 	slog.Info("starting VigilAgent MCP server", "api_url", apiURL)
 
 	server := vigilmcp.NewServer(apiURL, apiKey, llmKey)
+	if gatewayURL != "" {
+		server.SetGatewayURL(gatewayURL)
+	}
 	if err := server.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
 		os.Exit(1)

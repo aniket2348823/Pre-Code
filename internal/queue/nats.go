@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -19,6 +20,21 @@ type NATS struct {
 
 // NewNATS creates a new NATS connection and initializes JetStream.
 func NewNATS(cfg *config.NATSConfig) (*NATS, error) {
+	// Fail fast on bad config instead of relying on nats.Connect defaults:
+	// nats.Connect("") silently falls back to nats://127.0.0.1:4222 and, with
+	// RetryOnFailedConnect, never errors — an empty URL would silently talk to
+	// localhost. The same applies to a blank stream name, which JetStream
+	// would otherwise reject only at stream-creation time.
+	if cfg == nil {
+		return nil, fmt.Errorf("nats config is required")
+	}
+	if strings.TrimSpace(cfg.URL) == "" {
+		return nil, fmt.Errorf("nats url is required")
+	}
+	if strings.TrimSpace(cfg.Stream) == "" {
+		return nil, fmt.Errorf("nats stream name is required")
+	}
+
 	nc, err := nats.Connect(cfg.URL,
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(10),

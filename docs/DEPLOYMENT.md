@@ -601,3 +601,52 @@ If you see `too many connections` errors:
 1. Increase `DB_MAX_OPEN_CONNS`
 2. Decrease `DB_MAX_LIFETIME` to recycle connections faster
 3. Check for connection leaks using `DB_SLOW_QUERY_THRESHOLD` logging
+
+## Managed Egress — Plane 2 (policy enforcement at the network layer)
+
+The gateway only *guarantees* scanning for traffic that routes through it
+(Plane 1). For enterprise deployments, Plane 2 forces that routing by policy:
+
+### What to block (from developer devices and CI runners)
+
+Block direct outbound access to approved AI provider APIs **except through the
+gateway**. Use identity-aware egress controls (firewall / DNS / proxy):
+
+| Provider | Endpoints to allow ONLY via gateway egress IP |
+|---|---|
+| OpenAI | `api.openai.com` (`*.openai.com`)
+| Anthropic | `api.anthropic.com`
+| Google Gemini | `generativelanguage.googleapis.com`
+| Groq | `api.groq.com`
+| Mistral | `api.mistral.ai`
+| Cohere | `api.cohere.com`
+| NVIDIA NIM | `build.nvidia.com`
+| OpenRouter | `openrouter.ai`
+
+Implementation notes:
+- Use **identity-aware** egress (e.g. Google BeyondCorp / AWS Network Firewall /
+  a forward proxy with mTLS) so rules follow users, not just IPs.
+- Route gateway egress through a dedicated, allowlisted egress IP.
+- **No transparent TLS inspection is required** for standard operation — the
+  gateway terminates TLS, so policy enforcement happens at the application
+  layer. Do NOT enable MITM interception; it needs legal approval, user
+  notice, enterprise certificates, and a documented exception process.
+- Provide an **exception process** for approved tools (e.g. a sandboxed
+  environment or a scoped temporary allowlist with an audit record).
+- Detect but **do not automatically label** every direct connection as
+  malicious — log it, alert on patterns, let policy decide.
+
+### CI enforcement (the final layer)
+
+Even when IDE/gateway traffic was bypassed, CI scans everything before merge:
+
+```bash
+# Scan the workspace with the deterministic engine; fail on high/critical
+# findings; write SARIF for GitHub code scanning.
+go run ./cmd/cli scan --path . --sarif vigilagent.sarif --fail-on high,critical
+```
+
+`.github/workflows/sast.yml` runs this on every push/PR (job
+`vigilagent-scan`) and uploads the SARIF report. The policy decision logic is
+identical to the gateway's (`internal/scanner` + `ComputePolicy` semantics) so
+CI and the gateway agree.

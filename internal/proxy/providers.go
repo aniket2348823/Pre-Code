@@ -60,8 +60,8 @@ func RouteRequest(model string, cfg *Config) *ProviderConfig {
 		return &ProviderConfig{Name: "gemini", BaseURL: "https://generativelanguage.googleapis.com", APIKey: cfg.GeminiKey}
 	case strings.HasSuffix(model, ":free") || (cfg.OpenRouterKey != "" && strings.Contains(model, "/")):
 		return &ProviderConfig{Name: "openrouter", BaseURL: "https://openrouter.ai/api", APIKey: cfg.OpenRouterKey}
-	case strings.HasPrefix(model, "kimi-") || strings.HasPrefix(model, "deepseek-") || strings.HasPrefix(model, "nvidia/") || strings.HasPrefix(model, "meta/") || strings.HasPrefix(model, "mistralai/") || strings.HasPrefix(model, "moonshotai/") || strings.HasPrefix(model, "qwen/"):
-		return &ProviderConfig{Name: "nvidia", BaseURL: "https://build.nvidia.com", APIKey: cfg.NVIDIAKey}
+	case strings.HasPrefix(model, "kimi-") || strings.HasPrefix(model, "deepseek-") || strings.HasPrefix(model, "nvidia/") || strings.HasPrefix(model, "meta/") || strings.HasPrefix(model, "mistralai/") || strings.HasPrefix(model, "moonshotai/") || strings.HasPrefix(model, "qwen/") || strings.HasPrefix(model, "deepseek-ai/"):
+		return &ProviderConfig{Name: "nvidia", BaseURL: "https://integrate.api.nvidia.com", APIKey: cfg.NVIDIAKey}
 	case strings.HasPrefix(model, "llama-") || strings.HasPrefix(model, "mixtral-") || strings.HasPrefix(model, "gemma"):
 		return &ProviderConfig{Name: "groq", BaseURL: "https://api.groq.com", APIKey: cfg.GroqKey}
 	case strings.HasPrefix(model, "mistral") || strings.HasPrefix(model, "open-mixtral") || strings.HasPrefix(model, "codestral") || strings.HasPrefix(model, "pixtral"):

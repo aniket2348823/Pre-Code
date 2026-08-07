@@ -1,8 +1,6 @@
 # NOTE: Local Postgres is for development only. Production uses Supabase.
 # To use Supabase: set VIGILAGENT_DATABASE_* vars in .env file.
 
-version: "3.8"
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -44,7 +42,7 @@ services:
     ports:
       - "127.0.0.1:4222:4222"
       - "127.0.0.1:8222:8222"
-    command: ["--jetstream", "--store_dir", "/data"]
+    command: ["--jetstream", "--store_dir", "/data", "-m", "8222"]
     volumes:
       - nats_data:/data
     healthcheck:

@@ -21,10 +21,33 @@
     "mcp"
   ],
   "activationEvents": [
-    "onChatParticipant:vigilagent"
+    "onChatParticipant:vigilagent",
+    "onView:vigilagentFindings",
+    "onCommand:vigilagent.refreshFindings",
+    "onCommand:vigilagent.clearFindings"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "vigilagent",
+        "name": "VigilAgent"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "vigilagentFindings",
+          "name": "Security Findings"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "vigilagentFindings",
+        "contents": "No scans yet.\n[Run Dual-Engine Analysis](command:vigilagent.dualEngine)\nScans from the gateway and all VigilAgent commands appear here, grouped by severity with provenance labels."
+      }
+    ],
     "chatParticipants": [
       {
         "id": "vigilagent",
@@ -44,12 +67,32 @@
         "title": "VigilAgent: Scan Current File"
       },
       {
+        "command": "vigilagent.scanChangedFiles",
+        "title": "VigilAgent: Scan Changed Files"
+      },
+      {
+        "command": "vigilagent.scanDesignDocument",
+        "title": "VigilAgent: Scan Design Document"
+      },
+      {
         "command": "vigilagent.verifySelection",
         "title": "VigilAgent: Verify Selected Code"
       },
       {
         "command": "vigilagent.dualEngine",
         "title": "VigilAgent: Dual-Engine Analysis"
+      },
+      {
+        "command": "vigilagent.dismissSuggestion",
+        "title": "VigilAgent: Dismiss Suggestion"
+      },
+      {
+        "command": "vigilagent.refreshFindings",
+        "title": "VigilAgent: Refresh Security Findings"
+      },
+      {
+        "command": "vigilagent.clearFindings",
+        "title": "VigilAgent: Clear Security Findings"
       }
     ],
     "configuration": {
@@ -59,6 +102,11 @@
           "type": "string",
           "default": "http://localhost:8080",
           "description": "VigilAgent backend URL"
+        },
+        "vigilagent.gatewayUrl": {
+          "type": "string",
+          "default": "http://localhost:9090",
+          "description": "VigilAgent Secure AI Gateway URL — chat models and the /v1/responses scan-and-release pipeline"
         },
         "vigilagent.defaultLanguage": {
           "type": "string",
@@ -87,7 +135,15 @@
         "vigilagent.llmProvider": {
           "type": "string",
           "default": "NVIDIA NIM",
-          "enum": ["NVIDIA NIM", "OpenAI", "Anthropic", "Google Gemini", "Mistral", "Groq", "Cohere"],
+          "enum": [
+            "NVIDIA NIM",
+            "OpenAI",
+            "Anthropic",
+            "Google Gemini",
+            "Mistral",
+            "Groq",
+            "Cohere"
+          ],
           "description": "LLM provider for the review pipeline"
         },
         "vigilagent.llmModel": {
@@ -104,6 +160,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
     "typecheck": "tsc --noEmit -p ./",
+    "test": "vitest run",
     "package": "vsce package",
     "publish:openvsx": "ovsx publish",
     "publish:marketplace": "vsce publish"
@@ -113,10 +170,11 @@
     "@types/vscode": "^1.100.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.0.0",
     "eslint": "^8.57.0",
     "ovsx": "^1.1.0",
-    "typescript": "^5.5.0"
-  },
-  "dependencies": {}
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.10"
+  }
 }

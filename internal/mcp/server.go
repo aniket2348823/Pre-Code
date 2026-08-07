@@ -21,15 +21,17 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/vigilagent/vigilagent/internal/signing"
 )
 
 // Server is the VigilAgent MCP server.
 type Server struct {
-	apiURL    string
-	apiKey    string
-	llmKey    string // optional: user's LLM key for BYOK via env var
-	client    *http.Client
-	mcpServer *server.MCPServer
+	apiURL     string
+	gatewayURL string // optional: separate gateway URL for /v1/provenance tools
+	apiKey     string
+	llmKey     string // optional: user's LLM key for BYOK via env var
+	client     *http.Client
+	mcpServer  *server.MCPServer
 }
 
 // NewServer creates a new VigilAgent MCP server.
@@ -44,6 +46,14 @@ func NewServer(apiURL, apiKey, llmKey string) *Server {
 	}
 	s.mcpServer = s.buildMCPServer()
 	return s
+}
+
+// SetGatewayURL points the provenance/audit tools (verify_provenance,
+// create_scan_attestation) at the Secure AI Gateway, which serves
+// /v1/provenance/*. When unset, those tools fall back to apiURL — which works
+// when the backend and gateway are co-located or for tests.
+func (s *Server) SetGatewayURL(url string) {
+	s.gatewayURL = url
 }
 
 // Run starts the MCP server on the stdio transport.
@@ -106,10 +116,10 @@ func (s *Server) buildMCPServer() *server.MCPServer {
 		s.handleScan,
 	)
 
-	// Tool 3: vigil_review — Run LLM reviewers only
+	// Tool 3: vigil_review — Run LLM reviewers only (all 5 roles, single call)
 	srv.AddTool(
 		mcp.NewTool("vigil_review",
-			mcp.WithDescription("Run VigilAgent's parallel specialized LLM reviewers on code. Returns verdicts from Security Architect, Staff Engineer, DevSecOps, Cloud Architect, and Red Team agents."),
+			mcp.WithDescription("Run VigilAgent's specialized LLM reviewers on code. All 5 reviewer roles (Security Architect, Staff Engineer, DevSecOps, Cloud Architect, Red Team) run in a SINGLE LLM call. Returns per-role verdicts."),
 			mcp.WithString("code",
 				mcp.Required(),
 				mcp.Description("The source code to review"),
@@ -204,8 +214,143 @@ func (s *Server) buildMCPServer() *server.MCPServer {
 			mcp.WithString("api_key",
 				mcp.Description("Your LLM provider API key. When provided, the backend uses your key for the review pipeline."),
 			),
+		), s.handleImprove,
+	)
+
+	// Tool 8: vigil_suggest — Line-anchored accept/reject suggestions
+	// Runs ALL 5 specialized reviewers (Security Architect, Staff Engineer,
+	// DevSecOps, Cloud Architect, Red Team) in a SINGLE LLM call and returns
+	// per-line fixes the user can accept or reject.
+	srv.AddTool(
+		mcp.NewTool("vigil_suggest",
+			mcp.WithDescription("Review AI-generated code and return line-anchored accept/reject suggestions. Runs ALL 5 reviewer roles (Security Architect, Staff Engineer, DevSecOps, Cloud Architect, Red Team) in a SINGLE LLM call. Each suggestion carries the exact line range and replacement text, so the user can apply or dismiss it per line. The code is never auto-modified."),
+			mcp.WithString("code",
+				mcp.Required(),
+				mcp.Description("The AI-generated source code to review"),
+			),
+			mcp.WithString("prompt",
+				mcp.Description("The original request the code was generated for (context)"),
+			),
+			mcp.WithString("language",
+				mcp.Description("Programming language: go, python, javascript, typescript, rust, java"),
+			),
+			mcp.WithString("filename",
+				mcp.Description("Filename for context-aware scanning"),
+			),
+			mcp.WithString("api_key",
+				mcp.Description("Your LLM provider API key. When provided, the backend uses your key for the review pipeline."),
+			),
 		),
-		s.handleImprove,
+		s.handleSuggest,
+	)
+
+	// Tool 9: analyze_code_security — spec-named alias for dual-engine analysis
+	srv.AddTool(
+		mcp.NewTool("analyze_code_security",
+			mcp.WithDescription("Scan code with VigilAgent's parallel dual-engine security analysis (deterministic + LLM engines). Spec tool: analyze_code_security."),
+			mcp.WithString("code",
+				mcp.Required(),
+				mcp.Description("The source code to analyze"),
+			),
+			mcp.WithString("language",
+				mcp.Description("Programming language: go, python, javascript, typescript, rust, java"),
+			),
+			mcp.WithString("api_key",
+				mcp.Description("Your LLM provider API key (optional BYOK)"),
+			),
+		),
+		s.handleDualEngine,
+	)
+
+	// Tool 10: analyze_design_security — design-stage gate (spec section 7)
+	srv.AddTool(
+		mcp.NewTool("analyze_design_security",
+			mcp.WithDescription("Scan a design document, prompt, or architecture plan for security risks BEFORE code generation (design-stage gate). Returns findings like missing authorization boundaries, secrets in the spec, or unsafe commands."),
+			mcp.WithString("design",
+				mcp.Required(),
+				mcp.Description("The design document / prompt / architecture plan text to analyze"),
+			),
+			mcp.WithString("api_key",
+				mcp.Description("Your LLM provider API key (optional BYOK)"),
+			),
+		),
+		s.handleAnalyzeDesignSecurity,
+	)
+
+	// Tool 11: validate_generated_diff — scan the added lines of a generated patch
+	srv.AddTool(
+		mcp.NewTool("validate_generated_diff",
+			mcp.WithDescription("Validate an AI-generated unified diff: extracts the added lines and runs dual-engine security analysis on them. Use before applying a generated patch."),
+			mcp.WithString("diff",
+				mcp.Required(),
+				mcp.Description("The unified diff (git diff) to validate"),
+			),
+			mcp.WithString("language",
+				mcp.Description("Programming language of the changed files"),
+			),
+			mcp.WithString("api_key",
+				mcp.Description("Your LLM provider API key (optional BYOK)"),
+			),
+		),
+		s.handleValidateGeneratedDiff,
+	)
+
+	// Tool 12: get_secure_remediation — line-anchored accept/reject fixes
+	srv.AddTool(
+		mcp.NewTool("get_secure_remediation",
+			mcp.WithDescription("Review code and return secure remediation as line-anchored accept/reject suggestions (all 5 reviewer roles in one LLM call). The code is never auto-modified."),
+			mcp.WithString("code",
+				mcp.Required(),
+				mcp.Description("The code to remediate"),
+			),
+			mcp.WithString("prompt",
+				mcp.Description("The original request the code was generated for"),
+			),
+			mcp.WithString("language",
+				mcp.Description("Programming language"),
+			),
+			mcp.WithString("api_key",
+				mcp.Description("Your LLM provider API key (optional BYOK)"),
+			),
+		),
+		s.handleSuggest,
+	)
+
+	// Tool 13: verify_provenance — verify a signed scan attestation
+	srv.AddTool(
+		mcp.NewTool("verify_provenance",
+			mcp.WithDescription("Verify a signed provenance/attestation record for a scan. Provide the scan_id and signature returned by the gateway; returns whether the record is authentic and untampered."),
+			mcp.WithString("scan_id",
+				mcp.Required(),
+				mcp.Description("The scan id from X-VigilAgent-Scan-ID or a provenance record"),
+			),
+			mcp.WithString("signature",
+				mcp.Required(),
+				mcp.Description("The HMAC signature from X-VigilAgent-Provenance-Signature"),
+			),
+		),
+		s.handleVerifyProvenance,
+	)
+
+	// Tool 14: create_scan_attestation — signed audit record for a scan
+	srv.AddTool(
+		mcp.NewTool("create_scan_attestation",
+			mcp.WithDescription("Run a review and create a SIGNED provenance attestation record (scan_id, content hash, decision, timestamp) for audit. Verifiable later via verify_provenance."),
+			mcp.WithString("code",
+				mcp.Required(),
+				mcp.Description("The code that was scanned"),
+			),
+			mcp.WithString("prompt",
+				mcp.Description("The original request for context"),
+			),
+			mcp.WithString("language",
+				mcp.Description("Programming language"),
+			),
+			mcp.WithString("api_key",
+				mcp.Description("Your LLM provider API key (optional BYOK)"),
+			),
+		),
+		s.handleCreateScanAttestation,
 	)
 
 	return srv
@@ -472,6 +617,255 @@ func (s *Server) handleDualEngine(ctx context.Context, req mcp.CallToolRequest) 
 	return mcp.NewToolResultText(summary), nil
 }
 
+// handleSuggest runs the review pipeline in suggestion mode and returns
+// line-anchored accept/reject suggestions (5 roles, 1 LLM call).
+func (s *Server) handleSuggest(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 90s for the single-call 5-role review.
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	code, _ := req.RequireString("code")
+	if code == "" {
+		return mcp.NewToolResultError("code is required"), nil
+	}
+	prompt := req.GetString("prompt", "")
+	language := req.GetString("language", "")
+	filename := req.GetString("filename", "")
+	apiKey := s.resolveLLMKey(req.GetString("api_key", ""))
+
+	payload := map[string]interface{}{
+		"code":            code,
+		"prompt":          prompt,
+		"language":        language,
+		"filename":        filename,
+		"suggestion_mode": true,
+	}
+
+	resp, err := s.callBackendWithKey(ctx, "/api/v1/review", payload, apiKey)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return mcp.NewToolResultError("VigilAgent suggest timed out (90s limit)"), nil
+		}
+		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent suggest failed: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(formatSuggestionsSummary(resp)), nil
+}
+
+// formatSuggestionsSummary renders the line-anchored suggestions as a
+// reviewable, copy-pasteable markdown report (diff-style per line).
+func formatSuggestionsSummary(resp interface{}) string {
+	result, ok := resp.(map[string]interface{})
+	if !ok {
+		return fmt.Sprintf("%v", resp)
+	}
+
+	var out strings.Builder
+	out.WriteString("🛡️ VigilAgent Suggestions (accept or reject each)\n\n")
+
+	if confidence, ok := result["confidence"].(map[string]interface{}); ok {
+		out.WriteString(fmt.Sprintf("Confidence: **%v** (%v)\n\n", confidence["grade"], confidence["confidence"]))
+	}
+
+	if suggestions, ok := result["suggestions"].([]interface{}); ok && len(suggestions) > 0 {
+		out.WriteString(fmt.Sprintf("## %d line-anchored suggestions\n\n", len(suggestions)))
+		for i, s := range suggestions {
+			item, _ := s.(map[string]interface{})
+			severity := item["severity"]
+			role := item["role"]
+			message := item["message"]
+			lineStart := item["line_start"]
+			lineEnd := item["line_end"]
+			replacement, _ := item["replacement"].(string)
+			corroborated := false
+			if c, ok := item["corroborated"].(bool); ok {
+				corroborated = c
+			}
+
+			icon := "ℹ️"
+			switch severity {
+			case "critical":
+				icon = "🔴"
+			case "high":
+				icon = "🟠"
+			case "medium":
+				icon = "🟡"
+			case "low":
+				icon = "🟢"
+			}
+			corrobMark := ""
+			if corroborated {
+				corrobMark = " (✓ corroborated by deterministic engine)"
+			}
+			out.WriteString(fmt.Sprintf("%d. %s **[%v]** — %v, lines %v–%v%v\n   %v\n",
+				i+1, icon, severity, role, lineStart, lineEnd, corrobMark, message))
+			if replacement != "" {
+				out.WriteString(fmt.Sprintf("   ```diff\n   %v\n   ```\n", replacement))
+			}
+			out.WriteString("\n")
+		}
+	} else {
+		out.WriteString("✅ No suggestions — the code passed the review.\n")
+	}
+
+	if summary, ok := result["summary"].(string); ok && summary != "" {
+		out.WriteString("---\n" + summary + "\n")
+	}
+
+	return out.String()
+}
+
+// handleAnalyzeDesignSecurity scans a design document before code generation
+// (spec section 7 — design-stage security gate).
+func (s *Server) handleAnalyzeDesignSecurity(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 60s.
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	design, _ := req.RequireString("design")
+	if design == "" {
+		return mcp.NewToolResultError("design is required"), nil
+	}
+	apiKey := s.resolveLLMKey(req.GetString("api_key", ""))
+
+	payload := map[string]interface{}{"code": design, "language": "design"}
+	resp, err := s.callBackendWithKey(ctx, "/api/v1/deep-analyze", payload, apiKey)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent design analysis failed: %v", err)), nil
+	}
+	return mcp.NewToolResultText(formatDualEngineSummary(resp)), nil
+}
+
+// handleValidateGeneratedDiff extracts the added lines from a unified diff and
+// runs dual-engine analysis on them (spec: validate_generated_diff).
+func (s *Server) handleValidateGeneratedDiff(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 60s.
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	diff, _ := req.RequireString("diff")
+	if diff == "" {
+		return mcp.NewToolResultError("diff is required"), nil
+	}
+	added := extractAddedLinesFromDiff(diff)
+	if strings.TrimSpace(added) == "" {
+		return mcp.NewToolResultText("✅ No added lines in this diff — nothing to scan."), nil
+	}
+	language := req.GetString("language", "")
+	apiKey := s.resolveLLMKey(req.GetString("api_key", ""))
+
+	payload := map[string]interface{}{"code": added, "language": language}
+	resp, err := s.callBackendWithKey(ctx, "/api/v1/deep-analyze", payload, apiKey)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent diff validation failed: %v", err)), nil
+	}
+	return mcp.NewToolResultText(formatDualEngineSummary(resp)), nil
+}
+
+// handleVerifyProvenance checks a signed provenance record with the gateway's
+// provenance/audit service.
+func (s *Server) handleVerifyProvenance(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 30s.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	scanID, _ := req.RequireString("scan_id")
+	signature, _ := req.RequireString("signature")
+	if scanID == "" || signature == "" {
+		return mcp.NewToolResultError("scan_id and signature are required"), nil
+	}
+
+	payload := map[string]interface{}{"scan_id": scanID, "signature": signature}
+	resp, err := s.callGateway(ctx, "/v1/provenance/verify", payload)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("provenance verification failed: %v", err)), nil
+	}
+
+	result, _ := resp.(map[string]interface{})
+	valid, _ := result["valid"].(bool)
+	reason, _ := result["reason"].(string)
+	if valid {
+		return mcp.NewToolResultText("✅ Provenance verified: the scan record is authentic and untampered."), nil
+	}
+	return mcp.NewToolResultText("❌ Provenance verification FAILED: " + reason), nil
+}
+
+// handleCreateScanAttestation runs a review and creates a SIGNED provenance
+// attestation record for audit (spec: create_scan_attestation).
+func (s *Server) handleCreateScanAttestation(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// MCP tool execution timeout: 90s (review + attestation).
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	code, _ := req.RequireString("code")
+	if code == "" {
+		return mcp.NewToolResultError("code is required"), nil
+	}
+	prompt := req.GetString("prompt", "")
+	language := req.GetString("language", "")
+	apiKey := s.resolveLLMKey(req.GetString("api_key", ""))
+
+	// 1. Review the code (suggestion mode: never auto-modifies).
+	reviewPayload := map[string]interface{}{
+		"code": code, "prompt": prompt, "language": language, "suggestion_mode": true,
+	}
+	reviewResp, err := s.callBackendWithKey(ctx, "/api/v1/review", reviewPayload, apiKey)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent review failed: %v", err)), nil
+	}
+	result, _ := reviewResp.(map[string]interface{})
+	decision := deriveAttestationDecision(result)
+
+	// 2. Attest: sign a record anchored to the exact scanned content.
+	attestPayload := map[string]interface{}{
+		"provider":      "vigilagent-mcp",
+		"model":         "review-pipeline",
+		"decision":      decision,
+		"response_hash": signing.HashContent(code),
+		"client_type":   "mcp",
+	}
+	attestResp, err := s.callGateway(ctx, "/v1/provenance/attest", attestPayload)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("attestation creation failed: %v", err)), nil
+	}
+
+	pretty, err := json.MarshalIndent(attestResp, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultText(fmt.Sprintf("%v", attestResp)), nil
+	}
+	return mcp.NewToolResultText(string(pretty)), nil
+}
+
+// extractAddedLinesFromDiff returns the concatenated added lines of a unified
+// diff (context and removed lines are dropped; +++ file headers are skipped).
+func extractAddedLinesFromDiff(diff string) string {
+	var sb strings.Builder
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			sb.WriteString(strings.TrimPrefix(line, "+"))
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// deriveAttestationDecision maps a review confidence grade to a policy decision.
+func deriveAttestationDecision(result map[string]interface{}) string {
+	if confidence, ok := result["confidence"].(map[string]interface{}); ok {
+		if grade, ok := confidence["grade"].(string); ok {
+			switch grade {
+			case "A", "B":
+				return "allow"
+			case "C":
+				return "allow_with_notice"
+			default:
+				return "hold_for_review"
+			}
+		}
+	}
+	return "hold_for_review"
+}
+
 // resolveLLMKey returns the tool-level api_key if provided, otherwise falls
 // back to the env-var LLM key set at server startup (VIGILAGENT_LLM_KEY).
 func (s *Server) resolveLLMKey(toolKey string) string {
@@ -487,15 +881,31 @@ func (s *Server) callBackend(ctx context.Context, path string, payload interface
 	return s.callBackendWithKey(ctx, path, payload, "")
 }
 
+// callGateway sends a request to the Secure AI Gateway (provenance endpoints).
+// Uses gatewayURL when configured, otherwise falls back to apiURL (co-located
+// deployments and tests).
+func (s *Server) callGateway(ctx context.Context, path string, payload interface{}) (interface{}, error) {
+	base := s.gatewayURL
+	if base == "" {
+		base = s.apiURL
+	}
+	return s.doCall(ctx, base, path, payload, "")
+}
+
 // callBackendWithKey sends a request to the VigilAgent backend, optionally
 // passing the user's LLM key via X-LLM-Key header for BYOK support.
 func (s *Server) callBackendWithKey(ctx context.Context, path string, payload interface{}, llmKey string) (interface{}, error) {
+	return s.doCall(ctx, s.apiURL, path, payload, llmKey)
+}
+
+// doCall performs the HTTP round-trip against the given base URL.
+func (s *Server) doCall(ctx context.Context, baseURL, path string, payload interface{}, llmKey string) (interface{}, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := s.apiURL + path
+	url := baseURL + path
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)

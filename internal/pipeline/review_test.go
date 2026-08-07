@@ -1,11 +1,14 @@
 package pipeline
 
 import (
+	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/vigilagent/vigilagent/internal/confidence"
+	"github.com/vigilagent/vigilagent/internal/llm"
 	"github.com/vigilagent/vigilagent/internal/scanner"
 	"github.com/vigilagent/vigilagent/internal/skillengine"
 )
@@ -502,6 +505,270 @@ func TestParseReviewerOutput_NegativeSignals(t *testing.T) {
 	verdict, _, _ := parseReviewerOutput(content)
 	if verdict != "pass" {
 		t.Errorf("verdict = %q, want pass", verdict)
+	}
+}
+
+// ─── Single-call 5-role reviewers ─────────────────────────────────────────
+
+// mockReviewProvider returns fixed content and counts how many times Chat was called.
+type mockReviewProvider struct {
+	content   string
+	callCount int32
+}
+
+func (m *mockReviewProvider) Chat(_ context.Context, _ *llm.ChatRequest) (*llm.ChatResponse, error) {
+	atomic.AddInt32(&m.callCount, 1)
+	return &llm.ChatResponse{Content: m.content, Model: "mock-model", Cost: 0.001}, nil
+}
+
+func (m *mockReviewProvider) Stream(_ context.Context, _ *llm.ChatRequest) (<-chan *llm.ChatChunk, error) {
+	ch := make(chan *llm.ChatChunk, 1)
+	ch <- &llm.ChatChunk{Content: m.content, Finish: true}
+	close(ch)
+	return ch, nil
+}
+
+func (m *mockReviewProvider) HealthCheck(_ context.Context) error { return nil }
+
+func (m *mockReviewProvider) Name() string { return "mock" }
+
+func mockCalls(m *mockReviewProvider) int { return int(atomic.LoadInt32(&m.callCount)) }
+
+// newHealthyRouter builds a ModelRouter with the mock provider marked healthy.
+func newHealthyRouter(t *testing.T, mock *mockReviewProvider) *llm.ModelRouter {
+	t.Helper()
+	router := llm.NewModelRouter(&llm.RouterConfig{DefaultModel: "gpt-4o-mini"})
+	router.RegisterProvider("openai", mock)
+	router.GetHealthMonitor().RecordSuccess("openai", time.Millisecond)
+	return router
+}
+
+// fiveRoleContract is the strict JSON contract the single-call reviewer must
+// return — one entry per role, with line-anchored findings.
+const fiveRoleContract = `{"roles": [
+  {"role": "security", "verdict": "fail", "findings": [
+    {"severity": "critical", "line_start": 3, "line_end": 3, "message": "SQL injection", "replacement": "db.Query(ctx, sql, id)", "confidence": 0.9}
+  ]},
+  {"role": "architecture", "verdict": "pass", "findings": []},
+  {"role": "compliance", "verdict": "warn", "findings": [
+    {"severity": "medium", "line_start": 8, "line_end": 8, "message": "Missing audit log", "replacement": "", "confidence": 0.6}
+  ]},
+  {"role": "cost", "verdict": "pass", "findings": []},
+  {"role": "red_team", "verdict": "fail", "findings": [
+    {"severity": "high", "line_start": 12, "line_end": 13, "message": "Privilege escalation", "replacement": "if user.Role == admin", "confidence": 0.8}
+  ]}
+]}`
+
+func TestParseSingleCallReviewContent(t *testing.T) {
+	outputs, suggestions, ok := parseSingleCallReviewContent(fiveRoleContract)
+	if !ok {
+		t.Fatal("expected parse success")
+	}
+	if len(outputs) != 5 {
+		t.Fatalf("expected 5 role outputs, got %d", len(outputs))
+	}
+	if outputs[0].Name != "security" || outputs[0].Verdict != "fail" {
+		t.Errorf("security output mismatch: %+v", outputs[0])
+	}
+	if outputs[2].Name != "compliance" || outputs[2].Verdict != "warn" {
+		t.Errorf("compliance output mismatch: %+v", outputs[2])
+	}
+	if len(suggestions) != 3 {
+		t.Fatalf("expected 3 suggestions, got %d", len(suggestions))
+	}
+	var rt *Suggestion
+	for i := range suggestions {
+		if suggestions[i].Role == "red_team" {
+			rt = &suggestions[i]
+		}
+	}
+	if rt == nil {
+		t.Fatal("missing red_team suggestion")
+	}
+	if rt.LineStart != 12 || rt.LineEnd != 13 || rt.Replacement != "if user.Role == admin" {
+		t.Errorf("red_team suggestion mismatch: %+v", *rt)
+	}
+}
+
+func TestParseSingleCallReviewContent_Malformed(t *testing.T) {
+	for _, content := range []string{"", "garbage", "no json here", `{"roles": []}`, `[1,2,3]`} {
+		if _, _, ok := parseSingleCallReviewContent(content); ok {
+			t.Errorf("expected parse failure for %q", content)
+		}
+	}
+}
+
+func TestParseSingleCallReviewContent_RoleNormalization(t *testing.T) {
+	content := `{"roles": [
+	  {"role": "Principal Security Architect", "verdict": "fail", "findings": [{"severity": "high", "line_start": 1, "line_end": 1, "message": "x"}]},
+	  {"role": "Red Team", "verdict": "warn", "findings": []},
+	  {"role": "hr", "verdict": "fail", "findings": []}
+	]}`
+	outputs, suggestions, ok := parseSingleCallReviewContent(content)
+	if !ok {
+		t.Fatal("expected parse success")
+	}
+	if len(outputs) != 2 {
+		t.Fatalf("expected 2 recognized roles (hr dropped), got %d", len(outputs))
+	}
+	if outputs[0].Name != "security" || outputs[1].Name != "red_team" {
+		t.Errorf("role normalization failed: %+v", outputs)
+	}
+	if len(suggestions) != 1 || suggestions[0].Role != "security" {
+		t.Errorf("suggestion role attribution failed: %+v", suggestions)
+	}
+}
+
+func TestRunSingleCallReviewers_SingleCall(t *testing.T) {
+	mock := &mockReviewProvider{content: fiveRoleContract}
+	router := newHealthyRouter(t, mock)
+	szp := &ShiftZeroPipeline{llmRouter: router}
+
+	outputs, suggestions := szp.runSingleCallReviewers(context.Background(), "reviewer context", "original prompt")
+
+	if mockCalls(mock) != 1 {
+		t.Errorf("expected exactly 1 LLM call for all 5 roles, got %d", mockCalls(mock))
+	}
+	if len(outputs) != 5 {
+		t.Fatalf("expected 5 reviewer outputs, got %d", len(outputs))
+	}
+	if len(suggestions) != 3 {
+		t.Errorf("expected 3 suggestions, got %d", len(suggestions))
+	}
+	// Every suggestion must be attributed to its owning reviewer output.
+	total := 0
+	for _, o := range outputs {
+		total += len(o.LineSuggestions)
+	}
+	if total != 3 {
+		t.Errorf("expected 3 line suggestions attached to reviewer outputs, got %d", total)
+	}
+}
+
+func TestRunSingleCallReviewers_FallbackOnMalformed(t *testing.T) {
+	mock := &mockReviewProvider{content: "the model ignored the JSON contract"}
+	router := newHealthyRouter(t, mock)
+	szp := &ShiftZeroPipeline{llmRouter: router}
+
+	outputs, _ := szp.runSingleCallReviewers(context.Background(), "ctx", "prompt")
+	if len(outputs) != 5 {
+		t.Fatalf("expected fallback to 5 parallel reviewers, got %d", len(outputs))
+	}
+}
+
+func TestRunSingleCallReviewers_NilRouter(t *testing.T) {
+	szp := &ShiftZeroPipeline{}
+	outputs, _ := szp.runSingleCallReviewers(context.Background(), "ctx", "prompt")
+	if len(outputs) != 5 {
+		t.Fatalf("expected 5 error-verdict reviewers with nil router, got %d", len(outputs))
+	}
+	for _, o := range outputs {
+		if o.Verdict != "error" {
+			t.Errorf("expected error verdict with nil router, got %q", o.Verdict)
+		}
+	}
+}
+
+// ─── Suggestions ──────────────────────────────────────────────────────────
+
+func TestBuildSuggestions_DeterministicOnly(t *testing.T) {
+	szp := &ShiftZeroPipeline{}
+	findings := []scanner.Finding{
+		{RuleID: "secrets-001", Severity: scanner.SeverityCritical, Message: "hardcoded secret", Line: 4, Fix: "use env var", Confidence: 0.95},
+		{RuleID: "secrets-002", Severity: scanner.SeverityHigh, Message: "no line number", Line: 0, Fix: "n/a"},
+	}
+	suggestions := szp.buildSuggestions(findings, nil)
+	if len(suggestions) != 1 {
+		t.Fatalf("expected 1 suggestion (line-less finding skipped), got %d", len(suggestions))
+	}
+	s := suggestions[0]
+	if s.Role != "deterministic" || s.LineStart != 4 || s.LineEnd != 4 || s.Replacement != "use env var" {
+		t.Errorf("deterministic suggestion mismatch: %+v", s)
+	}
+}
+
+func TestBuildSuggestions_Corroboration(t *testing.T) {
+	szp := &ShiftZeroPipeline{}
+	findings := []scanner.Finding{
+		{RuleID: "sqli-001", Severity: scanner.SeverityCritical, Message: "SQL injection", Line: 5, Confidence: 0.9},
+	}
+	reviewers := []ReviewerOutput{
+		{
+			Name: "security",
+			LineSuggestions: []Suggestion{
+				{ID: "security:5:5", Role: "security", Severity: "critical", LineStart: 5, LineEnd: 5, Message: "SQL injection", Replacement: "param query", Confidence: 0.7},
+			},
+		},
+	}
+	suggestions := szp.buildSuggestions(findings, reviewers)
+	if len(suggestions) != 2 {
+		t.Fatalf("expected 2 suggestions (1 deterministic + 1 LLM), got %d", len(suggestions))
+	}
+	var llm *Suggestion
+	for i := range suggestions {
+		if suggestions[i].Role == "security" {
+			llm = &suggestions[i]
+		}
+	}
+	if llm == nil {
+		t.Fatal("missing LLM suggestion")
+	}
+	if !llm.Corroborated {
+		t.Error("expected corroborated=true when deterministic engine flagged line 5")
+	}
+	if llm.Confidence != 0.85 {
+		t.Errorf("expected corroboration boost to 0.85, got %v", llm.Confidence)
+	}
+}
+
+func TestBuildSuggestions_Deduplicates(t *testing.T) {
+	szp := &ShiftZeroPipeline{}
+	reviewers := []ReviewerOutput{
+		{Name: "security", LineSuggestions: []Suggestion{
+			{ID: "security:3:3", Role: "security", LineStart: 3, LineEnd: 3, Message: "a"},
+			{ID: "security:3:3", Role: "security", LineStart: 3, LineEnd: 3, Message: "b"},
+		}},
+	}
+	suggestions := szp.buildSuggestions(nil, reviewers)
+	if len(suggestions) != 1 {
+		t.Errorf("expected dedup to 1 suggestion, got %d", len(suggestions))
+	}
+}
+
+// TestRunSuggestionMode_ReturnsSuggestions runs the full pipeline in suggestion
+// mode with failing reviewer verdicts and asserts: suggestions are returned and
+// the auto-rewrite re-validation loop is skipped (Retries == 0).
+func TestRunSuggestionMode_ReturnsSuggestions(t *testing.T) {
+	mock := &mockReviewProvider{content: fiveRoleContract}
+	router := newHealthyRouter(t, mock)
+	szp := NewShiftZeroPipeline(router, nil, nil, nil, nil, nil, nil)
+	szp.SuggestionMode = true
+
+	report, err := szp.Run(context.Background(), &ReviewRequest{
+		Code:     "package main\n\nfunc main() {}\n",
+		Language: "go",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if len(report.Suggestions) == 0 {
+		t.Error("expected line-anchored suggestions in report")
+	}
+	if report.Retries != 0 {
+		t.Errorf("suggestion mode must skip auto-rewrite loop, got %d retries", report.Retries)
+	}
+	if report.FinalOutput != report.MainLLMResponse {
+		t.Error("suggestion mode must not rewrite the main response")
+	}
+	// Failing reviewer verdicts must still surface.
+	hasFail := false
+	for _, r := range report.Reviewers {
+		if r.Verdict == "fail" {
+			hasFail = true
+		}
+	}
+	if !hasFail {
+		t.Error("expected at least one failing reviewer verdict from the contract")
 	}
 }
 

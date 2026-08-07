@@ -345,12 +345,17 @@ CREATE TABLE IF NOT EXISTS skill_embeddings (
 );
 
 -- Feature Flags table
+-- Schema MUST match internal/featureflags.Manager (name-based PK, rules, updated_at).
+-- The original key-based shape caused every query to fail with
+-- `column "name" does not exist`, tripping the DB circuit breaker.
 CREATE TABLE IF NOT EXISTS feature_flags (
     id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
-    key VARCHAR(255) UNIQUE NOT NULL,
+    name VARCHAR(100) UNIQUE NOT NULL,
     enabled BOOLEAN DEFAULT false NOT NULL,
     description TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+    rules JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
 -- ================================================================

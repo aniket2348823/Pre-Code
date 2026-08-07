@@ -150,7 +150,9 @@ export class VigilAgentChatParticipant {
         stream.progress('🛡️ Running full Shift-Zero verification pipeline...');
 
         try {
-            const result = await this.client.verify(code, '', language, filename);
+            // Classic chat flow: auto-fixed "Improved Output" (not suggestion
+            // mode) — suggestion mode powers the inline quick-fix surfaces.
+            const result = await this.client.verify(code, '', language, filename, false);
             this.formatReviewResult(result, stream, filename);
         } catch (err: any) {
             if (err.message?.includes('API key not configured')) {
@@ -216,7 +218,10 @@ export class VigilAgentChatParticipant {
             stream.progress('🛡️ Running VigilAgent verification...');
 
             try {
-                const result = await this.client.verify(code, prompt, language, filename);
+                // The chat participant keeps the classic flow (auto-fixed
+                // "Improved Output") — suggestion mode is for the inline
+                // quick-fix surfaces (auto-verify, verify-selection).
+                const result = await this.client.verify(code, prompt, language, filename, false);
                 this.formatReviewResult(result, stream, filename);
             } catch (err: any) {
                 stream.markdown(`❌ Verification failed: ${sanitizeMarkdown(err.message)}\n\nTry typing \`help\` for available commands.`);

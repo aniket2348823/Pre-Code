@@ -20,7 +20,7 @@ type NVIDIANIMAdapter struct {
 func NewNVIDIANIM(apiKey string) *NVIDIANIMAdapter {
 	return &NVIDIANIMAdapter{
 		apiKey:  apiKey,
-		baseURL: "https://build.nvidia.com/v1",
+		baseURL: "https://integrate.api.nvidia.com/v1",
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -62,50 +62,72 @@ func (n *NVIDIANIMAdapter) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 		Temperature: req.Temperature,
 	})
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", n.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
+	// NVIDIA NIM serverless endpoints return HTTP 202 when a model is cold
+	// and needs to spin up. Retry with backoff until the model is warm.
+	const maxRetries = 3
+	retryDelays := []time.Duration{10 * time.Second, 15 * time.Second, 20 * time.Second}
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", n.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+n.apiKey)
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := n.httpClient.Do(httpReq)
+		if err != nil {
+			return nil, fmt.Errorf("nvidia nim chat failed: %w", err)
+		}
+
+		respBody, err := safeReadBody(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode == 202 {
+			// Model is cold-starting. Wait and retry.
+			if attempt < maxRetries {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(retryDelays[attempt]):
+					continue
+				}
+			}
+			return nil, fmt.Errorf("nvidia nim model still loading after %d retries (HTTP 202)", maxRetries)
+		}
+
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("nvidia nim returned status %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		nResp, err := ReadFullResponse(bytes.NewReader(respBody))
+		if err != nil {
+			return nil, err
+		}
+
+		latency := time.Since(start)
+		content := ""
+		if len(nResp.Choices) > 0 {
+			content = nResp.Choices[0].Message.Content
+		}
+
+		cost := calculateNIMCost(req.Model, nResp.Usage.PromptTokens, nResp.Usage.CompletionTokens)
+
+		return &ChatResponse{
+			Content:      content,
+			InputTokens:  nResp.Usage.PromptTokens,
+			OutputTokens: nResp.Usage.CompletionTokens,
+			Cost:         cost,
+			Latency:      latency,
+			Model:        req.Model,
+			Provider:     "nvidia_nim",
+		}, nil
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+n.apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := n.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("nvidia nim chat failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := safeReadBody(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("nvidia nim returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	nResp, err := ReadFullResponse(bytes.NewReader(respBody))
-	if err != nil {
-		return nil, err
-	}
-
-	latency := time.Since(start)
-	content := ""
-	if len(nResp.Choices) > 0 {
-		content = nResp.Choices[0].Message.Content
-	}
-
-	cost := calculateNIMCost(req.Model, nResp.Usage.PromptTokens, nResp.Usage.CompletionTokens)
-
-	return &ChatResponse{
-		Content:      content,
-		InputTokens:  nResp.Usage.PromptTokens,
-		OutputTokens: nResp.Usage.CompletionTokens,
-		Cost:         cost,
-		Latency:      latency,
-		Model:        req.Model,
-		Provider:     "nvidia_nim",
-	}, nil
+	return nil, fmt.Errorf("nvidia nim: exhausted retries")
 }
 
 func (n *NVIDIANIMAdapter) Stream(ctx context.Context, req *ChatRequest) (<-chan *ChatChunk, error) {

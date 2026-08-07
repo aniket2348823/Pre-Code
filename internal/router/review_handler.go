@@ -107,6 +107,9 @@ func (r *Router) reviewHandler(w http.ResponseWriter, req *http.Request) {
 		r.confidence,
 		r.pipeline,
 	)
+	// Suggestion mode: return line-anchored accept/reject suggestions instead
+	// of auto-rewriting the code (the user decides per suggestion).
+	szp.SuggestionMode = input.SuggestionMode
 
 	report, err := szp.Run(req.Context(), &input)
 	if err != nil {

@@ -298,6 +298,27 @@ func (r *Router) healthHandler(w http.ResponseWriter, req *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]string{"status": "healthy"})
 }
 
+// csrfHandler issues a valid CSRF token for non-browser clients (curl, CLI,
+// scripts) that authenticate with a bearer JWT. CSRF is enforced on all
+// state-changing protected routes, but there was previously no public way to
+// obtain a token, which made the documented API-key bootstrap flow impossible.
+//
+// Response: {"csrf_token": "<token>"} — send it back in the X-CSRF-Token
+// header on subsequent state-changing requests (e.g. POST /api/v1/api-keys).
+func (r *Router) csrfHandler(w http.ResponseWriter, req *http.Request) {
+	if r.csrf == nil {
+		response.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "CSRF protection not configured"})
+		return
+	}
+	r.csrf.SetToken(w, req)
+	token := w.Header().Get("X-CSRF-Token")
+	if token == "" {
+		response.JSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate CSRF token"})
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]string{"csrf_token": token})
+}
+
 func (r *Router) readinessHandler(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 	checks := map[string]string{}
