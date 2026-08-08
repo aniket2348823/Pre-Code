@@ -32,8 +32,7 @@ type AuditEventLogger interface {
 
 // AuditLogger logs security events to the database.
 type AuditLogger struct {
-	pool   *database.Conn
-	config config.AuditConfig
+	pool *database.Conn
 }
 
 // NewAuditLogger creates a new audit logger.

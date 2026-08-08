@@ -40,6 +40,11 @@ build-migrate:
 	@echo "→ $(BINARY_DIR)/vigil-migrate"
 
 run:
+	@bash scripts/start-dev.sh
+
+# run-legacy starts the server WITHOUT the clean-environment wrapper
+# (inherits whatever VIGILAGENT_* vars the parent shell has).
+run-legacy:
 	@$(GOCMD) run ./cmd/api
 
 # ── Test ─────────────────────────────────────────────────
@@ -152,7 +157,7 @@ help:
 	@echo "  make build          Build all binaries (api + migrate)"
 	@echo "  make build-api      Build API server binary"
 	@echo "  make build-migrate  Build migration tool binary"
-	@echo "  make run            Run the API server"
+	@echo "  make run            Run the API server (clean env: unsets stale VIGILAGENT_* first)"
 	@echo ""
 	@echo "Test:"
 	@echo "  make test           Run all tests"

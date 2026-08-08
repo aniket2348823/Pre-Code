@@ -19,6 +19,7 @@ func TestExtractAPIKey_AllSources(t *testing.T) {
 		{"Bearer JWT ignored", "", "Bearer eyJ.payload.sig", ""},
 		{"No headers", "", "", ""},
 		{"X-API-Key priority over Bearer", "va_header", "Bearer va_bearer", "va_header"},
+		{"Local dev key recognized", "", "Bearer local-dev", "local-dev"},
 		{"Bearer without underscore ignored", "", "Bearer sometoken", ""},
 		{"Bearer with empty token", "", "Bearer ", ""},
 		{"Malformed auth header", "", "Bearer", ""},
@@ -65,5 +66,61 @@ func TestAPIKeyAuthError_Messages(t *testing.T) {
 	}
 	if ErrExpiredAPIKey.Error() != "API key has expired" {
 		t.Errorf("unexpected: %q", ErrExpiredAPIKey.Error())
+	}
+}
+
+func TestLocalDevKey_RejectedWhenDisabled(t *testing.T) {
+	// Without AllowLocalDev, the local-dev key must still be rejected — the
+	// bypass is inert unless explicitly enabled (production safety).
+	a := NewAPIKeyAuth(nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer local-dev")
+
+	claims, err := a.Authenticate(req)
+	if err == nil {
+		t.Fatal("expected error when local-dev bypass is disabled")
+	}
+	if claims != nil {
+		t.Fatalf("expected nil claims when bypass disabled, got %+v", claims)
+	}
+}
+
+func TestLocalDevKey_AcceptedWhenEnabled(t *testing.T) {
+	a := NewAPIKeyAuth(nil)
+	a.AllowLocalDev()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer local-dev")
+
+	claims, err := a.Authenticate(req)
+	if err != nil {
+		t.Fatalf("expected local-dev to authenticate when enabled, got error: %v", err)
+	}
+	if claims == nil {
+		t.Fatal("expected non-nil claims")
+	}
+	if !claims.IsAPIKey {
+		t.Error("local-dev claims should be marked as API key")
+	}
+	if !hasScope(claims.Scopes, "scan:write") {
+		t.Error("local-dev claims should include wildcard scope (scan:write accessible)")
+	}
+}
+
+func TestLocalDevKey_OtherKeysStillRejectedWhenEnabled(t *testing.T) {
+	// Enabling the bypass must not accidentally accept arbitrary unknown keys.
+	// A non-underscore token isn't even recognized as an API key, so
+	// Authenticate returns nil claims (falls through to JWT validation, which
+	// rejects it) rather than accepting it.
+	a := NewAPIKeyAuth(nil)
+	a.AllowLocalDev()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer not-a-real-key")
+	claims, err := a.Authenticate(req)
+	if claims != nil {
+		t.Fatalf("expected nil claims, got %+v", claims)
+	}
+	if err != nil {
+		t.Fatalf("expected no error (falls through to JWT path), got %v", err)
 	}
 }

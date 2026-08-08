@@ -1,0 +1,24 @@
+# ── VigilAgent .semgrepignore ─────────────────────────────────────────────
+# Mirrors the deterministic Policy Scan's exclusions: the repo's own test
+# fixtures and demo files carry INTENTIONAL vulnerabilities to prove the
+# engines fire — they must never fail the CI security gate.
+
+# Deterministic engine accuracy fixtures (deliberately vulnerable)
+**/testdata/
+**/testfixtures/
+**/testdata/**/*
+
+# Demo / sample files with intentional vulns
+sample_*
+**/sample_*
+
+# Test-only code
+**/*_test.go
+**/*_fuzz.go
+**/*_bench.go
+
+# Generated / dependency code
+**/vendor/
+node_modules/
+dist/
+coverage/

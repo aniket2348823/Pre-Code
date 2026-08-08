@@ -65,6 +65,44 @@ var scanExtensions = map[string]bool{
 	".tf": true,
 }
 
+// isTestFile reports whether a path is a test file (Go _test.go, JS/TS
+// .test/.spec, Python test_/conftest, etc.). The deterministic scanner's own
+// accuracy fixtures embed intentionally vulnerable code — test files must be
+// excluded from the CI fail-gate scan so they cannot block production merges.
+func isTestFile(p string) bool {
+	name := strings.ToLower(filepath.Base(p))
+	ext := strings.ToLower(filepath.Ext(p))
+	base := strings.TrimSuffix(name, ext)
+	// Normalized path so directory checks work on Windows backslash paths.
+	norm := strings.ReplaceAll(strings.ToLower(p), "\\", "/")
+	switch {
+	case strings.HasSuffix(name, "_test.go"):
+		return true
+	case strings.HasSuffix(name, "_fuzz.go"):
+		// Fuzz harnesses are test-only (testing import, fake secrets by design).
+		return true
+	case strings.HasSuffix(name, "_bench.go"):
+		// Benchmarks are test-only (testing.B import, fake configs by design).
+		return true
+	case base == "test":
+		// Package-private test helper files (not _test.go) — by convention they
+		// import `testing` and hold fixtures, never production logic.
+		return true
+	case strings.Contains(norm, "/integration/"):
+		// Integration test infrastructure (testdb.go, testredis.go).
+		return true
+	case ext == ".go" && strings.HasSuffix(base, "_test"):
+		return true
+	case ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx":
+		return strings.Contains(base, ".test") || strings.Contains(base, ".spec") || strings.HasSuffix(base, "_test")
+	case ext == ".py":
+		return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test") || strings.Contains(norm, "/test/")
+	case ext == ".rs":
+		return strings.HasSuffix(base, "_test") || strings.Contains(norm, "/tests/")
+	}
+	return false
+}
+
 // langForFile guesses the scanner language from a file extension.
 func langForFile(name string) string {
 	switch strings.ToLower(filepath.Ext(name)) {
@@ -128,9 +166,25 @@ the --fail-on severity gate — the CI enforcement layer for protected branches.
 						// Excluded dirs are skipped during recursive discovery, but an
 						// explicitly-passed root (e.g. --path testdata/fixtures/...) is
 						// always scanned — fixtures are only excluded as nested dirs.
-						if p != path && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "dist" || d.Name() == "vendor" || d.Name() == "bin" || d.Name() == "coverage" || d.Name() == "testdata") {
+						// testfixtures/ and *_test files hold INTENTIONAL vulnerable
+						// code samples for the accuracy suite — they must never trip
+						// the CI fail gate (the gate guards production code). scripts/
+						// holds ops/deploy/load-test tooling (env-var-driven shell
+						// scripts, k6 tests) — not production application code.
+						if p != path && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "dist" || d.Name() == "vendor" || d.Name() == "bin" || d.Name() == "coverage" || d.Name() == "testdata" || d.Name() == "testfixtures" || d.Name() == "scripts") {
 							return filepath.SkipDir
 						}
+						return nil
+					}
+					// Skip *_test source files: the scanner's own accuracy tests embed
+					// deliberately vulnerable code to prove the rules fire. Scanning
+					// them as if they were production code would fail every CI run.
+					if isTestFile(p) {
+						return nil
+					}
+					// Demo/demonstration files (sample_*) carry intentional vulns to
+					// showcase the scanner — never production code, never a gate.
+					if strings.HasPrefix(strings.ToLower(filepath.Base(p)), "sample_") {
 						return nil
 					}
 					if scanExtensions[strings.ToLower(filepath.Ext(p))] {

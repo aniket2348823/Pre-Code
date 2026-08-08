@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -77,13 +78,12 @@ func (s *Server) buildMCPServer() *server.MCPServer {
 	// Tool 1: vigil_verify — Full Shift-Zero pipeline
 	srv.AddTool(
 		mcp.NewTool("vigil_verify",
-			mcp.WithDescription("Run the full VigilAgent Shift-Zero verification pipeline on code. Returns findings, confidence score, reviewer verdicts, and fixed code. Use this when you need to verify code quality, security, and architecture."),
+			mcp.WithDescription("Run the full VigilAgent Shift-Zero verification pipeline. Pass code to verify, OR a prompt alone: with prompt-only, the Main LLM GENERATES the code first, then it is scanned by the deterministic engine and the 5 specialized LLM reviewers, and fixed. Returns the generated/verified code, findings, confidence score, reviewer verdicts, and fixed code. This is the middleware path that guarantees LLM output passes through VigilAgent's analysis layer."),
 			mcp.WithString("code",
-				mcp.Required(),
-				mcp.Description("The source code to verify"),
+				mcp.Description("The source code to verify (optional — when empty, code is generated from the prompt)"),
 			),
 			mcp.WithString("prompt",
-				mcp.Description("The original developer request or context (e.g. 'Create a secure payment system')"),
+				mcp.Description("The original developer request (e.g. 'generate a function to add two numbers'). Required when code is empty — the Main LLM generates the code from it."),
 			),
 			mcp.WithString("language",
 				mcp.Description("Programming language: go, python, javascript, typescript, rust, java"),
@@ -186,6 +186,9 @@ func (s *Server) buildMCPServer() *server.MCPServer {
 			),
 			mcp.WithString("language",
 				mcp.Description("Programming language: go, python, javascript, typescript, rust, java"),
+			),
+			mcp.WithString("format",
+				mcp.Description("Output format: 'text' (default, human-readable summary) or 'json' (raw structured response). Machine clients (IDE extensions) should pass 'json'."),
 			),
 			mcp.WithString("api_key",
 				mcp.Description("Your LLM provider API key (e.g. sk-...). When provided, the backend uses your key for the LLM engine instead of its own configured keys."),
@@ -359,15 +362,18 @@ func (s *Server) buildMCPServer() *server.MCPServer {
 // ─── Tool Handlers ───────────────────────────────────────────────────────
 
 func (s *Server) handleVerify(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// MCP tool execution timeout: 60s for full pipeline reviews.
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	// MCP tool execution timeout: 90s — prompt-only verify now GENERATES code
+	// from the prompt first (main LLM), then runs the deterministic engine + 5
+	// LLM reviewers + up to 2 revalidation fix calls, so it is heavier than a
+	// code-only review.
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	code, _ := req.RequireString("code")
-	if code == "" {
-		return mcp.NewToolResultError("code is required"), nil
-	}
+	code := req.GetString("code", "")
 	prompt := req.GetString("prompt", "")
+	if code == "" && prompt == "" {
+		return mcp.NewToolResultError("code or prompt is required (prompt-only generates the code from the prompt)"), nil
+	}
 	language := req.GetString("language", "")
 	filename := req.GetString("filename", "")
 	apiKey := s.resolveLLMKey(req.GetString("api_key", ""))
@@ -611,6 +617,16 @@ func (s *Server) handleDualEngine(ctx context.Context, req mcp.CallToolRequest) 
 			return mcp.NewToolResultError("VigilAgent dual-engine analysis timed out (60s limit)"), nil
 		}
 		return mcp.NewToolResultError(fmt.Sprintf("VigilAgent dual-engine analysis failed: %v", err)), nil
+	}
+
+	// Machine clients (IDE extensions) pass format=json to receive the raw
+	// structured response; interactive clients get the human-readable summary.
+	if req.GetString("format", "text") == "json" {
+		pretty, err := json.MarshalIndent(resp, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultText(fmt.Sprintf("%v", resp)), nil
+		}
+		return mcp.NewToolResultText(string(pretty)), nil
 	}
 
 	summary := formatDualEngineSummary(resp)
@@ -866,6 +882,43 @@ func deriveAttestationDecision(result map[string]interface{}) string {
 	return "hold_for_review"
 }
 
+// isProviderKeyRejection reports whether a backend error body indicates the
+// LLM provider itself rejected the passed API key (stale/revoked key) rather
+// than a code-level pipeline failure. Matches the error shapes produced by
+// the major providers: NVIDIA NIM (403 Authorization failed), OpenAI
+// (Incorrect API key provided), Anthropic (invalid x-api-key), Gemini
+// (API key not valid), NVIDIA model-access 403s ("does not exist or you do
+// not have access"), and generic provider 401/403 statuses.
+//
+// Deliberately NOT matched: "invalid API key" / "authentication failed" —
+// those also describe the BACKEND's own Bearer-auth rejection (AUTH_011), and
+// retrying without the LLM key cannot fix a bad API key, so it must not be
+// masked by the BYOK heal.
+func isProviderKeyRejection(body string) bool {
+	low := strings.ToLower(body)
+	signals := []string{
+		"authorization failed",
+		"incorrect api key",
+		"invalid x-api-key",
+		"api key not valid",
+		"do not have access",
+		"does not exist or you do not have access",
+		"model not found",
+		"status code: 401",
+		"status code: 403",
+		"returned status 401",
+		"returned status 403",
+		"\"status\":401",
+		"\"status\":403",
+	}
+	for _, sig := range signals {
+		if strings.Contains(low, sig) {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveLLMKey returns the tool-level api_key if provided, otherwise falls
 // back to the env-var LLM key set at server startup (VIGILAGENT_LLM_KEY).
 func (s *Server) resolveLLMKey(toolKey string) string {
@@ -899,6 +952,18 @@ func (s *Server) callBackendWithKey(ctx context.Context, path string, payload in
 }
 
 // doCall performs the HTTP round-trip against the given base URL.
+//
+// Self-healing BYOK: when the request carried a user-provided LLM key
+// (X-LLM-Key) and the backend reports the key was REJECTED by the LLM
+// provider (stale/revoked key — e.g. 403 Authorization failed from NVIDIA or
+// Incorrect API key from OpenAI), the call is retried ONCE without the key.
+// The backend then falls back to its own configured providers, so a stale
+// stored key in the IDE can never permanently block the review pipeline. This
+// mirrors the extension's 401 self-heal for the API key itself.
+// Unlike the 401 heal, this intentionally applies to remote backends too: a
+// rejected BYOK key can never be fixed by this server, so falling back to the
+// operator's configured providers is the middleware's purpose regardless of
+// location.
 func (s *Server) doCall(ctx context.Context, baseURL, path string, payload interface{}, llmKey string) (interface{}, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -929,6 +994,14 @@ func (s *Server) doCall(ctx context.Context, baseURL, path string, payload inter
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// BYOK self-heal: a provider-rejected key is a known-bad key, not a
+		// pipeline failure. Drop it and retry once so the backend uses its
+		// own configured LLM keys. The recursion is bounded: the retry passes
+		// llmKey="", so this branch cannot re-fire.
+		if llmKey != "" && isProviderKeyRejection(string(respBody)) {
+			slog.Warn("MCP: backend rejected BYOK LLM key (provider auth failure) — retrying without it", "path", path)
+			return s.doCall(ctx, baseURL, path, payload, "")
+		}
 		return nil, fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(respBody))
 	}
 

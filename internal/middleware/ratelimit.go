@@ -65,6 +65,14 @@ func NewRateLimiter(client *redis.Client, limit int, window time.Duration) *Rate
 func (rl *RateLimiter) Middleware(keyFunc func(r *http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Fail open when Redis is unavailable (e.g. dev mode without the
+			// container): go-redis panics with a nil-pointer deref when a nil
+			// client is used, and rate limiting must never crash a request.
+			if rl.client == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			ctx := r.Context()
 			key := "ratelimit:" + keyFunc(r)
 			now := time.Now().Unix()
@@ -973,7 +981,7 @@ func (p *PlanAwareRateLimiter) Middleware(orgPlanFn OrgPlanFunc) func(http.Handl
 				return
 			}
 
-			if limits.RequestsPerDay > 0 {
+			if limits.RequestsPerDay > 0 && p.client != nil {
 				dayKey := fmt.Sprintf("ratelimit:org:%s:day:%s", orgID, time.Now().Format("2006-01-02"))
 				// The pre-read is only a fast path; the Lua script below is the
 				// atomic decision point (it re-checks under the same lock Redis

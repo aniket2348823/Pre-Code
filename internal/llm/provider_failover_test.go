@@ -228,6 +228,31 @@ func TestExecuteWithFailover_FallbackToSecond(t *testing.T) {
 	}
 }
 
+func TestRankCandidates_IncludesConfiguredDefaultModel(t *testing.T) {
+	// A security task ranks only the high-complexity tier (claude-opus-4,
+	// gpt-4.5, deepseek-r1) — none of which the NVIDIA NIM provider offers.
+	// The configured default model must still be a candidate so a deployment
+	// can pin its own provider/model (e.g. a small NVIDIA model for the
+	// dual-engine pass) for every task, regardless of complexity tier.
+	r := NewModelRouter(&RouterConfig{DefaultModel: "meta/llama-3.1-8b-instruct"})
+	r.RegisterProvider("nvidia_nim", &countingProvider{name: "nvidia_nim"})
+
+	decision, err := r.Route(context.Background(), &Task{
+		ID:       "dual-engine-llm",
+		Type:     "security",
+		Messages: []Message{{Role: "user", Content: "review this code for vulnerabilities"}},
+	})
+	if err != nil {
+		t.Fatalf("route with configured default model: %v", err)
+	}
+	if decision.Model != "meta/llama-3.1-8b-instruct" {
+		t.Errorf("expected configured default model to be a candidate, got provider=%s model=%s", decision.Provider, decision.Model)
+	}
+	if decision.Provider != "nvidia_nim" {
+		t.Errorf("expected nvidia_nim provider, got %s", decision.Provider)
+	}
+}
+
 func TestExecuteWithFailover_NilCacheNilBudget(t *testing.T) {
 	r := NewModelRouter(nil)
 	r.RegisterProvider("openai", &countingProvider{name: "openai", resp: &ChatResponse{Content: "ok", Cost: 0.01}})

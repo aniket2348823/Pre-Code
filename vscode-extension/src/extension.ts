@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { VigilAgentChatParticipant } from './chat';
 import { VigilAgentClient, Finding, GatewayModel } from './client';
+import { VigilAgentMcpClient } from './mcpClient';
 import { VigilAgentStatusBar } from './statusbar';
 import { DiagnosticManager } from './diagnostics';
 import { AutoVerifier } from './autoVerify';
@@ -360,6 +361,19 @@ export function activate(context: vscode.ExtensionContext) {
     const client = new VigilAgentClient(backendUrl);
     client.setContext(context);
 
+    // MCP client for the @vigilagent chat participant: chat routes through
+    // the vigilagent-mcp server (stdio JSON-RPC) instead of direct REST, so
+    // the chat surface speaks the same Model Context Protocol as other MCP
+    // clients. The MCP binary ships in vendor/ or is set via
+    // vigilagent.mcpBinaryPath.
+    const mcpClient = new VigilAgentMcpClient(
+        backendUrl,
+        gatewayUrl,
+        VigilAgentMcpClient.resolveBinary(context)
+    );
+    mcpClient.setContext(context);
+    context.subscriptions.push({ dispose: () => void mcpClient.dispose() });
+
     // Suggestion store: line-anchored accept/reject fixes + dismiss state.
     const suggestionStore = new SuggestionStore();
     context.subscriptions.push(suggestionStore);
@@ -369,8 +383,8 @@ export function activate(context: vscode.ExtensionContext) {
     const diagnosticManager = new DiagnosticManager();
     context.subscriptions.push(diagnosticManager);
 
-    // Register the chat participant
-    const participant = new VigilAgentChatParticipant(client);
+    // Register the chat participant — routed through the MCP server
+    const participant = new VigilAgentChatParticipant(mcpClient);
     participant.register(context);
 
     // Register commands

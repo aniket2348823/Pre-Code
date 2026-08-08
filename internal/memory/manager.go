@@ -27,7 +27,6 @@ type Manager struct {
 	working    atomic.Pointer[WorkingMemory]
 	embedder   Embedder
 	pool       *database.Conn
-	mu         sync.RWMutex
 }
 
 // NewManager creates a new memory manager with all layers.

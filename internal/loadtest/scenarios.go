@@ -91,9 +91,8 @@ func ScenarioCRUD(client *http.Client, baseURL string) RequestResult {
 		listResult := MakeJSONRequest(client, "GET", baseURL+"/api/v1/projects?limit=5")
 		_ = listResult
 
-		// Get single project
-		getResult := MakeJSONRequest(client, "GET", baseURL+"/api/v1/projects/00000000-0000-0000-0000-000000000000")
-		lastResult = getResult
+		// Get single project (result unused — scenario exercises the endpoint only)
+		_ = MakeJSONRequest(client, "GET", baseURL+"/api/v1/projects/00000000-0000-0000-0000-000000000000")
 	}
 
 	// --- Agents CRUD ---
@@ -101,8 +100,7 @@ func ScenarioCRUD(client *http.Client, baseURL string) RequestResult {
 		"name":  fmt.Sprintf("load-agent-%d", time.Now().UnixNano()),
 		"model": "gpt-4o-mini",
 	})
-	createAgent := postJSON(client, baseURL+"/api/v1/agents", createAgentBody)
-	lastResult = createAgent
+	_ = postJSON(client, baseURL+"/api/v1/agents", createAgentBody)
 
 	// List agents
 	listAgents := MakeJSONRequest(client, "GET", baseURL+"/api/v1/agents?limit=5")

@@ -3,6 +3,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -81,7 +82,7 @@ func FuzzContextWithRequestID(f *testing.F) {
 	f.Add("id-1", "id-2")
 
 	f.Fuzz(func(t *testing.T, storeID, checkID string) {
-		ctx := ContextWithRequestID(nil, storeID)
+		ctx := ContextWithRequestID(context.TODO(), storeID)
 		got := RequestIDFromContext(ctx)
 		if got != storeID {
 			t.Fatalf("stored ID mismatch: got %q, want %q", got, storeID)

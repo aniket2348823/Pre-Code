@@ -108,6 +108,11 @@
           "default": "http://localhost:9090",
           "description": "VigilAgent Secure AI Gateway URL — chat models and the /v1/responses scan-and-release pipeline"
         },
+        "vigilagent.mcpBinaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to the vigilagent-mcp binary. When empty, the extension uses the bundled binary in vendor/ (or the repo mcp-server/vendor/ layout in development)."
+        },
         "vigilagent.defaultLanguage": {
           "type": "string",
           "default": "auto",

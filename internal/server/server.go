@@ -194,6 +194,13 @@ func New(cfg *config.Config) (*Server, error) {
 	alertRepo := repository.NewAlertRepository(conn)
 
 	apiKeyAuth := mw.NewAPIKeyAuth(conn)
+	// The VS Code extension's "Local development (no API key needed)" wizard
+	// stores the literal key "local-dev". Honor it only in development
+	// environments; production deployments keep rejecting it (inert bypass).
+	if isDev {
+		apiKeyAuth.AllowLocalDev()
+		slog.Info("local development API key bypass enabled (key: local-dev)")
+	}
 	rl := mw.NewRateLimiter(redisClient, 100, time.Minute)
 	authRL := mw.NewRateLimiter(redisClient, 10, time.Minute)
 
@@ -482,6 +489,7 @@ func (s *Server) Router() *router.Router {
 	return s.router
 }
 
+//lint:ignore U1000 asserted by server_test.go
 var version = "dev"
 
 func (s *Server) Shutdown(ctx context.Context) error {

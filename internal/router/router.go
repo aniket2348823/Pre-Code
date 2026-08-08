@@ -46,6 +46,8 @@ func (r *Router) setupMiddleware() {
 	r.Use(slogger.Middleware)
 	r.Use(middleware.Recoverer)
 	r.Use(compression.Middleware)
+	// Enforce the 2 MiB request-body cap globally (scan_handlers documents it).
+	r.Use(limitBodySize)
 	r.Use(r.securityHeadersMiddleware)
 	r.Use(mw.CacheControl(mw.DefaultAPICache()))
 
@@ -1604,6 +1606,16 @@ func extractLoginIP(r *http.Request) string {
 	return ip
 }
 
+// redactToken returns a safe-to-log prefix of a credential (first 6 chars)
+// plus a count of remaining chars — never the full value. Keeps auth-failure
+// logs diagnosable without leaking secrets.
+func redactToken(token string) string {
+	if len(token) <= 6 {
+		return "***"
+	}
+	return token[:6] + "…"
+}
+
 func (r *Router) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var claims *auth.Claims
@@ -1635,6 +1647,17 @@ func (r *Router) authMiddleware(next http.Handler) http.Handler {
 			}
 			c, err := r.auth.ValidateToken(parts[1])
 			if err != nil {
+				// Redacted auth-failure observability: log the token's shape (never
+				// the value) so misconfigured clients — e.g. an extension that
+				// stored a stale or non-API-key secret — can be diagnosed from the
+				// API log alone.
+				slog.Warn("auth: JWT validation failed",
+					"error", err,
+					"token_prefix", redactToken(parts[1]),
+					"token_len", len(parts[1]),
+					"has_underscore", strings.Contains(parts[1], "_"),
+					"has_dot", strings.Contains(parts[1], "."),
+				)
 				apiErr := apperrors.New(apperrors.ErrTokenExpired, "invalid or expired token")
 				response.JSON(w, apiErr.HTTPStatus(), apiErr)
 				return

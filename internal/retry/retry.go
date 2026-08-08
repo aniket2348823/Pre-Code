@@ -6,7 +6,7 @@ package retry
 import (
 	"context"
 	"math"
-	"math/rand"
+	"math/rand" // #nosec G404 — retry jitter only, never used for secrets // nosemgrep: math-random-used
 	"sync"
 	"time"
 )
@@ -107,6 +107,7 @@ func (p Policy) ComputeDelay(attempt int) time.Duration {
 	// Apply jitter
 	if p.JitterPct > 0 {
 		jitter := delay * p.JitterPct
+		// #nosec G404 — retry jitter is not security-sensitive
 		delay = delay - jitter + rand.Float64()*2*jitter
 	}
 

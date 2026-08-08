@@ -61,7 +61,7 @@ func RouteRequest(model string, cfg *Config) *ProviderConfig {
 	case strings.HasSuffix(model, ":free") || (cfg.OpenRouterKey != "" && strings.Contains(model, "/")):
 		return &ProviderConfig{Name: "openrouter", BaseURL: "https://openrouter.ai/api", APIKey: cfg.OpenRouterKey}
 	case strings.HasPrefix(model, "kimi-") || strings.HasPrefix(model, "deepseek-") || strings.HasPrefix(model, "nvidia/") || strings.HasPrefix(model, "meta/") || strings.HasPrefix(model, "mistralai/") || strings.HasPrefix(model, "moonshotai/") || strings.HasPrefix(model, "qwen/") || strings.HasPrefix(model, "deepseek-ai/"):
-		return &ProviderConfig{Name: "nvidia", BaseURL: "https://integrate.api.nvidia.com", APIKey: cfg.NVIDIAKey}
+		return &ProviderConfig{Name: "nvidia", BaseURL: "https://build.nvidia.com", APIKey: cfg.NVIDIAKey}
 	case strings.HasPrefix(model, "llama-") || strings.HasPrefix(model, "mixtral-") || strings.HasPrefix(model, "gemma"):
 		return &ProviderConfig{Name: "groq", BaseURL: "https://api.groq.com", APIKey: cfg.GroqKey}
 	case strings.HasPrefix(model, "mistral") || strings.HasPrefix(model, "open-mixtral") || strings.HasPrefix(model, "codestral") || strings.HasPrefix(model, "pixtral"):
@@ -76,6 +76,7 @@ func RouteRequest(model string, cfg *Config) *ProviderConfig {
 	}
 }
 
+//lint:ignore U1000 used by providers_test.go
 // forwardToProvider sends the request to the real LLM provider and returns the raw response.
 func forwardToProvider(ctx context.Context, client *http.Client, provider *ProviderConfig, requestBody []byte, path string) ([]byte, error) {
 	rawURL := provider.BaseURL + path

@@ -83,6 +83,8 @@ func (s *Sandbox) executeLocal(ctx context.Context, command string) (string, err
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// #nosec G204 — the sandbox tool executes agent-requested shell commands by
+	// design; guarded by LocalWarning() and config checks (see Execute docs).
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	output, err := cmd.CombinedOutput()
 

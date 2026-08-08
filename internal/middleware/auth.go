@@ -17,14 +17,32 @@ import (
 
 // --- API Key Authentication ---
 
+// localDevKey is the literal API key the VS Code extension wizard stores when
+// the user picks "Local development (no API key needed)". The backend only
+// accepts it in development environments (see AllowLocalDev) — production
+// deployments keep rejecting it.
+const localDevKey = "local-dev"
+
 // APIKeyAuth provides DB-backed API key authentication.
 type APIKeyAuth struct {
 	pool *database.Conn
+
+	// allowLocalDev accepts the literal key "local-dev" without a DB lookup.
+	// This backs the extension's "Local development (no API key needed)"
+	// wizard option and must ONLY be enabled in development environments.
+	allowLocalDev bool
 }
 
 // NewAPIKeyAuth creates a new API key auth middleware.
 func NewAPIKeyAuth(pool *database.Conn) *APIKeyAuth {
 	return &APIKeyAuth{pool: pool}
+}
+
+// AllowLocalDev enables the "local-dev" development key bypass. It is the
+// caller's responsibility to only call this in development environments;
+// the bypass is inert (still rejected) unless enabled here.
+func (a *APIKeyAuth) AllowLocalDev() {
+	a.allowLocalDev = true
 }
 
 // hashKey returns the plain SHA-256 hex digest of a key. Retained for test
@@ -87,6 +105,25 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 	plaintext := extractAPIKey(r)
 	if plaintext == "" {
 		return nil, nil
+	}
+
+	// Local-development mode: the extension's wizard stores the literal key
+	// "local-dev" when "Local development (no API key needed)" is selected.
+	// Accept it without a DB lookup, but ONLY when the server explicitly
+	// enabled the bypass (development environments). Wildcard scope so the
+	// full extension surface (scan/review/deep-analyze) is usable locally.
+	if plaintext == localDevKey {
+		if !a.allowLocalDev {
+			return nil, ErrInvalidAPIKey
+		}
+		slog.Debug("api-key: local development key accepted", "key", localDevKey)
+		return &auth.Claims{
+			UserID:   "local-dev",
+			Email:    "local-dev@vigilagent",
+			Role:     "admin",
+			Scopes:   []string{"*"},
+			IsAPIKey: true,
+		}, nil
 	}
 
 	// Keys are stored as bcrypt(SHA-256(plaintext)) (see auth.GenerateKey), so a
@@ -178,8 +215,9 @@ func extractAPIKey(r *http.Request) string {
 			token := parts[1]
 			// API keys are marked by an underscore-containing prefix and are never
 			// JWTs (which always contain '.'). This mirrors isAPIKeyRequest in
-			// security.go and stays correct for any configured key prefix.
-			if strings.Contains(token, "_") && !strings.Contains(token, ".") {
+			// security.go and stays correct for any configured key prefix. The
+			// literal "local-dev" development key is also an API key, not a JWT.
+			if token == localDevKey || (strings.Contains(token, "_") && !strings.Contains(token, ".")) {
 				return token
 			}
 		}

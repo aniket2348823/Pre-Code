@@ -6,8 +6,8 @@ server:
   host: 0.0.0.0
   port: 8080
   env: production
-  read_timeout: 10s
-  write_timeout: 10s
+  read_timeout: 120s
+  write_timeout: 200s
   idle_timeout: 120s
 
 database:

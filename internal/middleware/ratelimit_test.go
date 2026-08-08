@@ -15,6 +15,47 @@ import (
 )
 
 // Content from ratelimit_test.go
+// TestRateLimiter_NilClientFailsOpen verifies that a RateLimiter with a nil
+// Redis client passes requests through instead of panicking (dev mode without
+// Redis). Regression test for the nil-pointer deref in rateLimitScript.Run.
+func TestRateLimiter_NilClientFailsOpen(t *testing.T) {
+	rl := NewRateLimiter(nil, 100, time.Minute)
+	nextCalled := false
+	handler := rl.Middleware(func(r *http.Request) string {
+		return "test-key"
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/api/v1/test", nil)
+	w := httptest.NewRecorder()
+	assert.NotPanics(t, func() { handler.ServeHTTP(w, req) })
+	assert.True(t, nextCalled, "next handler must be called when Redis is nil")
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestPlanAwareRateLimiter_NilClientFailsOpen verifies that the plan-aware
+// limiter does not panic when Redis is unavailable (nil client) — the daily
+// quota Lua path must be skipped, not dereferenced. Regression test for the
+// nil-pointer panic found alongside the RateLimiter fix.
+func TestPlanAwareRateLimiter_NilClientFailsOpen(t *testing.T) {
+	p := NewPlanAwareRateLimiter(nil)
+	nextCalled := false
+	handler := p.Middleware(func(r *http.Request) (string, PlanTier) {
+		return "org-1", PlanFree
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("POST", "/api/v1/deep-analyze", nil)
+	w := httptest.NewRecorder()
+	assert.NotPanics(t, func() { handler.ServeHTTP(w, req) })
+	assert.True(t, nextCalled, "next handler must be called when Redis is nil")
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestRateLimitByIPKey(t *testing.T) {
 	tests := []struct {
 		name        string

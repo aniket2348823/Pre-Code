@@ -9,7 +9,9 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/vigil-api ./cmd/api
 
 # Production Stage
-FROM alpine:3.21 AS prod
+# alpine:3.23 (May 2025) — newer minor keeps the trivy CI scan (CRITICAL/HIGH)
+# clean; the scanner gates production merges on the final image only.
+FROM alpine:3.23 AS prod
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/vigil-api /app/vigil-api

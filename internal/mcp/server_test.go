@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +20,10 @@ import (
 // Tests read this to verify the header was forwarded correctly.
 var capturedLLMKey atomic.Value
 
+// capturedReviewBody stores the JSON body of the last /api/v1/review request
+// so tests can verify the payload the MCP server forwarded to the backend.
+var capturedReviewBody atomic.Value
+
 func mockBackend(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -29,6 +35,10 @@ func mockBackend(t *testing.T) *httptest.Server {
 		}
 		// Capture X-LLM-Key for test assertions
 		capturedLLMKey.Store(r.Header.Get("X-LLM-Key"))
+		// Capture the forwarded body (prompt/code forwarding assertions).
+		if body, err := io.ReadAll(r.Body); err == nil {
+			capturedReviewBody.Store(string(body))
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -178,6 +188,110 @@ func newTestRequest(toolName string, args map[string]interface{}) mcp.CallToolRe
 }
 
 // ─── Unit Tests ───────────────────────────────────────────────────────────
+
+// ─── BYOK Provider-Key Rejection Self-Heal ───────────────────────────────
+
+func TestIsProviderKeyRejection(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"nvidia 403 authorization failed", `{"error":{"message":"nvidia nim returned status 403: {\"status\":403,\"title\":\"Forbidden\",\"detail\":\"Authorization failed\"}"}}`, true},
+		{"openai incorrect api key", `main LLM failed: openai chat failed: Incorrect API key provided: sk-***`, true},
+		{"anthropic invalid x-api-key", `anthropic returned status 401: invalid x-api-key`, true},
+		{"gemini api key not valid", `gemini: API key not valid. Please pass a valid API key.`, true},
+		{"nvidia model access 403", `nvidia nim returned status 403: {\"status\":403,\"title\":\"Forbidden\",\"detail\":\"The model meta/llama-3.1-8b-instruct does not exist or you do not have access to it\"}`, true},
+		{"status 403 bare", `provider returned status 403`, true},
+		{"status 401 bare", `provider returned status 401`, true},
+		{"backend auth 401 (AUTH_011) NOT key rejection", `{\"code\":\"AUTH_011\",\"message\":\"invalid API key\"}`, false},
+		{"authentication failed alone NOT matched", `backend: authentication failed`, false},
+		{"unrelated 500", `review pipeline failed: deterministic engine timeout`, false},
+		{"empty body", ``, false},
+		{"plain 500 no provider", `backend exploded`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isProviderKeyRejection(tt.body); got != tt.want {
+				t.Errorf("isProviderKeyRejection(%q) = %v, want %v", tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDoCallSelfHealsProviderKeyRejection verifies the BYOK self-heal: when
+// the backend rejects the passed LLM key (provider auth failure), doCall
+// retries ONCE without X-LLM-Key and succeeds with the backend's own key.
+func TestDoCallSelfHealsProviderKeyRejection(t *testing.T) {
+	var (
+		calls        atomic.Int32
+		keysReceived atomic.Value // []string of X-LLM-Key per call
+	)
+	keysReceived.Store([]string{})
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		// Record which key each attempt carried.
+		prev := keysReceived.Load().([]string)
+		keysReceived.Store(append(prev, r.Header.Get("X-LLM-Key")))
+
+		if call == 1 {
+			// First attempt: backend forwards the stale BYOK key to the
+			// provider, which rejects it — the exact error shape from NVIDIA.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `{"success":false,"error":{"code":"ERROR","message":"review pipeline failed: main LLM failed: all providers failed for task shift-zero-main: nvidia nim returned status 403: {\"status\":403,\"title\":\"Forbidden\",\"detail\":\"Authorization failed\"}"}}`)
+			return
+		}
+		// Second attempt (self-heal): backend uses its own key — success.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"confidence": map[string]interface{}{"grade": "A", "confidence": 0.95},
+		})
+	}))
+	defer backend.Close()
+
+	srv := NewServer(backend.URL, "va_test_key", "")
+	resp, err := srv.doCall(context.Background(), backend.URL, "/api/v1/review",
+		map[string]interface{}{"code": "x"}, "stale-nvapi-key")
+	if err != nil {
+		t.Fatalf("doCall should self-heal and succeed, got error: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("expected exactly 2 backend calls (fail + self-heal retry), got %d", calls.Load())
+	}
+	result, ok := resp.(map[string]interface{})
+	if !ok || result["success"] != true {
+		t.Errorf("expected success result from self-healed call, got %v", resp)
+	}
+
+	keys := keysReceived.Load().([]string)
+	if len(keys) != 2 || keys[0] != "stale-nvapi-key" || keys[1] != "" {
+		t.Errorf("expected first call with stale key then retry WITHOUT key, got %v", keys)
+	}
+}
+
+// TestDoCallNoSelfHealWithoutKey verifies a provider rejection does NOT retry
+// when no BYOK key was sent (the error surfaces as-is).
+func TestDoCallNoSelfHealWithoutKey(t *testing.T) {
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, `{"error":"Authorization failed"}`, http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+
+	srv := NewServer(backend.URL, "va_test_key", "")
+	_, err := srv.doCall(context.Background(), backend.URL, "/api/v1/review",
+		map[string]interface{}{"code": "x"}, "")
+	if err == nil {
+		t.Fatal("expected error when no key was sent")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("expected exactly 1 backend call (no retry without key), got %d", calls.Load())
+	}
+}
 
 func TestResolveLLMKey(t *testing.T) {
 	tests := []struct {
@@ -610,6 +724,50 @@ func TestDeriveAttestationDecision(t *testing.T) {
 
 // ─── Handler Tests: Missing Required Args ─────────────────────────────────
 
+func TestHandleVerifyPromptOnly(t *testing.T) {
+	backend := mockBackend(t)
+	defer backend.Close()
+	capturedReviewBody.Store("")
+	srv := NewServer(backend.URL, "va_test_key", "")
+
+	// Prompt-only: the backend generates the code from the prompt and the MCP
+	// server must forward the prompt (with empty code) untouched.
+	result, err := srv.handleVerify(context.Background(), newTestRequest("vigil_verify", map[string]interface{}{
+		"prompt":   "generate a function to add two numbers",
+		"language": "go",
+	}))
+	if err != nil {
+		t.Fatalf("handleVerify (prompt-only) error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("prompt-only verify should succeed, got error: %s", extractText(t, result))
+	}
+
+	text := extractText(t, result)
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	confidence, _ := parsed["confidence"].(map[string]interface{})
+	if confidence["grade"] != "A" {
+		t.Errorf("expected grade A, got %v", confidence["grade"])
+	}
+
+	// The forwarded payload must carry the prompt and an EMPTY code so the
+	// backend knows to generate (code empty ⇒ Main LLM generates from prompt).
+	body := capturedReviewBody.Load().(string)
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("parse forwarded body: %v", err)
+	}
+	if payload["prompt"] != "generate a function to add two numbers" {
+		t.Errorf("expected prompt forwarded to backend, got %v", payload["prompt"])
+	}
+	if code, _ := payload["code"].(string); code != "" {
+		t.Errorf("expected empty code forwarded (backend generates), got %q", code)
+	}
+}
+
 func TestHandleVerifyMissingCode(t *testing.T) {
 	srv := NewServer("http://localhost:9999", "va_test_key", "")
 	result, err := srv.handleVerify(context.Background(), newTestRequest("vigil_verify", map[string]interface{}{
@@ -619,11 +777,11 @@ func TestHandleVerifyMissingCode(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !result.IsError {
-		t.Error("expected error result for missing code")
+		t.Error("expected error result for missing code and prompt")
 	}
 	text := extractText(t, result)
-	if !strings.Contains(text, "code is required") {
-		t.Errorf("expected 'code is required' error, got: %s", text)
+	if !strings.Contains(text, "code or prompt is required") {
+		t.Errorf("expected 'code or prompt is required' error, got: %s", text)
 	}
 }
 

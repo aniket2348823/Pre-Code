@@ -263,7 +263,7 @@ func (h *Hub) Run() {
 		case event := <-h.broadcast:
 			h.mu.RLock()
 			for conn, meta := range h.connections {
-				if meta.Channels == nil || len(meta.Channels) == 0 || meta.Channels[string(event.Type)] {
+				if len(meta.Channels) == 0 || meta.Channels[string(event.Type)] {
 					select {
 					case conn.send <- event:
 					default:

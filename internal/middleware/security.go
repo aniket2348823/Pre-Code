@@ -109,7 +109,7 @@ func DefaultCSRFConfig() *CSRFConfig {
 	return &CSRFConfig{
 		CookieName:     "csrf_token",
 		CookieSecure:   true,
-		CookieHTTPOnly: false,
+		CookieHTTPOnly: true, // CSRF tokens are also delivered via X-CSRF-Token header; no JS cookie access needed
 		HeaderName:     "X-CSRF-Token",
 		TokenLength:    32,
 		MaxAge:         1 * time.Hour,
@@ -413,6 +413,7 @@ func (m *CSRFMiddleware) Middleware(next http.Handler) http.Handler {
 			Value:    token,
 			Path:     "/",
 			HttpOnly: true,
+			Secure:   true,
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   3600,
 		})
@@ -448,6 +449,7 @@ func (m *CSRFMiddleware) SetToken(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   3600,
 	})
@@ -508,7 +510,10 @@ func isAPIKeyRequest(r *http.Request) bool {
 		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
 			token := parts[1]
 
-			if !strings.Contains(token, ".") && strings.Contains(token, "_") {
+			// The literal "local-dev" development key is an API key, not a JWT
+			// (matches extractAPIKey in auth.go). API key consumers cannot hold
+			// CSRF cookies, so CSRF validation is skipped for them.
+			if token == "local-dev" || (!strings.Contains(token, ".") && strings.Contains(token, "_")) {
 				return true
 			}
 		}

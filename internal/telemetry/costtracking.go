@@ -24,7 +24,6 @@ type CostTracker struct {
 	orgCache    map[string]swrEntry[OrgCostSummary]
 	modelCache  swrEntry[map[string]ModelCostSummary]
 	cacheTTL    time.Duration
-	lastRebuild time.Time
 
 	// Prometheus metrics
 	costMetric  *prometheus.CounterVec

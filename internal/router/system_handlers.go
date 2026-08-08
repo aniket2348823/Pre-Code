@@ -1,7 +1,6 @@
 package router
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vigilagent/vigilagent/internal/agent"
 	"github.com/vigilagent/vigilagent/internal/auth"
 	"github.com/vigilagent/vigilagent/internal/featureflags"
 	"github.com/vigilagent/vigilagent/internal/llm"
@@ -596,55 +594,6 @@ func (r *Router) middlewarePatternsHandler(w http.ResponseWriter, req *http.Requ
 		"patterns":         recs,
 		"middleware_stats": "active",
 	})
-}
-
-// executeTaskBackground runs a task in the background goroutine.
-func (r *Router) executeTaskBackground(task *repository.Task, userID string) {
-	// Decrement batch rate limit counter when task completes (success or failure).
-	if userID != "" && r.rds != nil && r.rds.Client != nil {
-		defer func() {
-			batchKey := fmt.Sprintf("batch:%s", userID)
-			r.rds.Client.Decr(context.Background(), batchKey)
-		}()
-	}
-
-	if r.agentExec == nil {
-		if err := r.tasks.Complete(context.Background(), task.ID, task.Prompt, "", "", 0, 0, 0, 0); err != nil {
-			slog.Error("failed to complete task (no agent)", "error", err, "task_id", task.ID)
-		}
-		return
-	}
-
-	bgCtx := context.Background()
-	var orgID string
-	if proj, err := r.projects.FindByID(bgCtx, task.ProjectID); err == nil {
-		orgID = proj.OrgID
-	}
-	agentTask := &agent.Task{
-		ID:            task.ID,
-		UserID:        task.UserID,
-		ProjectID:     task.ProjectID,
-		OrgID:         orgID,
-		Title:         task.Prompt,
-		Description:   task.Prompt,
-		MaxIterations: task.MaxIterations,
-		MaxRetries:    3,
-		MaxTokens:     task.MaxTokens,
-		State:         agent.StatePending,
-		Tags:          []string{},
-	}
-
-	result, execErr := r.agentExec.ExecuteTask(bgCtx, agentTask)
-	if execErr != nil {
-		if updateErr := r.tasks.UpdateStatus(context.Background(), task.ID, "failed"); updateErr != nil {
-			slog.Error("failed to update task status to failed", "error", updateErr, "task_id", task.ID)
-		}
-		return
-	}
-	if err := r.tasks.Complete(bgCtx, task.ID, result.Result, "", "",
-		result.TokensUsed, 0, result.TokensUsed, result.Cost); err != nil {
-		slog.Error("failed to complete task", "error", err, "task_id", task.ID)
-	}
 }
 
 // healthStatsHandler returns real-time provider health statistics.

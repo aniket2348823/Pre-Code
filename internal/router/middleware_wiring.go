@@ -1,9 +1,11 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
@@ -33,6 +35,11 @@ type MiddlewareConfig struct {
 	Timeout     time.Duration
 	Idempotency *idempotency.Store
 	RateGuard   *rateguard.EndpointLimiter
+	// SlowPathTimeout is the bounded deadline applied to LLM-backed endpoints
+	// (deep-analyze, review, middleware/process, tasks). Zero means the default
+	// of 180s. Must stay below the server's http.Server.WriteTimeout so the
+	// graceful error response can still be written when the deadline fires.
+	SlowPathTimeout time.Duration
 }
 
 // setupSecurityMiddleware applies security-focused middleware: request signing,
@@ -85,9 +92,81 @@ func (r *Router) setupResilienceMiddleware(cfg *MiddlewareConfig) {
 	// 3. Request timeout (override chi's default if configured)
 	if cfg != nil && cfg.Timeout > 0 {
 		r.Use(func(next http.Handler) http.Handler {
-			return http.TimeoutHandler(next, cfg.Timeout, `{"error":"request timeout"}`)
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				// Long-lived streams (SSE task streams, WebSocket) are never
+				// deadline-wrapped: their lifetime is client-driven, and net/http
+				// already cancels the request context when the client disconnects.
+				if isUnboundedPath(req) {
+					next.ServeHTTP(w, req)
+					return
+				}
+				// LLM-backed endpoints (dual-engine analysis, review pipeline, code
+				// generation, middleware/process, agent tasks) legitimately run
+				// 20-90s — far past the generic deadline. They get a generous
+				// bounded deadline via context cancellation instead of the generic
+				// http.TimeoutHandler: the stdlib wrapper panics with a nil-pointer
+				// deref when the still-running handler writes to the already-
+				// torn-down response, whereas the LLM adapters respect ctx
+				// cancellation (their http.Client carries its own timeout), so a
+				// stuck provider returns a clean error instead of hanging forever.
+				// NOTE: the unbounded check ABOVE must stay first — several slow-
+				// prefix paths (e.g. /tasks/.../stream) are intentionally exempt.
+				if isSlowLLMPath(req.URL.Path) {
+					slowTimeout := cfg.SlowPathTimeout
+					if slowTimeout <= 0 {
+						slowTimeout = 180 * time.Second
+					}
+					ctx, cancel := context.WithTimeout(req.Context(), slowTimeout)
+					defer cancel()
+					next.ServeHTTP(w, req.WithContext(ctx))
+					return
+				}
+				http.TimeoutHandler(next, cfg.Timeout, `{"error":"request timeout"}`).ServeHTTP(w, req)
+			})
 		})
 	}
+}
+
+// slowLLMPathPrefixes are route prefixes whose handlers perform LLM calls and
+// therefore exceed the generic request deadline.
+var slowLLMPathPrefixes = []string{
+	"/api/v1/deep-analyze",       // dual-engine analysis (deterministic + LLM in parallel)
+	"/api/v1/review",             // 5-role LLM review pipeline (+ code generation from prompt)
+	"/api/v1/middleware/process", // middleware pipeline with LLM critique
+	"/api/v1/tasks",              // agent execution
+}
+
+// unboundedPathPatterns are long-lived streaming endpoints that must never be
+// deadline-wrapped. WebSocket is matched exactly (http.TimeoutHandler's wrapper
+// ResponseWriter does not implement http.Hijacker, so upgrades would fail under
+// it); SSE task streams are matched by their /stream suffix.
+func isUnboundedPath(req *http.Request) bool {
+	path := req.URL.Path
+	if path == "/api/v1/ws" || strings.HasPrefix(path, "/api/v1/ws/") {
+		return true
+	}
+	if strings.HasSuffix(path, "/stream") {
+		return true
+	}
+	// middleware/process streams via SSE when the client asks for it (Accept:
+	// text/event-stream) — same long-lived treatment as /stream routes.
+	return path == "/api/v1/middleware/process" &&
+		(req.Header.Get("Accept") == "text/event-stream" ||
+			req.Header.Get("Content-Type") == "text/event-stream")
+}
+
+// isSlowLLMPath reports whether the request path is exempt from the aggressive
+// http.TimeoutHandler because its handler legitimately takes longer than the
+// generic deadline (LLM round-trips, agent execution). Matching requires a path
+// boundary after the prefix so that e.g. /api/v1/review does not accidentally
+// match /api/v1/review-preview.
+func isSlowLLMPath(path string) bool {
+	for _, p := range slowLLMPathPrefixes {
+		if strings.HasPrefix(path, p) && (len(path) == len(p) || path[len(p)] == '/') {
+			return true
+		}
+	}
+	return false
 }
 
 // setupObservabilityMiddleware applies observability-focused middleware:

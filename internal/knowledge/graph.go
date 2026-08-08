@@ -229,14 +229,6 @@ func (g *Graph) AddNode(n *Node) {
 	}
 }
 
-func float32SliceToSQL(v []float32) string {
-	parts := make([]string, len(v))
-	for i, f := range v {
-		parts[i] = fmt.Sprintf("%g", f)
-	}
-	return strings.Join(parts, ",")
-}
-
 // AddEdge adds a directed edge between two existing nodes and persists to DB.
 func (g *Graph) AddEdge(e Edge) {
 	g.mu.Lock()

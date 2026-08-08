@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { VigilAgentClient } from './client';
+import { VigilAgentMcpClient } from './mcpClient';
 
 // Sanitize server-derived text before it becomes chat markdown. Finding
 // messages can embed snippets of scanned (untrusted) code; neutralizing
@@ -28,9 +28,12 @@ function sanitizeMarkdown(text: string | undefined | null): string {
 }
 
 export class VigilAgentChatParticipant {
-    private client: VigilAgentClient;
+    // The @vigilagent chat participant routes through the MCP server (stdio
+    // JSON-RPC) so the chat surface speaks the same Model Context Protocol as
+    // Cursor / Cline / Claude Desktop — one tool surface for every client.
+    private client: VigilAgentMcpClient;
 
-    constructor(client: VigilAgentClient) {
+    constructor(client: VigilAgentMcpClient) {
         this.client = client;
     }
 
@@ -70,26 +73,60 @@ export class VigilAgentChatParticipant {
         }
     }
 
-    private parseAction(prompt: string): { type: string; code?: string; language?: string; filename?: string } {
-        const lower = prompt.toLowerCase();
+    private parseAction(prompt: string): { type: string; args: string } {
+        const lower = prompt.toLowerCase().trim();
+        // Strip the leading command keyword; the remainder is the generation
+        // prompt used when no editor code is available.
+        const restAfter = (keyword: string): string => prompt.slice(keyword.length).trim();
 
-        if (lower.startsWith('scan ') || lower.startsWith('scanfile ')) {
-            return { type: 'scan' };
+        if (lower.startsWith('scanfile ')) {
+            return { type: 'scan', args: restAfter('scanfile') };
+        }
+        if (lower.startsWith('scan ')) {
+            return { type: 'scan', args: restAfter('scan') };
+        }
+        if (lower === 'scan' || lower === 'scanfile') {
+            return { type: 'scan', args: '' };
         }
         if (lower.startsWith('verify ') || lower.startsWith('review ')) {
-            return { type: 'verify' };
+            return { type: 'verify', args: restAfter(lower.startsWith('verify ') ? 'verify' : 'review') };
+        }
+        if (lower === 'verify' || lower === 'review') {
+            return { type: 'verify', args: '' };
         }
         if (lower.startsWith('dual') || lower.startsWith('deep') || lower.startsWith('parallel')) {
-            return { type: 'dualengine' };
+            const space = prompt.indexOf(' ');
+            const args = space >= 0 ? prompt.slice(space + 1).trim() : '';
+            return { type: 'dualengine', args };
         }
         if (lower === 'help' || lower === '?') {
-            return { type: 'help' };
+            return { type: 'help', args: '' };
         }
-        return { type: 'general' };
+        return { type: 'general', args: prompt };
+    }
+
+    // getEditorCode returns the active editor's code + context when a file
+    // with non-empty content is open; undefined otherwise (chat focused, no
+    // file, or empty file). The command handlers use this to decide between
+    // scanning editor code and generating from the prompt.
+    private getEditorCode(): { code: string; filename: string; language: string } | undefined {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            return undefined;
+        }
+        const code = editor.document.getText();
+        if (code.trim() === '') {
+            return undefined;
+        }
+        return {
+            code,
+            filename: editor.document.fileName.split(/[/\\]/).pop() || 'unknown',
+            language: editor.document.languageId,
+        };
     }
 
     private async handleScan(
-        action: { code?: string; language?: string; filename?: string },
+        action: { args: string },
         stream: vscode.ChatResponseStream,
         _token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> {
@@ -99,22 +136,33 @@ export class VigilAgentChatParticipant {
             return {};
         }
 
-        // Try to get code from the active editor
-        const editor = vscode.window.activeTextEditor;
+        const editor = this.getEditorCode();
+
+        // No code in the editor: the LLM generates the code from the prompt,
+        // then it flows through the VigilAgent backend layer (deterministic
+        // engine + LLM reviewers) before it reaches the user. This is the
+        // middleware path — the generated code is never shown un-scanned.
         if (!editor) {
-            stream.markdown('⚠️ No active editor found. Open a file and try again.');
+            if (!action.args) {
+                stream.markdown('⚠️ No active editor with code found, and no prompt to generate from.\n\nOpen a file and type `@vigilagent scan`, or type `@vigilagent scan <prompt>` to generate + scan.');
+                return {};
+            }
+            stream.progress('⚙️ Generating code from prompt → passing through VigilAgent analysis layer...');
+            try {
+                // suggestion_mode=false: classic flow, auto-fixed improved output.
+                const result = await this.client.verify('', action.args, '', '', false);
+                this.formatReviewResult(result, stream, 'generated code', true);
+            } catch (err: any) {
+                stream.markdown(`❌ Generate + scan failed: ${sanitizeMarkdown(err.message)}`);
+            }
             return {};
         }
-
-        const code = editor.document.getText();
-        const filename = editor.document.fileName.split(/[/\\]/).pop() || 'unknown';
-        const language = editor.document.languageId;
 
         stream.progress('🔍 Running VigilAgent deterministic scan...');
 
         try {
-            const result = await this.client.scan(code, language, filename);
-            this.formatScanResult(result, stream, filename);
+            const result = await this.client.scan(editor.code, editor.language, editor.filename);
+            this.formatScanResult(result, stream, editor.filename);
         } catch (err: any) {
             if (err.message?.includes('API key not configured')) {
                 stream.markdown('⚠️ VigilAgent API key not configured.\n\nRun **VigilAgent: Configure API Keys** from the Command Palette.');
@@ -127,7 +175,7 @@ export class VigilAgentChatParticipant {
     }
 
     private async handleVerify(
-        action: { code?: string; language?: string; filename?: string },
+        action: { args: string },
         stream: vscode.ChatResponseStream,
         _token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> {
@@ -137,23 +185,32 @@ export class VigilAgentChatParticipant {
             return {};
         }
 
-        const editor = vscode.window.activeTextEditor;
+        const editor = this.getEditorCode();
+
+        // No editor code: the prompt drives the generation, and the generated
+        // code is verified by the full pipeline before it is shown.
         if (!editor) {
-            stream.markdown('⚠️ No active editor found. Open a file and try again.');
+            if (!action.args) {
+                stream.markdown('⚠️ No active editor with code found, and no prompt to verify from.\n\nOpen a file and type `@vigilagent verify`, or type `@vigilagent verify <prompt>` to generate + verify.');
+                return {};
+            }
+            stream.progress('⚙️ Generating code from prompt → running full verification pipeline...');
+            try {
+                const result = await this.client.verify('', action.args, '', '', false);
+                this.formatReviewResult(result, stream, 'generated code', true);
+            } catch (err: any) {
+                stream.markdown(`❌ Generate + verify failed: ${sanitizeMarkdown(err.message)}`);
+            }
             return {};
         }
-
-        const code = editor.document.getText();
-        const filename = editor.document.fileName.split(/[/\\]/).pop() || 'unknown';
-        const language = editor.document.languageId;
 
         stream.progress('🛡️ Running full Shift-Zero verification pipeline...');
 
         try {
             // Classic chat flow: auto-fixed "Improved Output" (not suggestion
             // mode) — suggestion mode powers the inline quick-fix surfaces.
-            const result = await this.client.verify(code, '', language, filename, false);
-            this.formatReviewResult(result, stream, filename);
+            const result = await this.client.verify(editor.code, '', editor.language, editor.filename, false);
+            this.formatReviewResult(result, stream, editor.filename);
         } catch (err: any) {
             if (err.message?.includes('API key not configured')) {
                 stream.markdown('⚠️ VigilAgent API key not configured.\n\nRun **VigilAgent: Configure API Keys** from the Command Palette.');
@@ -166,7 +223,7 @@ export class VigilAgentChatParticipant {
     }
 
     private async handleDualEngine(
-        action: { code?: string; language?: string; filename?: string },
+        action: { args: string },
         stream: vscode.ChatResponseStream,
         _token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> {
@@ -176,21 +233,31 @@ export class VigilAgentChatParticipant {
             return {};
         }
 
-        const editor = vscode.window.activeTextEditor;
+        const editor = this.getEditorCode();
+
+        // No editor code: the dual-engine endpoint requires code, so route the
+        // prompt through the review pipeline instead — it runs BOTH engines
+        // (deterministic + LLM reviewers) on the generated code.
         if (!editor) {
-            stream.markdown('⚠️ No active editor found. Open a file and try again.');
+            if (!action.args) {
+                stream.markdown('⚠️ No active editor with code found, and no prompt to analyze.\n\nOpen a file and type `@vigilagent dual`, or type `@vigilagent dual <prompt>` to generate + analyze.');
+                return {};
+            }
+            stream.progress('⚙️ Generating code from prompt → running dual-engine analysis...');
+            try {
+                const result = await this.client.verify('', action.args, '', '', false);
+                this.formatReviewResult(result, stream, 'generated code', true);
+            } catch (err: any) {
+                stream.markdown(`❌ Generate + analyze failed: ${sanitizeMarkdown(err.message)}`);
+            }
             return {};
         }
-
-        const code = editor.document.getText();
-        const filename = editor.document.fileName.split(/[/\\]/).pop() || 'unknown';
-        const language = editor.document.languageId;
 
         stream.progress('🛡️ Running dual-engine analysis (deterministic + LLM in parallel)...');
 
         try {
-            const result = await this.client.dualEngine(code, language);
-            this.formatDualEngineResult(result, stream, filename);
+            const result = await this.client.dualEngine(editor.code, editor.language);
+            this.formatDualEngineResult(result, stream, editor.filename);
         } catch (err: any) {
             if (err.message?.includes('API key not configured')) {
                 stream.markdown('⚠️ VigilAgent API key not configured.\n\nRun **VigilAgent: Configure API Keys** from the Command Palette.');
@@ -207,24 +274,34 @@ export class VigilAgentChatParticipant {
         stream: vscode.ChatResponseStream,
         _token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> {
-        const editor = vscode.window.activeTextEditor;
+        const editor = this.getEditorCode();
         
         if (editor) {
             // If there's code in the editor, verify it with the prompt as context
-            const code = editor.document.getText();
-            const filename = editor.document.fileName.split(/[/\\]/).pop() || 'unknown';
-            const language = editor.document.languageId;
-
             stream.progress('🛡️ Running VigilAgent verification...');
 
             try {
                 // The chat participant keeps the classic flow (auto-fixed
                 // "Improved Output") — suggestion mode is for the inline
                 // quick-fix surfaces (auto-verify, verify-selection).
-                const result = await this.client.verify(code, prompt, language, filename, false);
-                this.formatReviewResult(result, stream, filename);
+                const result = await this.client.verify(editor.code, prompt, editor.language, editor.filename, false);
+                this.formatReviewResult(result, stream, editor.filename);
             } catch (err: any) {
                 stream.markdown(`❌ Verification failed: ${sanitizeMarkdown(err.message)}\n\nTry typing \`help\` for available commands.`);
+            }
+        } else if (prompt.trim() !== '') {
+            // No editor code — this is the middleware use case: the prompt is
+            // handed to the LLM THROUGH the VigilAgent backend layer, and the
+            // generated code is scanned by the deterministic engine + LLM
+            // reviewers before it reaches the user. Nothing generated by an
+            // LLM is ever shown without passing through the analysis layer.
+            stream.progress('⚙️ Sending prompt through VigilAgent middleware (generate → analyze → deliver)...');
+
+            try {
+                const result = await this.client.verify('', prompt, '', '', false);
+                this.formatReviewResult(result, stream, 'generated code', true);
+            } catch (err: any) {
+                stream.markdown(`❌ VigilAgent middleware failed: ${sanitizeMarkdown(err.message)}\n\nTry typing \`help\` for available commands.`);
             }
         } else {
             stream.markdown(this.getHelpText());
@@ -249,9 +326,9 @@ export class VigilAgentChatParticipant {
 | \`help\` | Show this help message |
 
 **Usage:**
-- Open a file in the editor
-- Type \`@vigilagent scan\`, \`@vigilagent verify\`, or \`@vigilagent dual\` in chat
-- Or just type \`@vigilagent\` followed by your question about the code
+- Open a file in the editor → type \`@vigilagent scan\`, \`@vigilagent verify\`, or \`@vigilagent dual\`
+- **No file open?** Type \`@vigilagent scan <prompt>\` (e.g. \`@vigilagent scan generate a function to add two numbers\`) — the LLM generates the code, and it passes through the VigilAgent backend layer (deterministic engine + LLM reviewers) before you see it
+- Or just type \`@vigilagent <prompt>\` — the generated output is scanned the same way
 
 **Dual-Engine Analysis:**
 The \`dual\` command runs BOTH engines simultaneously:
@@ -360,8 +437,17 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
         }
     }
 
-    private formatReviewResult(result: Record<string, unknown>, stream: vscode.ChatResponseStream, filename: string): void {
+    private formatReviewResult(result: Record<string, unknown>, stream: vscode.ChatResponseStream, filename: string, generated = false): void {
         stream.markdown(`## 🛡️ Verification Results — ${filename}\n\n`);
+
+        // When the LLM generated the code from a prompt (middleware flow), show
+        // what it produced first — the code that just passed through the
+        // VigilAgent analysis layer. Collapse triple-backtick runs so untrusted
+        // output cannot close the fence and render the remainder as markdown.
+        const mainResponse = result.main_llm_response as string | undefined;
+        if (generated && mainResponse && mainResponse.trim() !== '') {
+            stream.markdown(`### 💻 Generated Code\n\n\`\`\`\n${mainResponse.replace(/`{3,}/g, '``')}\n\`\`\`\n\n`);
+        }
 
         // Confidence
         const confidence = result.confidence as Record<string, unknown> | undefined;
@@ -422,9 +508,8 @@ Run \`VigilAgent: Configure API Keys\` from the Command Palette to set up your A
             stream.markdown(`### Summary\n${sanitizeMarkdown(summary)}\n`);
         }
 
-        // Final output
+        // Final output (dedupe when it equals the generated code above)
         const finalOutput = result.final_output as string | undefined;
-        const mainResponse = result.main_llm_response as string | undefined;
         if (finalOutput && finalOutput !== mainResponse) {
             // Collapse triple-backtick runs so untrusted output cannot close
             // the code fence and render the remainder as markdown.

@@ -19,8 +19,10 @@ type options struct {
 	asJSON       bool
 }
 
+//lint:ignore U1000 used by main_test.go
 func ctxBackground() context.Context { return context.Background() }
 
+//lint:ignore U1000 used by main_test.go
 func saveJSON(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

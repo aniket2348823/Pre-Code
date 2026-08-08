@@ -16,7 +16,9 @@ func TestNewNVIDIANIMAdapter(t *testing.T) {
 	require.NotNil(t, n)
 	assert.Equal(t, "test-key", n.apiKey)
 	assert.Equal(t, "nvidia_nim", n.Name())
-	assert.Equal(t, "https://build.nvidia.com/v1", n.baseURL)
+	// integrate.api.nvidia.com is the official NVIDIA NIM endpoint (see the
+	// build.nvidia.com quick-start example); build.nvidia.com/v1 is legacy.
+	assert.Equal(t, "https://integrate.api.nvidia.com/v1", n.baseURL)
 	assert.NotNil(t, n.httpClient)
 	assert.Equal(t, 120*time.Second, n.httpClient.Timeout)
 }
@@ -36,9 +38,9 @@ func TestCalculateNIMCost_Llama70b(t *testing.T) {
 }
 
 func TestCalculateNIMCost_Llama8b(t *testing.T) {
-	cost := calculateNIMCost("nvidia/llama-3.1-8b-instruct", 1000, 500)
+	cost := calculateNIMCost("meta/llama-3.1-8b-instruct", 1000, 500)
 	assert.Greater(t, cost, 0.0)
-	expected := 1.0*0.00018 + 0.5*0.00018
+	expected := 1.0*0.0001 + 0.5*0.0001
 	assert.InDelta(t, expected, cost, 0.00001)
 }
 

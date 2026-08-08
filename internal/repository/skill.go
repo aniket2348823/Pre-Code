@@ -108,6 +108,9 @@ func (r *SkillRepository) List(ctx context.Context, category, sortBy string, off
 		argIdx++
 	}
 
+	// #nosec G201 — `where` is assembled ONLY from fixed clauses + numbered $N
+	// placeholders (values passed via args); nothing user-controlled is
+	// interpolated into the SQL text.
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM skills %s", where)
 	var total int
 	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {

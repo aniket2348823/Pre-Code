@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"math/rand/v2"
+	"math/rand/v2" // nosemgrep: math-random-used — backoff jitter only, never security-sensitive
 	"net"
 	"strings"
 	"sync"
@@ -294,7 +294,10 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 		}
 	case "prefer":
 		poolCfg.ConnConfig.TLSConfig = &tls.Config{
-			ServerName:         cfg.Host,
+			ServerName: cfg.Host,
+			// #nosec G402 — faithful libpq "prefer" semantics: TLS used when the
+		// server offers it, plaintext fallback allowed (inherent downgrade risk
+		// of the mode, not a code defect). Production should use verify-full.
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
 		}
@@ -900,7 +903,7 @@ func retryDelay(attempt int, cfg RetryConfig) time.Duration {
 		return time.Duration(delay)
 	}
 	jitterRange := delay * jitter
-	// rand.Float64 returns [0, 1), so shift to [-jitterRange, +jitterRange]
+	// #nosec G404 — backoff jitter (rand.Float64, shifted to [-jitterRange, +jitterRange]) is not security-sensitive
 	offset := (rand.Float64()*2 - 1) * jitterRange
 	delay += offset
 	if delay < 0 {
@@ -920,13 +923,10 @@ func RetryQueryRow(ctx context.Context, cfg RetryConfig, fn func(ctx context.Con
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
-		row := fn(ctx)
-		// We can't know if the row has an error without scanning, so we wrap
-		// the row with a retry-aware wrapper that only retries on Scan.
-		return &retryRow{ctx: ctx, row: row, fn: fn, cfg: cfg, attempt: attempt}
-	}
-	return &errRow{err: errors.New("retry: no attempts configured")}
+	// The first attempt is returned immediately; retry-aware behavior is
+	// delegated to retryRow.Scan, which re-invokes fn on retryable errors.
+	row := fn(ctx)
+	return &retryRow{ctx: ctx, row: row, fn: fn, cfg: cfg, attempt: 1}
 }
 
 // retryRow wraps a pgx.Row and retries on Scan if the error is retryable.

@@ -168,7 +168,6 @@ func additionalStringSchema() Schema {
 // --- Security helpers ---
 
 var jwtSecurity = []map[string][]string{{"BearerAuth": {}}}
-var apiKeySecurity = []map[string][]string{{"ApiKeyAuth": {}}}
 var anyAuthSecurity = []map[string][]string{{"BearerAuth": {}}, {"ApiKeyAuth": {}}}
 
 // --- Shared error responses ---
@@ -1128,6 +1127,7 @@ func (s *OpenAPISpec) MarshalJSONBytes() ([]byte, error) {
 
 // --- HTTP Handler ---
 
+//lint:ignore U1000 used by openapi_test.go
 func (r *Router) openapiGeneratedHandler(w http.ResponseWriter, req *http.Request) {
 	spec := GenerateOpenAPI()
 	w.Header().Set("Content-Type", "application/yaml")

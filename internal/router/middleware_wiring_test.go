@@ -89,6 +89,176 @@ func TestSetupResilienceMiddleware_Timeout(t *testing.T) {
 	}
 }
 
+func TestIsSlowLLMPath(t *testing.T) {
+	slow := []string{
+		"/api/v1/deep-analyze",
+		"/api/v1/deep-analyze/anything",
+		"/api/v1/review",
+		"/api/v1/middleware/process",
+		"/api/v1/tasks",
+		"/api/v1/tasks/abc-123/cancel",
+		"/api/v1/tasks/abc-123/stream", // prefix still matches; unbounded check runs FIRST in middleware
+	}
+	for _, p := range slow {
+		if !isSlowLLMPath(p) {
+			t.Errorf("expected %q to be treated as a slow LLM path", p)
+		}
+	}
+	fast := []string{
+		"/api/v1/health",
+		"/api/v1/users/me",
+		"/api/v1/organizations",
+		"/api/v1/review-preview", // prefix collision must not match /api/v1/review
+		"/api/v1/ws",             // WebSocket is unbounded, not slow-LLM
+		"/",
+	}
+	for _, p := range fast {
+		if isSlowLLMPath(p) {
+			t.Errorf("expected %q NOT to be treated as a slow LLM path", p)
+		}
+	}
+}
+
+func TestIsUnboundedPath(t *testing.T) {
+	unbounded := []string{
+		"/api/v1/ws",
+		"/api/v1/ws/anything",
+		"/api/v1/tasks/abc-123/stream",
+	}
+	for _, p := range unbounded {
+		req := httptest.NewRequest("GET", p, nil)
+		if !isUnboundedPath(req) {
+			t.Errorf("expected %q to be unbounded", p)
+		}
+	}
+	// middleware/process is unbounded only when streaming via SSE.
+	plain := httptest.NewRequest("POST", "/api/v1/middleware/process", nil)
+	if isUnboundedPath(plain) {
+		t.Error("expected /api/v1/middleware/process without SSE Accept to be bounded")
+	}
+	sseReq := httptest.NewRequest("POST", "/api/v1/middleware/process", nil)
+	sseReq.Header.Set("Accept", "text/event-stream")
+	if !isUnboundedPath(sseReq) {
+		t.Error("expected /api/v1/middleware/process with SSE Accept to be unbounded")
+	}
+	bounded := []string{
+		"/api/v1/deep-analyze",
+		"/api/v1/review",
+		"/api/v1/tasks",
+		"/api/v1/tasks/abc-123",
+		"/api/v1/streaming", // no /stream suffix
+		"/",
+	}
+	for _, p := range bounded {
+		req := httptest.NewRequest("GET", p, nil)
+		if isUnboundedPath(req) {
+			t.Errorf("expected %q NOT to be unbounded", p)
+		}
+	}
+}
+
+// TestSetupResilienceMiddleware_SlowPathExemption verifies that LLM-backed
+// paths bypass the short TimeoutHandler (a handler sleeping past the deadline
+// still completes and returns 200), while regular paths keep the timeout.
+func TestSetupResilienceMiddleware_SlowPathExemption(t *testing.T) {
+	// Handler that sleeps longer than the configured 500ms timeout.
+	slowHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1500 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("done"))
+	})
+
+	// Slow LLM path: exemption must let it complete (180s bounded deadline).
+	r := newMwRouter()
+	cfg := &MiddlewareConfig{Timeout: 500 * time.Millisecond}
+	r.setupResilienceMiddleware(cfg)
+	r.Handle("/api/v1/deep-analyze", slowHandler)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/deep-analyze", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected slow LLM path to complete with 200, got %d", rec.Code)
+	}
+
+	// Regular path: timeout still applies (returns 503 gateway-timeout).
+	r2 := newMwRouter()
+	r2.setupResilienceMiddleware(cfg)
+	r2.Handle("/api/v1/regular", slowHandler)
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest("POST", "/api/v1/regular", nil)
+	r2.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected regular path to time out with 503, got %d", rec2.Code)
+	}
+
+	// Unbounded path (WebSocket): must NOT be deadline-wrapped — handler
+	// sleeping past the generic timeout still completes with 200.
+	r3 := newMwRouter()
+	r3.setupResilienceMiddleware(cfg)
+	r3.Handle("/api/v1/ws", slowHandler)
+
+	rec3 := httptest.NewRecorder()
+	req3 := httptest.NewRequest("GET", "/api/v1/ws", nil)
+	r3.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("expected WebSocket path to complete with 200, got %d", rec3.Code)
+	}
+}
+
+// TestSetupResilienceMiddleware_StreamExemptionOrder verifies that an SSE
+// stream path under a slow-LLM prefix (/tasks/.../stream) is treated as
+// unbounded — the unbounded check must win over the slow-LLM check so streams
+// are never deadline-wrapped.
+func TestSetupResilienceMiddleware_StreamExemptionOrder(t *testing.T) {
+	slowHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1500 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("stream"))
+	})
+
+	r := newMwRouter()
+	r.setupResilienceMiddleware(&MiddlewareConfig{Timeout: 500 * time.Millisecond})
+	r.Handle("/api/v1/tasks/abc-123/stream", slowHandler)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/v1/tasks/abc-123/stream", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected SSE stream path to complete with 200, got %d", rec.Code)
+	}
+}
+
+// TestSetupResilienceMiddleware_SlowPathBounded verifies the slow-path
+// deadline still exists (defense-in-depth): after the configured slow-path
+// timeout elapses, the request context is canceled and a context-aware handler
+// sees it. Uses MiddlewareConfig.SlowPathTimeout (no global mutable).
+func TestSetupResilienceMiddleware_SlowPathBounded(t *testing.T) {
+	ctxAware := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(400 * time.Millisecond)
+		if r.Context().Err() != nil {
+			w.WriteHeader(http.StatusGatewayTimeout)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	r := newMwRouter()
+	r.setupResilienceMiddleware(&MiddlewareConfig{
+		Timeout:         1 * time.Second,
+		SlowPathTimeout: 150 * time.Millisecond,
+	})
+	r.Handle("/api/v1/review", ctxAware)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/v1/review", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("expected slow LLM path context to be canceled after deadline (504), got %d", rec.Code)
+	}
+}
+
 func TestSetupObservabilityMiddleware_RequestID(t *testing.T) {
 	r := newMwRouter()
 	cfg := &MiddlewareConfig{

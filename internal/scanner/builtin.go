@@ -17,7 +17,15 @@ type builtinRule struct {
 	excludeFilenames []string
 	// requireContext, if non-empty, means the rule only fires when ANY of these substrings appear in the line.
 	requireContext []string
+	// suppressCheck, if non-nil, is called with the line-split code and the matched
+	// line index; returning true suppresses the finding for that line. This is the
+	// escape hatch for rules that need CROSS-LINE context a single regex cannot
+	// express — e.g. 'a deferred Unlock()/Close() exists nearby, so this is safe'.
+	suppressCheck func(lines []string, lineIdx int) bool
 }
+
+// Shared regexps for context-aware suppression checks (avoid recompiling per finding).
+var mutexLockRe = regexp.MustCompile(`(\w+)\.Lock\(\)\s*$`)
 
 // BuiltinAnalyzer runs the built-in regex rules. Always available; kept for
 // org-specific patterns external tools cannot express.
@@ -33,8 +41,11 @@ func (b *BuiltinAnalyzer) Name() string    { return "builtin" }
 func (b *BuiltinAnalyzer) Available() bool { return true }
 
 // isTestFile returns true if the filename looks like a Go test file.
+// Fuzz harnesses (*_fuzz.go) are test-only too — they carry `testing` imports
+// and intentionally fake secrets, so they must never gate production CI.
 func isTestFile(filename string) bool {
 	return strings.HasSuffix(filename, "_test.go") ||
+		strings.HasSuffix(filename, "_fuzz.go") ||
 		strings.Contains(filename, "_test.") ||
 		strings.Contains(filename, "/test/") ||
 		strings.Contains(filename, "/tests/")
@@ -47,6 +58,29 @@ func isTestDataFile(filename string) bool {
 	return strings.Contains(filename, "/testdata/") ||
 		strings.HasPrefix(filename, "testdata/") ||
 		strings.Contains(filename, "\\testdata\\")
+}
+
+// hasNosecMarker reports whether the matched line (or the line immediately
+// above) carries a `#nosec`-style suppression comment (gosec-compatible, also
+// works for shell scripts as `# nosec`). The marker must be a deliberate,
+// documented decision by the author — never a blanket suppression.
+func hasNosecMarker(lines []string, i int) bool {
+	hasMarker := func(l string) bool {
+		lower := strings.ToLower(l)
+		return strings.Contains(lower, "#nosec") || strings.Contains(lower, "# nosec")
+	}
+	// Check the matched line and up to 3 lines above — justification comments
+	// are commonly 1-3 lines long with the marker on the first line.
+	start := i - 3
+	if start < 0 {
+		start = 0
+	}
+	for _, l := range lines[start : i+1] {
+		if hasMarker(l) {
+			return true
+		}
+	}
+	return false
 }
 
 // isGeneratedFile returns true if the file appears to be generated.
@@ -65,9 +99,12 @@ func (b *BuiltinAnalyzer) Analyze(ctx context.Context, in Input) ([]Finding, err
 	if filename == "" {
 		filename = "input"
 	}
+	// Normalized path (forward slashes) so filename checks are separator-agnostic
+	// (the Windows CLI walker passes backslash paths).
+	normName := strings.ReplaceAll(filename, "\\", "/")
 
 	// Suppress ALL findings in generated/vendor files — these are never real vulnerabilities.
-	if isGeneratedFile(filename) {
+	if isGeneratedFile(normName) {
 		return nil, nil
 	}
 
@@ -75,7 +112,7 @@ func (b *BuiltinAnalyzer) Analyze(ctx context.Context, in Input) ([]Finding, err
 	lines := strings.Split(in.Code, "\n")
 	for _, r := range b.rules {
 		// Suppress low-severity rules in test files (use rank, not string comparison).
-		if isTestFile(filename) && SeverityRank(r.severity) <= SeverityRank(SeverityLow) {
+		if isTestFile(normName) && SeverityRank(r.severity) <= SeverityRank(SeverityLow) {
 			continue
 		}
 
@@ -95,15 +132,30 @@ func (b *BuiltinAnalyzer) Analyze(ctx context.Context, in Input) ([]Finding, err
 					}
 				}
 
-				// Check filename exclusions.
+				// Check filename exclusions (rule-definition files and other documented
+				// exemptions — e.g. a rule's own pattern string is not a vulnerability).
 				excluded := false
 				for _, pattern := range r.excludeFilenames {
-					if strings.Contains(filename, pattern) {
+					if strings.Contains(normName, pattern) {
 						excluded = true
 						break
 					}
 				}
 				if excluded {
+					continue
+				}
+
+				// Context-aware suppression (cross-line checks like nearby deferred unlocks).
+				if r.suppressCheck != nil && r.suppressCheck(lines, i) {
+					continue
+				}
+
+				// Comment-based suppression: a `#nosec` marker on the matched line (or
+				// the line directly above) documents a deliberate, reviewed decision —
+				// e.g. a sandbox tool that executes commands by design, or libpq-style
+				// TLS modes. Without an escape hatch these lines would block every CI
+				// run forever and force engineers to silence rules globally.
+				if hasNosecMarker(lines, i) {
 					continue
 				}
 
@@ -133,12 +185,13 @@ func builtinRules() []builtinRule {
 		// INJECTION (CWE-89, CWE-78, CWE-79)
 		// ════════════════════════════════════════════════════════════════
 		{
-			name:        "sql_injection",
-			description: "Potential SQL injection via string concatenation or fmt.Sprintf in query",
-			severity:    SeverityCritical,
-			pattern:     regexp.MustCompile(`(?i)(fmt\.Sprintf|"?\s*\+\s*|\$\{).*(?:\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b|\bEXEC\b|\bEXECUTE\b)`),
-			fix:         "Use parameterized queries ($1, $2) instead of string interpolation",
-			category:    "injection",
+			name:             "sql_injection",
+			description:      "Potential SQL injection via string concatenation or fmt.Sprintf in query",
+			severity:         SeverityCritical,
+			pattern:          regexp.MustCompile(`(?i)(fmt\.Sprintf|"?\s*\+\s*|\$\{).*(?:\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b|\bEXEC\b|\bEXECUTE\b)`),
+			fix:              "Use parameterized queries ($1, $2) instead of string interpolation",
+			category:         "injection",
+			excludeFilenames: []string{"skills/scanner.go"}, // the skill scanner's own rule-definition patterns
 		},
 		{
 			name:        "sql_injection_raw_query",
@@ -154,21 +207,27 @@ func builtinRules() []builtinRule {
 		// variant catches string-first concatenation regardless of variable
 		// source (inherently defeats parameterization).
 		{
-			name:        "sql_injection_string_concat",
-			description: "Potential SQL injection via string concatenation after a SQL literal",
-			severity:    SeverityCritical,
-			pattern:     regexp.MustCompile(`(?i)"[^"]*\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|EXEC(?:UTE)?)\b[^"]*"\s*\+`),
-			fix:         "Use parameterized queries ($1, $2) instead of concatenating the query string",
-			category:    "injection",
+			name:             "sql_injection_string_concat",
+			description:      "Potential SQL injection via string concatenation after a SQL literal",
+			severity:         SeverityCritical,
+			pattern:          regexp.MustCompile(`(?i)"[^"]*\b(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^"]*"\s*\+`),
+			fix:              "Use parameterized queries ($1, $2) instead of concatenating the query string",
+			category:         "injection",
+			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
 			name:           "command_injection",
 			description:    "Potential command injection via unsanitized input in exec.Command",
 			severity:       SeverityCritical,
-			pattern:        regexp.MustCompile(`exec\.Command\([^)]*(?:req\.|r\.|params\.|input\.|fmt\.Sprintf)`),
+			pattern:        regexp.MustCompile(`exec\.Command\([^)]*(?:req\.|r\.(?:Form|URL|Body|Header)|params\.|input\.|fmt\.Sprintf)`),
 			fix:            "Use allowlists for commands; never pass user input directly to exec.Command arguments",
 			category:       "injection",
-			requireContext: []string{"req.", "r.", "params.", "input.", "fmt.Sprintf"},
+			// NOTE: bare "r." was far too loose — it matches ANY string containing
+			// "r." (e.g. "{{.Server.Version}}" in a static docker probe), producing
+			// false positives on static commands. Bare "req." is kept (req.Input
+			// etc. is the classic handler pattern); accessors on `r *http.Request`
+			// must be explicit (r.FormValue, r.URL, r.Body, r.Header).
+			requireContext: []string{"req.", "r.Form", "r.URL", "r.Body", "r.Header", "params.", "input.", "fmt.Sprintf"},
 		}, // Shell-spawning exec.Command with string concatenation in its args.
 		// `exec.Command("sh", "-c", "ping -c 3 "+host)` (Unix) or
 		// `exec.Command("cmd", "/c", "dir "+path)` (Windows) builds a shell
@@ -178,12 +237,13 @@ func builtinRules() []builtinRule {
 		// "C:\\Windows\\System32\\cmd.exe"). (?i:...) is scoped to the shell
 		// literals only so exec.Command stays case-sensitive.
 		{
-			name:        "command_injection_shell_concat",
-			description: "Shell command built via string concatenation in exec.Command — command injection risk",
-			severity:    SeverityCritical,
-			pattern:     regexp.MustCompile(`exec\.Command\s*\([^)]*(?i:"(?:[^"]*/)?(?:sh|bash)"\s*,\s*"-c"|"(?:[^"]*[\\/])?cmd(?:\.exe)?"\s*,\s*"/c"|"(?:[^"]*[\\/])?powershell(?:\.exe)?"\s*,\s*"-Command")[^)]*\+`),
-			fix:         "Pass command arguments as a string slice (no shell), or validate/allowlist the input; never concatenate into a shell command string",
-			category:    "injection",
+			name:             "command_injection_shell_concat",
+			description:      "Shell command built via string concatenation in exec.Command — command injection risk",
+			severity:         SeverityCritical,
+			pattern:          regexp.MustCompile(`exec\.Command\s*\([^)]*(?i:"(?:[^"]*/)?(?:sh|bash)"\s*,\s*"-c"|"(?:[^"]*[\\/])?cmd(?:\.exe)?"\s*,\s*"/c"|"(?:[^"]*[\\/])?powershell(?:\.exe)?"\s*,\s*"-Command")[^)]*\+`),
+			fix:              "Pass command arguments as a string slice (no shell), or validate/allowlist the input; never concatenate into a shell command string",
+			category:         "injection",
+			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		// Shell command passed as a VARIABLE or EXPRESSION:
 		// `exec.Command("sh", "-c", cmdVar)` / `exec.CommandContext(ctx, "sh", "-c", expr)`
@@ -199,12 +259,13 @@ func builtinRules() []builtinRule {
 		// backtrack to match the space after the comma, falsely flagging
 		// literal commands.)
 		{
-			name:        "command_injection_shell_variable",
-			description: "Shell command passed as a variable or expression to exec.Command(\"sh\", \"-c\", ...) / (\"cmd\", \"/c\", ...) — command injection risk",
-			severity:    SeverityCritical,
-			pattern:     regexp.MustCompile(`exec\.Command(?:Context)?\s*\(\s*(?:ctx,\s*)?(?i:"(?:[^"]*/)?(?:sh|bash)"\s*,\s*"-c"|"(?:[^"]*[\\/])?cmd(?:\.exe)?"\s*,\s*"/c"|"(?:[^"]*[\\/])?powershell(?:\.exe)?"\s*,\s*"-Command")\s*,\s*[^"\s]`),
-			fix:         "Pass command arguments as a string slice (no shell), or validate the command string against a strict allowlist before execution",
-			category:    "injection",
+			name:             "command_injection_shell_variable",
+			description:      "Shell command passed as a variable or expression to exec.Command(\"sh\", \"-c\", ...) / (\"cmd\", \"/c\", ...) — command injection risk",
+			severity:         SeverityCritical,
+			pattern:          regexp.MustCompile(`exec\.Command(?:Context)?\s*\(\s*(?:ctx,\s*)?(?i:"(?:[^"]*/)?(?:sh|bash)"\s*,\s*"-c"|"(?:[^"]*[\\/])?cmd(?:\.exe)?"\s*,\s*"/c"|"(?:[^"]*[\\/])?powershell(?:\.exe)?"\s*,\s*"-Command")\s*,\s*[^"\s]`),
+			fix:              "Pass command arguments as a string slice (no shell), or validate the command string against a strict allowlist before execution",
+			category:         "injection",
+			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
 			name:        "xss_unsafe_html",
@@ -342,7 +403,14 @@ func builtinRules() []builtinRule {
 			pattern:          regexp.MustCompile(`(?i)(password|passwd|secret|api_key|apikey|api[-_]?secret|private[-_]?key)\s*[:=]+\s*"[^"]{8,}"`),
 			fix:              "Use environment variables or a secrets manager (e.g., HashiCorp Vault)",
 			category:         "secrets",
-			excludeFilenames: []string{"example", "sample", "mock_", "stub_"},
+			excludeFilenames: []string{"example", "sample", "mock_", "stub_", "fuzz"},
+			// `[:=]+` in the pattern also matches `==` comparisons — but a line like
+			// `c.Database.Password == "vigilagent"` is a validation CHECK against a
+			// known default, not a hardcoded credential. RE2 has no lookahead, so
+			// suppress comparisons here explicitly.
+			suppressCheck: func(lines []string, i int) bool {
+				return strings.Contains(lines[i], "==") || strings.Contains(lines[i], "!=")
+			},
 		},
 		{
 			name:        "hardcoded_connection_string",
@@ -405,12 +473,13 @@ func builtinRules() []builtinRule {
 		// CRYPTO (CWE-327, CWE-328, CWE-330, CWE-295)
 		// ════════════════════════════════════════════════════════════════
 		{
-			name:        "weak_hash_md5",
-			description: "Use of MD5 hashing which is cryptographically broken",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`crypto/md5|md5\.New\(\)|md5\.Sum\(`),
-			fix:         "Use SHA-256 (crypto/sha256) or bcrypt for password hashing",
-			category:    "crypto",
+			name:             "weak_hash_md5",
+			description:      "Use of MD5 hashing which is cryptographically broken",
+			severity:         SeverityHigh,
+			pattern:          regexp.MustCompile(`crypto/md5|md5\.New\(\)|md5\.Sum\(`),
+			fix:              "Use SHA-256 (crypto/sha256) or bcrypt for password hashing",
+			category:         "crypto",
+			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
 			name:        "weak_hash_sha1",
@@ -421,12 +490,13 @@ func builtinRules() []builtinRule {
 			category:    "crypto",
 		},
 		{
-			name:        "weak_random",
-			description: "Use of math/rand instead of crypto/rand for security-sensitive operations",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`"math/rand"|rand\.Intn\(|rand\.Float`),
-			fix:         "Use crypto/rand for tokens, keys, and other security-sensitive random values",
-			category:    "crypto",
+			name:             "weak_random",
+			description:      "Use of math/rand instead of crypto/rand for security-sensitive operations",
+			severity:         SeverityHigh,
+			pattern:          regexp.MustCompile(`"math/rand"|rand\.Intn\(|rand\.Float`),
+			fix:              "Use crypto/rand for tokens, keys, and other security-sensitive random values",
+			category:         "crypto",
+			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
 			name:        "insecure_tls",
@@ -435,6 +505,27 @@ func builtinRules() []builtinRule {
 			pattern:     regexp.MustCompile(`InsecureSkipVerify\s*:\s*true`),
 			fix:         "Never disable TLS verification in production; configure proper CA certificates",
 			category:    "crypto",
+			// Custom chain verification (VerifyPeerCertificate) in the same struct
+			// literal means TLS IS verified — only hostname checking is delegated
+			// (libpq "verify-ca" semantics). That is a deliberate, reviewed
+			// configuration, not a MITM hole. Genuinely unverified modes must carry
+			// a `#nosec` justification comment instead.
+			suppressCheck: func(lines []string, i int) bool {
+				start := i - 5
+				if start < 0 {
+					start = 0
+				}
+				end := i + 6
+				if end > len(lines) {
+					end = len(lines)
+				}
+				for _, l := range lines[start:end] {
+					if strings.Contains(l, "VerifyPeerCertificate") {
+						return true
+					}
+				}
+				return false
+			},
 		},
 		{
 			name:        "weak_jwt_secret",
@@ -445,20 +536,22 @@ func builtinRules() []builtinRule {
 			category:    "crypto",
 		},
 		{
-			name:        "weak_cipher_des",
-			description: "Use of DES/3DES which are deprecated encryption algorithms",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`(?:crypto/des|des\.NewTripleDESCipher|des\.NewCipher)`),
-			fix:         "Use AES-256-GCM for symmetric encryption",
-			category:    "crypto",
+			name:             "weak_cipher_des",
+			description:      "Use of DES/3DES which are deprecated encryption algorithms",
+			severity:         SeverityHigh,
+			pattern:          regexp.MustCompile(`(?:crypto/des|des\.NewTripleDESCipher|des\.NewCipher)`),
+			fix:              "Use AES-256-GCM for symmetric encryption",
+			category:         "crypto",
+			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
-			name:        "insecure_ecb_mode",
-			description: "ECB mode encryption is insecure — patterns leak through encryption",
-			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`(?i)(?:cipher\.ECB|ecb\.NewEncrypter|ECB\s+mode)`),
-			fix:         "Use CBC or GCM mode for symmetric encryption",
-			category:    "crypto",
+			name:             "insecure_ecb_mode",
+			description:      "ECB mode encryption is insecure — patterns leak through encryption",
+			severity:         SeverityHigh,
+			pattern:          regexp.MustCompile(`(?i)(?:cipher\.ECB|ecb\.NewEncrypter|ECB\s+mode)`),
+			fix:              "Use CBC or GCM mode for symmetric encryption",
+			category:         "crypto",
+			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
 			name:        "hardcoded_iv",
@@ -650,9 +743,33 @@ func builtinRules() []builtinRule {
 			name:        "sql_rows_not_closed",
 			description: "sql.Rows result not closed — will leak database connections",
 			severity:    SeverityHigh,
-			pattern:     regexp.MustCompile(`(?:db\.Query|db\.QueryContext|\.QueryRow)\s*\(`),
+			pattern:     regexp.MustCompile(`\w+\.Query(?:Context)?\s*\(`),
 			fix:         "Always defer rows.Close() after a successful Query call",
 			category:    "quality",
+			// NOTE: .QueryRow is intentionally NOT matched — it returns a *sql.Row
+			// (auto-closed by Scan), so it can never leak a connection.
+			// Suppress when: (1) the line is the net/url accessor `URL.Query()` —
+			// it returns url.Values, not rows; (2) within the next 40 lines the
+			// result is closed (`defer rows.Close()`, plain `rows.Close()`, or any
+			// `.Close(`) or escapes to the caller (`return rows`) — the caller
+			// then owns it. This covers the DB-layer Query wrappers that return
+			// rows by design (their `return rows, err` can be 30+ lines below the
+			// query once circuit-breaker + slow-query logging run between).
+			suppressCheck: func(lines []string, i int) bool {
+				if strings.Contains(lines[i], "URL.Query(") {
+					return true
+				}
+				end := i + 41
+				if end > len(lines) {
+					end = len(lines)
+				}
+				for _, l := range lines[i+1 : end] {
+					if strings.Contains(l, ".Close(") || strings.Contains(l, "return rows") {
+						return true
+					}
+				}
+				return false
+			},
 		},
 		{
 			name:        "mutex_not_unlocked",
@@ -661,6 +778,31 @@ func builtinRules() []builtinRule {
 			pattern:     regexp.MustCompile(`\w+\.Lock\(\)\s*$`),
 			fix:         "Use defer mu.Unlock() immediately after mu.Lock() to prevent deadlocks",
 			category:    "quality",
+			// Suppress when the SAME mutex is released (deferred OR explicit) within
+			// the next 40 lines. `mu.Lock(); defer mu.Unlock()` and the
+			// extract-clear-unlock idiom (`mu.Lock(); ...copy...; mu.Unlock()`) —
+			// which can legitimately span 30+ lines in DB-persisting methods — are
+			// both correct. Only a Lock() with NO nearby release should fire
+			// (deadlock risk). Receivers are tolerated: `sm.mu.Lock()` ↔
+			// `defer sm.mu.Unlock()`.
+			suppressCheck: func(lines []string, i int) bool {
+				m := mutexLockRe.FindStringSubmatch(lines[i])
+				if m == nil {
+					return false
+				}
+				varName := m[1]
+				unlockRe := regexp.MustCompile(`(?:defer\s+)?(?:[A-Za-z_]\w*\.)*` + regexp.QuoteMeta(varName) + `\.Unlock\(\)`)
+				end := i + 41
+				if end > len(lines) {
+					end = len(lines)
+				}
+				for _, l := range lines[i+1 : end] {
+					if unlockRe.MatchString(l) {
+						return true
+					}
+				}
+				return false
+			},
 		},
 		{
 			name:        "context_leak",

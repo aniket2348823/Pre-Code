@@ -136,6 +136,11 @@ var PriceTable = map[string]ModelInfo{
 	// NVIDIA NIM
 	"nvidia/llama-3.1-405b-instruct": {Name: "nvidia/llama-3.1-405b-instruct", Provider: "nvidia_nim", InputCostPer1K: 0.003, OutputCostPer1K: 0.009, MaxTokens: 8192, Capabilities: []string{"tools", "reasoning"}},
 	"nvidia/llama-3.1-70b-instruct":  {Name: "nvidia/llama-3.1-70b-instruct", Provider: "nvidia_nim", InputCostPer1K: 0.00088, OutputCostPer1K: 0.00088, MaxTokens: 8192, Capabilities: []string{"tools"}},
+	// Small, cheap NVIDIA NIM models — ideal default for cost-sensitive tasks
+	// like the dual-engine LLM analysis pass (free on build.nvidia.com). The
+	// key is the EXACT model id NVIDIA's API expects (the meta/ prefix is part
+	// of the id — the router sends this string straight to /chat/completions).
+	"meta/llama-3.1-8b-instruct": {Name: "meta/llama-3.1-8b-instruct", Provider: "nvidia_nim", InputCostPer1K: 0.0001, OutputCostPer1K: 0.0001, MaxTokens: 8192, Capabilities: []string{"tools"}},
 	// Cohere
 	"command-r-plus": {Name: "command-r-plus", Provider: "cohere", InputCostPer1K: 0.0015, OutputCostPer1K: 0.00225, MaxTokens: 8192, Capabilities: []string{"tools"}},
 	"command-r":      {Name: "command-r", Provider: "cohere", InputCostPer1K: 0.00015, OutputCostPer1K: 0.00015, MaxTokens: 8192, Capabilities: []string{"tools"}},
@@ -254,6 +259,18 @@ func (r *ModelRouter) priceTable() map[string]ModelInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.prices
+}
+
+// DefaultModel returns the router's configured default model (may be "").
+// Exported so the router package can mirror the backend's default onto
+// per-request BYOK routers (whose default must belong to the user's provider).
+func (r *ModelRouter) DefaultModel() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.config == nil {
+		return ""
+	}
+	return r.config.DefaultModel
 }
 
 // RegisterProvider adds a provider to the router with a circuit breaker.
@@ -375,22 +392,21 @@ func (r *ModelRouter) rankCandidates(task *Task, healthy []string, complexity Co
 	estOutput := r.config.DefaultOutputTokens
 
 	var candidates []RoutingCandidate
-	modelsToConsider := r.getModelsForComplexity(complexity)
-	if task.TargetModel != "" {
-		modelsToConsider = append([]string{task.TargetModel}, modelsToConsider...)
-	}
-	for _, model := range modelsToConsider {
+
+	// addCandidate appends a model when it is priced, served by a healthy
+	// registered provider, and satisfies the task's required capabilities.
+	addCandidate := func(model string) {
 		info, ok := prices[model]
 		if !ok {
-			continue
+			return
 		}
 		// Provider must be healthy (registered by provider name).
 		if _, healthyOK := healthySet[info.Provider]; !healthyOK {
-			continue
+			return
 		}
 		// Model must support every capability the task requires.
 		if !supportsAll(info, task.RequiredCapabilities) {
-			continue
+			return
 		}
 
 		estCost := (float64(estInput)/1000.0)*info.InputCostPer1K +
@@ -404,6 +420,26 @@ func (r *ModelRouter) rankCandidates(task *Task, healthy []string, complexity Co
 			EstLatency: 2 * time.Second,
 			Confidence: r.healthMonitor.Confidence(info.Provider),
 		})
+	}
+
+	modelsToConsider := r.getModelsForComplexity(complexity)
+	if task.TargetModel != "" {
+		modelsToConsider = append([]string{task.TargetModel}, modelsToConsider...)
+	}
+	for _, model := range modelsToConsider {
+		addCandidate(model)
+	}
+
+	// FALLBACK ONLY: when the complexity tier produced no viable candidate
+	// (e.g. a BYOK router registers just one provider whose models are not in
+	// the built-in tiers, or the deployment pins a custom provider), the
+	// configured default model (llm.default_model) is added so routing never
+	// dead-ends with "no healthy provider supports the task's requirements".
+	// It is deliberately NOT prepended in the normal case — tier-appropriate
+	// models must win so simple vs complex tasks still route to different
+	// cost tiers.
+	if len(candidates) == 0 && r.config.DefaultModel != "" && r.config.DefaultModel != task.TargetModel {
+		addCandidate(r.config.DefaultModel)
 	}
 
 	// Cheapest first; break ties by higher confidence.
