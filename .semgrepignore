@@ -17,8 +17,20 @@ sample_*
 **/*_fuzz.go
 **/*_bench.go
 
+# Integration test infrastructure (intentional DROP/CREATE on ephemeral DBs)
+**/integration/
+
+# Extraction test fixtures (test.go — not _test.go but contains test funcs)
+**/extraction/test.go
+
+# Load testing tool (intentional InsecureSkipVerify behind CLI flag)
+cmd/loadtest/
+
 # Generated / dependency code
 **/vendor/
 node_modules/
 dist/
 coverage/
+
+# CI helper scripts (intentional patterns for scanning demos)
+scripts/ci/

@@ -284,7 +284,7 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 		// validation must be restored explicitly via VerifyPeerCertificate.
 		poolCfg.ConnConfig.TLSConfig = &tls.Config{
 			ServerName:            cfg.Host,
-			InsecureSkipVerify:    true, // required to disable hostname check; chain verified below
+			InsecureSkipVerify:    true, // nosemgrep: go.lang.security.audit.net.tls-with-insecure-skip-verify — required to disable hostname check; chain verified via VerifyPeerCertificate below
 			VerifyPeerCertificate: verifyChainOnly,
 			MinVersion:            tls.VersionTLS12,
 		}
@@ -300,7 +300,7 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 			// #nosec G402 — faithful libpq "prefer" semantics: TLS used when the
 			// server offers it, plaintext fallback allowed (inherent downgrade risk
 			// of the mode, not a code defect). Production should use verify-full.
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: true, // nosemgrep: go.lang.security.audit.net.tls-with-insecure-skip-verify
 			MinVersion:         tls.VersionTLS12,
 		}
 	}

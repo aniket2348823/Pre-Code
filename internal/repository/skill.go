@@ -108,10 +108,8 @@ func (r *SkillRepository) List(ctx context.Context, category, sortBy string, off
 		argIdx++
 	}
 
-	// #nosec G201 — `where` is assembled ONLY from fixed clauses + numbered $N
-	// placeholders (values passed via args); nothing user-controlled is
-	// interpolated into the SQL text.
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM skills %s", where)
+	// nosemgrep: go.lang.security.audit.database.string-formatted-query — `where` is assembled ONLY from fixed clauses + numbered $N placeholders; values passed via args
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM skills %s", where) // nosemgrep: go.lang.security.audit.sqli.go-sql-string-formatting
 	var total int
 	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count skills: %w", err)
@@ -127,13 +125,14 @@ func (r *SkillRepository) List(ctx context.Context, category, sortBy string, off
 		orderClause = "ORDER BY name ASC"
 	}
 
-	query := fmt.Sprintf(`
+	// nosemgrep: go.lang.security.audit.database.string-formatted-query
+	query := fmt.Sprintf(` 
 		SELECT id, name, description, author, version, category, downloads, rating,
 		       rating_count, permissions, is_verified, is_published, created_at, updated_at
 		FROM skills %s
 		%s
 		LIMIT $%d OFFSET $%d
-	`, where, orderClause, argIdx, argIdx+1)
+	`, where, orderClause, argIdx, argIdx+1) // nosemgrep: go.lang.security.audit.sqli.go-sql-string-formatting
 
 	args = append(args, limit, offset)
 	rows, err := r.pool.Query(ctx, query, args...)
