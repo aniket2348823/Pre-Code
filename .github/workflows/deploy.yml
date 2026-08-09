@@ -132,5 +132,12 @@ jobs:
 
       - name: Execute Blue-Green Switch
         run: |
-          chmod +x scripts/blue-green-deploy.sh
-          echo "Blue-green deployment ready for release tag ${{ github.sha }}"
+          # Blue-green rollout only runs against a real cluster. When no
+          # KUBECONFIG is configured (as in this repo), log the pending
+          # rollout and skip cleanly — same pattern as the k6 load-test job.
+          if [ -n "${{ secrets.KUBECONFIG }}" ]; then
+            chmod +x scripts/deploy/blue-green-deploy.sh
+            ./scripts/deploy/blue-green-deploy.sh ${{ github.sha }}
+          else
+            echo "No KUBECONFIG secret configured — blue-green rollout skipped (ready for tag ${{ github.sha }})"
+          fi
