@@ -9,9 +9,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
   # go.mod requires go 1.26.5; allow Go to select the exact toolchain from go.mod.
   GOTOOLCHAIN: auto
+  # IMAGE_NAME is computed per-job (lowercased): GHCR rejects uppercase
+  # repository names, and github.repository keeps the original casing
+  # (e.g. aniket2348823/Pre-Code) which breaks the ghcr.io tag.
 
 jobs:
   # ── 1. TEST & LINT ──
@@ -48,6 +50,9 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Compute lowercase image name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
