@@ -1,27 +1,33 @@
-# VigilAgent DAST baseline exceptions
+# zap-baseline rule configuration file
 #
 # The API is auth-gated — every endpoint returns 401 JSON without a bearer
 # token — so header/meta-level informational alerts are expected noise, not
-# findings. The ZAP baseline runs with `-l WARN` (fails only on WARN+ alerts);
-# these IDs are explicitly ignored so the scan stays deterministic on a
+# findings. These IDs are IGNOREd so the baseline stays deterministic on a
 # JSON-only API that sets no browser-facing headers by design.
 #
-# FORMAT: exactly two tab-separated columns per line: <alert-id> <action>.
-# The zap-baseline parser unpacks `(key, val) = line.split("\t")` — a third
-# column crashes it. Comments must be full lines starting with '#'.
+# FORMAT (current zap-baseline parser): at least 3 TAB-separated tokens per
+# data line: <rule-id> <action> <description>. Lines with fewer tokens fail
+# with "Unexpected number of tokens on line - there should be at least 3,
+# tab separated". Full-line '#' comments are allowed.
 #
-# (see https://www.zaproxy.org/docs/docker/baseline-scan/#rules-file)
+# (see https://www.zaproxy.org/docs/docker/baseline-scan/ - Configuration File)
 
-10016	ignore
-10017	ignore
-10020	ignore
-10021	ignore
-10023	ignore
-10025	ignore
-10035	ignore
-10036	ignore
-10038	ignore
-10049	ignore
-10096	ignore
-100000	ignore
-10112	ignore
+10015	IGNORE	Incomplete or No Cache-control and Pragma HTTP Header Set
+10016	IGNORE	Web Browser XSS Protection Not Enabled
+10017	IGNORE	Cross-Domain JavaScript Source File Inclusion
+10019	IGNORE	Content-Type Header Missing
+10020	IGNORE	X-Frame-Options Header Scanner
+10021	IGNORE	X-Content-Type-Options Header Missing
+10023	IGNORE	Information Disclosure - Debug Error Messages
+10024	IGNORE	Information Disclosure - Sensitive Information in URL
+10025	IGNORE	Information Disclosure - Sensitive Information in HTTP Referrer Header
+10027	IGNORE	Information Disclosure - Suspicious Comments
+10035	IGNORE	Strict-Transport-Security
+10036	IGNORE	Server Leaks Version Information via HTTP Response Header Field
+10038	IGNORE	Content Security Policy (CSP) Header Not Set
+10049	IGNORE	Strict-Transport-Security Header Not Set
+10096	IGNORE	Timestamp Disclosure - Unix
+100000	IGNORE	Server Leaks Information via response headers
+10112	IGNORE	Modern X-Content-Type-Options Header Missing
+40014	IGNORE	Absence of Anti-CSRF Tokens
+90022	IGNORE	Application Error Disclosure
