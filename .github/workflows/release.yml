@@ -2,7 +2,9 @@ name: Release
 
 on:
   push:
+    branches: [ main, master ]
     tags: [ 'v*' ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,6 +16,11 @@ jobs:
   # ── 1. BUILD ALL RELEASE ASSETS ──
   build:
     name: Build release assets (MCP binaries + VSIX)
+    # Gate on version tags instead of a tag-only `on:` filter: a tag-only
+    # workflow makes GitHub create a phantom "failure" run (0 jobs) on every
+    # branch push. With the branch trigger + this condition, plain pushes are
+    # recorded as "skipped" and only v* tags actually build and release.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -56,6 +63,8 @@ jobs:
           if-no-files-found: error
 
   # ── 2. CREATE GITHUB RELEASE + PUBLISH EVERYWHERE ──
+  # (skipped automatically when `build` is skipped — GitHub propagates skips
+  # through `needs:`, so branch pushes never reach this job)
   release:
     name: GitHub Release + Publish
     needs: build
