@@ -117,25 +117,41 @@ jobs:
         working-directory: vscode-extension
         run: npm ci
 
+      # NOTE: the `secrets` context is NOT available in step-level `if`
+      # conditions, so gating publish steps on `secrets.X != ''` made this
+      # file invalid (GitHub records invalid files as failed runs with 0
+      # jobs). Tokens are injected via env and gated in shell instead:
+      # an absent token skips the publish step cleanly.
       - name: Publish MCP server to npm
-        if: ${{ secrets.NPM_TOKEN != '' }}
         working-directory: mcp-server
         run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "No NPM_TOKEN configured — skipping npm publish."
+            exit 0
+          fi
           npm pkg set version="${GITHUB_REF_NAME#v}"
           npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish extension to Open VSX
-        if: ${{ secrets.OVSX_TOKEN != '' }}
         working-directory: vscode-extension
-        run: npx ovsx publish "../assets/vscode-extension/vigilagent-${GITHUB_REF_NAME#v}.vsix" -p "$OVSX_TOKEN"
+        run: |
+          if [ -z "$OVSX_TOKEN" ]; then
+            echo "No OVSX_TOKEN configured — skipping Open VSX publish."
+            exit 0
+          fi
+          npx ovsx publish "../assets/vscode-extension/vigilagent-${GITHUB_REF_NAME#v}.vsix" -p "$OVSX_TOKEN"
         env:
           OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
 
       - name: Publish extension to VS Code Marketplace
-        if: ${{ secrets.VSCE_PAT != '' }}
         working-directory: vscode-extension
-        run: npx @vscode/vsce publish --packagePath "../assets/vscode-extension/vigilagent-${GITHUB_REF_NAME#v}.vsix" -p "$VSCE_PAT"
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "No VSCE_PAT configured — skipping VS Code Marketplace publish."
+            exit 0
+          fi
+          npx @vscode/vsce publish --packagePath "../assets/vscode-extension/vigilagent-${GITHUB_REF_NAME#v}.vsix" -p "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
