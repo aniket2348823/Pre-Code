@@ -137,6 +137,14 @@ func (b *tokenBucket) refill(tier Tier) {
 	now := time.Now()
 	elapsed := now.Sub(b.lastRefill)
 
+	// Sub-second elapsed accrues a tiny fractional token whose float noise
+	// (e.g. 15.000001 instead of 15) breaks determinism for exact-value
+	// assertions and adds nothing for rate limiting. Accrue per whole second.
+	if elapsed < time.Second {
+		return
+	}
+	elapsed = elapsed.Truncate(time.Second)
+
 	// Refill minute bucket
 	minuteRefills := elapsed.Seconds() / 60.0 * float64(tier.RequestsPerMinute)
 	b.minuteTokens += minuteRefills

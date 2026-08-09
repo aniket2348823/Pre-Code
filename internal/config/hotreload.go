@@ -23,6 +23,10 @@ type HotReloader struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	startOnce sync.Once
+	// reloadWG tracks in-flight debounced reloads so Stop/shutdown can wait
+	// for them to finish touching viper before signaling completion — without
+	// this, a straggler reload races teardown (e.g. viper.Reset() in tests).
+	reloadWG sync.WaitGroup
 }
 
 // NewHotReloader creates a new hot reloader attached to the current viper config.
@@ -214,6 +218,14 @@ func (hr *HotReloader) Start(ctx context.Context) {
 
 		viper.WatchConfig()
 		viper.OnConfigChange(func(e fsnotify.Event) {
+			// Once shutdown starts, stop touching viper and stop scheduling new
+			// reloads: viper.WatchConfig() cannot be stopped, so a late event
+			// would otherwise race teardown (e.g. viper.Reset() in tests).
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			slog.Info("config file changed", "file", e.Name, "op", e.Op)
 
 			hr.mu.RLock()
@@ -224,6 +236,15 @@ func (hr *HotReloader) Start(ctx context.Context) {
 				debounceTimer.Stop()
 			}
 			debounceTimer = time.AfterFunc(debounce, func() {
+				hr.reloadWG.Add(1)
+				defer hr.reloadWG.Done()
+				// Cancelled before the debounce elapsed: skip the viper round-trip
+				// entirely (the caller may be tearing down viper state).
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 				// Force a fresh read so the reload does not race with viper's
 				// internal auto-reload (which can be reordered relative to
 				// externally registered OnConfigChange handlers).
@@ -259,6 +280,10 @@ func (hr *HotReloader) Start(ctx context.Context) {
 
 		// Wait for context cancellation
 		<-ctx.Done()
+		// Wait for any in-flight debounced reload to finish touching viper
+		// before signaling completion, so callers can safely tear down
+		// (e.g. viper.Reset()) without racing a straggler reload.
+		hr.reloadWG.Wait()
 		close(hr.done)
 	})
 }

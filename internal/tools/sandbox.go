@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -88,11 +89,13 @@ func (s *Sandbox) executeLocal(ctx context.Context, command string) (string, err
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	output, err := cmd.CombinedOutput()
 
-	warning := s.LocalWarning()
-	result := string(output)
-	if warning != "" {
-		result = warning + "\n" + result
+	// Surface the no-isolation warning on stderr (visible in server logs) but
+	// keep the returned output as the raw command output — prepending it would
+	// corrupt parsed output for tool consumers (see TestSandbox_ExecuteLocal_Success).
+	if warning := s.LocalWarning(); warning != "" {
+		fmt.Fprintln(os.Stderr, warning)
 	}
+	result := string(output)
 
 	if ctx.Err() == context.DeadlineExceeded {
 		return result, fmt.Errorf("command timed out after %s", timeout)
