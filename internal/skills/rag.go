@@ -645,17 +645,22 @@ func EnsureRequiredTables(ctx context.Context, pool *database.Conn) error {
 		return fmt.Errorf("failed to create skill_embeddings table: %w", err)
 	}
 
-	// Try HNSW first, fall back to IVFFlat
+	// Try HNSW first, fall back to IVFFlat. The vector opclass is schema-
+	// qualified (extensions.vector_cosine_ops): the migration installs the
+	// extension WITH SCHEMA extensions, and sessions whose search_path lacks
+	// `extensions` (e.g. plain pgvector/pgvector containers, as in CI) would
+	// otherwise fail with "operator class vector_cosine_ops does not exist"
+	// and silently skip index creation.
 	_, err = pool.Exec(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_skill_embeddings_hnsw
-		ON skill_embeddings USING hnsw (embedding vector_cosine_ops)
+		ON skill_embeddings USING hnsw (embedding extensions.vector_cosine_ops)
 		WITH (m = 16, ef_construction = 64)
 	`)
 	if err != nil {
 		slog.Warn("HNSW index creation failed, trying IVFFlat", "error", err)
 		if _, fallbackErr := pool.Exec(ctx, `
 			CREATE INDEX IF NOT EXISTS idx_skill_embeddings_ivfflat
-			ON skill_embeddings USING ivfflat (embedding vector_cosine_ops)
+			ON skill_embeddings USING ivfflat (embedding extensions.vector_cosine_ops)
 			WITH (lists = 100)
 		`); fallbackErr != nil {
 			slog.Warn("IVFFlat index creation failed", "error", fallbackErr)

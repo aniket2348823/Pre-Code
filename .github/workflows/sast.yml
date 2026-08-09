@@ -53,14 +53,15 @@ jobs:
       - name: Run semgrep (Go security rules)
         # Direct invocation (the deprecated action can't scope paths/severity).
         # .semgrepignore excludes the engine's own test fixtures + demo files
-        # (intentional vulns). Only ERROR-severity findings fail the build;
-        # warnings (e.g. workflow tag pinning) are advisory via the SARIF upload.
+        # (intentional vulns). --error makes ERROR-severity findings FAIL the
+        # build (without it, semgrep exits 0 and findings are report-only);
+        # warnings (e.g. workflow tag pinning) stay advisory via SARIF upload.
         run: |
           pip install --quiet semgrep
           # --sarif --sarif-output (not the legacy --sarif-file flag, which
           # current semgrep rejects with exit 2 and produces no report).
           semgrep --config p/golang --config p/owasp-top-ten --config p/r2c-security-audit \
-            --severity ERROR --sarif --sarif-output=semgrep.sarif --metrics off .
+            --severity ERROR --error --sarif --sarif-output=semgrep.sarif --metrics off .
 
       - name: Upload SARIF to GitHub Security
         if: always()
@@ -98,13 +99,16 @@ jobs:
         run: docker build --target prod -t vigilagent-scan:${{ github.sha }} .
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        # Pinned v0.36.0 (was @master — unpinned mutable reference; its DB
+        # version drift caused flaky exit-1 runs on re-rated advisories).
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: 'vigilagent-scan:${{ github.sha }}'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+          ignorefile: '.trivyignore'
 
       - name: Upload Trivy scan results
         uses: github/codeql-action/upload-sarif@v4
@@ -178,10 +182,13 @@ jobs:
 
       - name: Wait for server readiness
         # The server runs DB migrations at startup (internal/server/server.go),
-        # which can take longer than a fixed sleep — poll /health instead.
+        # which can take longer than a fixed sleep — poll the documented
+        # liveness endpoint instead. NOTE: /api/v1/health (not root /health —
+        # verified: the chi Heartbeat middleware does not short-circuit, root
+        # /health returns 404 on a fresh server).
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:8080/health >/dev/null 2>&1; then
+            if curl -fsS http://localhost:8080/api/v1/health >/dev/null 2>&1; then
               echo "✅ server ready after $((i * 2))s"
               exit 0
             fi

@@ -1,0 +1,9 @@
+# Trivy ignore list (one advisory ID per line; # = comment)
+#
+# GO-2026-5932 — golang.org/x/crypto/openpgp is unmaintained/unsupported.
+# NOT REACHABLE: `go mod why golang.org/x/crypto/openpgp` reports
+# "(main module does not need package ...)". Trivy flags the module version
+# recorded in the binary's buildinfo, not actual package usage; the package
+# is absent from the import graph and cannot be fixed by upgrading
+# (x/crypto v0.54.0 is already latest and still ships the deprecated pkg).
+GO-2026-5932
