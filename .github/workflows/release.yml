@@ -13,13 +13,28 @@ env:
   GOTOOLCHAIN: auto
 
 jobs:
+  # ── 0. TRIGGER GATE (always runs) ──
+  # Without an always-running job, a plain branch push evaluates every job
+  # away, and GitHub concludes the run "failure — No jobs were run"
+  # (github/actions#2910). This gate makes branch pushes record a green run;
+  # only v* tags proceed to build and release.
+  gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check whether this push is a release tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "RELEASE=1" >> "$GITHUB_ENV"
+            echo "Release tag detected: ${{ github.ref }} — proceeding to build assets."
+          else
+            echo "No v* tag on this push (${{ github.ref_type }}) — nothing to release."
+          fi
+
   # ── 1. BUILD ALL RELEASE ASSETS ──
   build:
     name: Build release assets (MCP binaries + VSIX)
-    # Gate on version tags instead of a tag-only `on:` filter: a tag-only
-    # workflow makes GitHub create a phantom "failure" run (0 jobs) on every
-    # branch push. With the branch trigger + this condition, plain pushes are
-    # recorded as "skipped" and only v* tags actually build and release.
+    # Only v* tags actually build and release; plain pushes skip cleanly.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
