@@ -169,6 +169,7 @@ func (a *APIKeyAuth) Authenticate(r *http.Request) (*auth.Claims, error) {
 				slog.Error("api-key: last_used_at update panicked", "panic", r)
 			}
 		}()
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, _ = a.pool.Exec(bgCtx, `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`, id)

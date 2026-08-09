@@ -216,12 +216,12 @@ func builtinRules() []builtinRule {
 			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
-			name:           "command_injection",
-			description:    "Potential command injection via unsanitized input in exec.Command",
-			severity:       SeverityCritical,
-			pattern:        regexp.MustCompile(`exec\.Command\([^)]*(?:req\.|r\.(?:Form|URL|Body|Header)|params\.|input\.|fmt\.Sprintf)`),
-			fix:            "Use allowlists for commands; never pass user input directly to exec.Command arguments",
-			category:       "injection",
+			name:        "command_injection",
+			description: "Potential command injection via unsanitized input in exec.Command",
+			severity:    SeverityCritical,
+			pattern:     regexp.MustCompile(`exec\.Command\([^)]*(?:req\.|r\.(?:Form|URL|Body|Header)|params\.|input\.|fmt\.Sprintf)`),
+			fix:         "Use allowlists for commands; never pass user input directly to exec.Command arguments",
+			category:    "injection",
 			// NOTE: bare "r." was far too loose — it matches ANY string containing
 			// "r." (e.g. "{{.Server.Version}}" in a static docker probe), producing
 			// false positives on static commands. Bare "req." is kept (req.Input
@@ -302,13 +302,18 @@ func builtinRules() []builtinRule {
 			requireContext: []string{"req.", "r.", "input."},
 		},
 		{
-			name:           "log_injection",
-			description:    "Potential log injection via unsanitized user input",
-			severity:       SeverityMedium,
-			pattern:        regexp.MustCompile(`(?:log\.|slog\.|fmt\.Print|fmt\.Fprint)\w*\([^)]*(?:req\.|r\.|input\.|user\.)`),
+			name:        "log_injection",
+			description: "Potential log injection via unsanitized user input",
+			severity:    SeverityMedium,
+			// requireContext no longer includes bare "r." — a substring `r\.`
+			// matched the "r." inside ANY identifier ending in r (server.,
+			// httpServer., hr., rl.), producing dozens of false positives on
+			// structured slog key-value calls. Only req./input./user. contexts
+			// are flagged now.
+			pattern:        regexp.MustCompile(`(?:log\.|slog\.|fmt\.Print|fmt\.Fprint)\w*\([^)]*(?:req\.|input\.|user\.)`),
 			fix:            "Sanitize user input before logging; use structured logging with key-value pairs",
 			category:       "injection",
-			requireContext: []string{"req.", "r.", "input.", "user."},
+			requireContext: []string{"req.", "input.", "user."},
 		},
 
 		// ════════════════════════════════════════════════════════════════
@@ -482,6 +487,7 @@ func builtinRules() []builtinRule {
 			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
+			// #nosec weak_hash_sha1: rule-definition pattern text (self-reference), not real usage
 			name:        "weak_hash_sha1",
 			description: "Use of SHA-1 which is vulnerable to collision attacks",
 			severity:    SeverityMedium,
@@ -693,9 +699,10 @@ func builtinRules() []builtinRule {
 			name:        "debug_endpoint_exposed",
 			description: "Debug/pprof endpoint potentially exposed in production",
 			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`net/http/pprof|_ "net/http/pprof"`),
-			fix:         "Ensure debug endpoints are behind authentication or only available in development builds",
-			category:    "info_disclosure",
+			// #nosec debug_endpoint_exposed: rule-definition pattern text (self-reference), not real usage
+			pattern:  regexp.MustCompile(`net/http/pprof|_ "net/http/pprof"`),
+			fix:      "Ensure debug endpoints are behind authentication or only available in development builds",
+			category: "info_disclosure",
 		},
 
 		// ════════════════════════════════════════════════════════════════

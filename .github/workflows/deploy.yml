@@ -97,10 +97,21 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Resolve staging target URL
+        id: target
+        run: |
+          # Load tests only run against a real staging URL. When no secret is
+          # configured, skip cleanly instead of failing against localhost.
+          echo "url=${LOADTEST_TARGET_URL:-http://localhost:8080}" >> "$GITHUB_OUTPUT"
+          echo "configured=$([ -n "$LOADTEST_TARGET_URL" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        env:
+          LOADTEST_TARGET_URL: ${{ secrets.LOADTEST_TARGET_URL }}
+
       - name: Run k6 Load Test
+        if: steps.target.outputs.configured == 'true'
         uses: grafana/k6-action@v0.3.1
         env:
-          BASE_URL: 'http://localhost:8080'
+          BASE_URL: ${{ steps.target.outputs.url }}
           API_TOKEN: 'test-secret-key'
         with:
           filename: scripts/loadtest.js

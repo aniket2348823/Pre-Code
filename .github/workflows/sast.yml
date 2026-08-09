@@ -36,14 +36,14 @@ jobs:
         run: go vet ./...
 
       - name: Run staticcheck
-        uses: dominikh/staticcheck-action@v1
-        with:
-          version: "latest"
-          # -tests=false: the gate guards PRODUCTION code. Test files are
-          # analyzed separately (see internal/**/*_test.go) and pedantic
-          # test-only warnings (e.g. SA1012 nil contexts in tests) must not
-          # block merges.
-          args: -tests=false ./...
+        # Direct binary invocation: the staticcheck-action wrapper does not
+        # accept an 'args' input, so -tests=false (production-only gate) cannot
+        # be passed through it. Test files are analyzed separately and pedantic
+        # test-only warnings (e.g. SA1012 nil contexts in tests) must not block
+        # merges.
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck -tests=false ./...
 
       - name: Run govulncheck
         run: |
@@ -57,12 +57,14 @@ jobs:
         # warnings (e.g. workflow tag pinning) are advisory via the SARIF upload.
         run: |
           pip install --quiet semgrep
+          # --sarif --sarif-output (not the legacy --sarif-file flag, which
+          # current semgrep rejects with exit 2 and produces no report).
           semgrep --config p/golang --config p/owasp-top-ten --config p/r2c-security-audit \
-            --severity ERROR --sarif-file semgrep.sarif --metrics off .
+            --severity ERROR --sarif --sarif-output=semgrep.sarif --metrics off .
 
       - name: Upload SARIF to GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
 
@@ -88,8 +90,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Build Docker image
-        run: docker build -t vigilagent-scan:${{ github.sha }} .
+      - name: Build Docker image (prod stage only)
+        # The Dockerfile's default (last) stage is 'dev' — a full Go toolchain
+        # image containing all source, which trivy flags with CRITICAL/HIGH
+        # CVEs. Build the slim prod stage explicitly so the scan gates the
+        # actual production image.
+        run: docker build --target prod -t vigilagent-scan:${{ github.sha }} .
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
@@ -101,16 +107,19 @@ jobs:
           exit-code: '1'
 
       - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
 
   # ── 3. DAST (DYNAMIC APPLICATION SECURITY TESTING) ──
+  # Decoupled from container-scan: DAST builds its own binary, so a failed
+  # image scan must not skip (and thereby mask) the dynamic scan. It runs on
+  # every PR (sast.yml triggers on push + pull_request), which makes it safe
+  # to require as a branch-protection status check.
   dast:
     name: Dynamic Analysis (DAST)
     runs-on: ubuntu-latest
-    needs: container-scan
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -135,6 +144,11 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
+      nats:
+        image: nats:2-alpine
+        ports:
+          - 4222:4222
 
     steps:
       - name: Checkout Code
@@ -161,20 +175,37 @@ jobs:
           VIGILAGENT_AUTH_JWT_SECRET=012345678901234567890123456789012345678901 \
           VIGILAGENT_SERVER_ENV=development \
           ./bin/api &
-          sleep 5
+
+      - name: Wait for server readiness
+        # The server runs DB migrations at startup (internal/server/server.go),
+        # which can take longer than a fixed sleep — poll /health instead.
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/health >/dev/null 2>&1; then
+              echo "✅ server ready after $((i * 2))s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "❌ server did not become ready within 60s" >&2
+          exit 1
 
       - name: Run ZAP baseline scan
-        uses: zaproxy/action-baseline@v0.10.0
+        # Pinned v0.15.0 (was v0.10.0). -l WARN fails only on WARN+ alerts;
+        # the -a/-j (alpha rules + Ajax spider) flags were dropped — on an
+        # auth-gated JSON API they only add noise and runtime. Expected-noise
+        # alerts are suppressed via .zap/rules.tsv.
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           target: 'http://localhost:8080'
           rules_file_name: '.zap/rules.tsv'
           cmd_options: >-
-            -a
-            -j
             -l WARN
 
       - name: Run nuclei vulnerability scanner
-        uses: projectdiscovery/nuclei-action@main
+        # Pinned v3.1.1 (was @main — unpinned mutable references are a supply-
+        # chain risk and a semgrep advisory).
+        uses: projectdiscovery/nuclei-action@v3.1.1
         with:
           target: http://localhost:8080
           severity: critical,high

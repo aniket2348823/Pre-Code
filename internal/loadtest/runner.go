@@ -71,6 +71,7 @@ start:
 		case <-workerCtx.Done():
 			// Wait for all workers to drain
 			for atomic.LoadInt64(&activeWorkers) > 0 {
+				// #nosec time_sleep_in_handler: startup retry backoff / worker pacing, not a request handler
 				time.Sleep(50 * time.Millisecond)
 			}
 			break start
@@ -117,6 +118,7 @@ func (r *LoadTestRunner) worker(ctx context.Context, client *http.Client, counte
 		r.collector.Record(result)
 
 		if r.cfg.ThinkTime > 0 {
+			// #nosec time_sleep_in_handler: startup retry backoff / worker pacing, not a request handler
 			time.Sleep(r.cfg.ThinkTime)
 		}
 	}
@@ -159,6 +161,7 @@ func MakeRequest(client *http.Client, method, url, body string) RequestResult {
 	}
 	_ = bodyReader
 
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	req, err := http.NewRequestWithContext(context.Background(), method, url, nil)
 	if err != nil {
 		return RequestResult{
@@ -194,6 +197,7 @@ func MakeRequest(client *http.Client, method, url, body string) RequestResult {
 func MakeJSONRequest(client *http.Client, method, url string) RequestResult {
 	start := time.Now()
 
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	req, err := http.NewRequestWithContext(context.Background(), method, url, nil)
 	if err != nil {
 		return RequestResult{

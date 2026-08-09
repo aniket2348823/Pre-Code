@@ -67,6 +67,7 @@ type HITLQueue struct {
 
 // NewHITLQueue creates a new HITL queue with Redis-backed persistence.
 func NewHITLQueue(client *redis.Client, timeout time.Duration) *HITLQueue {
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx, cancel := context.WithCancel(context.Background())
 	q := &HITLQueue{
 		client:  client,
@@ -258,6 +259,7 @@ func (q *HITLQueue) markTimeout(id string) {
 	telemetryCounter("timed_out")
 
 	if exists && q.client != nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		ctx := context.Background()
 		data, _ := json.Marshal(entry)
 		key := fmt.Sprintf("hitl:%s", id)
@@ -348,6 +350,7 @@ func (h *HITLHandler) DecideHandler(w http.ResponseWriter, r *http.Request) {
 		Decision     HITLDecision `json:"decision"`
 		ModifiedData string       `json:"modified_data,omitempty"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return

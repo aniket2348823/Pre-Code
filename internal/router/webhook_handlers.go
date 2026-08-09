@@ -29,6 +29,7 @@ func (r *Router) createWebhookHandler(w http.ResponseWriter, req *http.Request) 
 		Secret string   `json:"secret"`
 		Events []string `json:"events"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return

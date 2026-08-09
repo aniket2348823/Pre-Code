@@ -29,6 +29,7 @@ func (r *Router) approveHITLHandler(w http.ResponseWriter, req *http.Request) {
 		Decision string `json:"decision"` // "approve" or "reject"
 		Reason   string `json:"reason"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return

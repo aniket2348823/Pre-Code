@@ -112,6 +112,7 @@ func (r *Router) importDataHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var export ExportData
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&export); err != nil {
 		response.BadRequest(w, "invalid import data")
 		return

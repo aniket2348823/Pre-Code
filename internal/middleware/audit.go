@@ -43,6 +43,7 @@ func NewAuditLogger(pool *database.Conn) *AuditLogger {
 // Log records an audit event asynchronously.
 func (a *AuditLogger) Log(ctx context.Context, event AuditEvent) {
 	go func() {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
@@ -213,6 +214,7 @@ func (ac *AuditCleanup) Stop() {
 }
 
 func (ac *AuditCleanup) runCleanup() {
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

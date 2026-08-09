@@ -26,6 +26,10 @@ import (
 // NewWithMiddleware wiring that server.New uses when CORS origins are set.
 // Run with: go test -run 'TestReproPanicLive' -v ./internal/router/ -timeout 90s
 func TestReproPanicLive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("requires live docker postgres; skipped in -short mode (CI runs -short)")
+	}
+
 	cfg := &config.DatabaseConfig{
 		Host:         "localhost",
 		Port:         5432,

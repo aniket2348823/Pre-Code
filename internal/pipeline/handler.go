@@ -31,6 +31,7 @@ func NewHTTPHandler(p *Pipeline) http.HandlerFunc {
 
 		var input Request
 		if err := json.NewDecoder(body).Decode(&input); err != nil {
+			// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 			log.Warn("invalid request body", "error", err, "remote_addr", req.RemoteAddr)
 			response.BadRequest(w, "invalid request body")
 			return
@@ -39,6 +40,7 @@ func NewHTTPHandler(p *Pipeline) http.HandlerFunc {
 		// Input validation and sanitization
 		input.Description = strings.TrimSpace(input.Description)
 		if input.Description == "" {
+			// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 			log.Warn("missing description field", "remote_addr", req.RemoteAddr)
 			response.BadRequest(w, "description is required")
 			return
@@ -46,11 +48,13 @@ func NewHTTPHandler(p *Pipeline) http.HandlerFunc {
 
 		// Enforce field length limits
 		if len(input.Description) > maxDescriptionLen {
+			// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 			log.Warn("description exceeds max length", "length", len(input.Description), "max", maxDescriptionLen)
 			response.BadRequest(w, "description too long")
 			return
 		}
 		if len(input.Code) > maxCodeLen {
+			// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 			log.Warn("code exceeds max length", "length", len(input.Code), "max", maxCodeLen)
 			response.BadRequest(w, "code too long")
 			return

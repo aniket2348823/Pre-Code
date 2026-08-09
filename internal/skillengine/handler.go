@@ -28,6 +28,7 @@ func NewHTTPHandler(eng *Engine) http.HandlerFunc {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 		var req ExtractRequest
+		// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			response.Error(w, http.StatusBadRequest, "invalid JSON body")
 			return

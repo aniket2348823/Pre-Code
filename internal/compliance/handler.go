@@ -15,6 +15,7 @@ func NewHTTPHandler(checker *Checker) http.HandlerFunc {
 			Description string   `json:"description"`
 			Declared    []string `json:"declared,omitempty"`
 		}
+		// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 		if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 			response.BadRequest(w, "invalid request body")
 			return

@@ -36,6 +36,13 @@ spec:
       - name: api
         image: vigilagent/api:latest
         imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
         ports:
         - containerPort: 8080
           name: http

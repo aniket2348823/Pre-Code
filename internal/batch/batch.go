@@ -146,6 +146,7 @@ func (p *Processor) Submit(ctx context.Context, job *Job) error {
 
 // processBatch sends a batch to the processing function.
 func (p *Processor) processBatch(batch *Batch) {
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

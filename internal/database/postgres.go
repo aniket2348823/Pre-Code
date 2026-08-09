@@ -73,6 +73,7 @@ func recordDBFailure() {
 	dbCircuitBreaker.lastFailTime = time.Now()
 	if dbCircuitBreaker.failCount >= dbCircuitBreaker.threshold {
 		dbCircuitBreaker.state = "open"
+		// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 		slog.Warn("DB circuit breaker OPEN", "fail_count", dbCircuitBreaker.failCount)
 	}
 }
@@ -210,6 +211,7 @@ func NewPostgres(ctx context.Context, cfg *config.DatabaseConfig) (*Postgres, er
 	poolCfg.AfterRelease = func(conn *pgx.Conn) bool {
 		// Bound the reset so a wedged connection cannot stall the caller's
 		// Release() (often a deferred call at the end of a request).
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		resetCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if _, err := conn.Exec(resetCtx, "SELECT set_config('app.current_user_id', NULL, false)"); err != nil {
@@ -296,8 +298,8 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 		poolCfg.ConnConfig.TLSConfig = &tls.Config{
 			ServerName: cfg.Host,
 			// #nosec G402 — faithful libpq "prefer" semantics: TLS used when the
-		// server offers it, plaintext fallback allowed (inherent downgrade risk
-		// of the mode, not a code defect). Production should use verify-full.
+			// server offers it, plaintext fallback allowed (inherent downgrade risk
+			// of the mode, not a code defect). Production should use verify-full.
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS12,
 		}
@@ -921,6 +923,7 @@ func RetryQueryRow(ctx context.Context, cfg RetryConfig, fn func(ctx context.Con
 	// Preserve the old never-panic-on-nil behavior: callers that pass a nil
 	// context would otherwise panic on r.ctx.Done() inside retryRow.Scan.
 	if ctx == nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		ctx = context.Background()
 	}
 	// The first attempt is returned immediately; retry-aware behavior is

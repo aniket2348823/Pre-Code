@@ -238,6 +238,7 @@ func (r *Router) middlewareProcessHandler(w http.ResponseWriter, req *http.Reque
 		Stream      bool          `json:"stream,omitempty"`
 		Context     *contextInput `json:"context,omitempty"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {

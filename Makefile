@@ -21,7 +21,7 @@ DOCKER_TAG   := latest
 
 .PHONY: all build build-api build-migrate run test test-short test-race test-cover test-integration \
 	lint fmt tidy vet clean migrate migrate-up migrate-down migrate-create \
-	docker-build docker-run security check help
+	docker-build docker-run security check branch-protection help
 
 # ── Default ──────────────────────────────────────────────
 all: build
@@ -99,6 +99,11 @@ security:
 	@$(GOCMD) install golang.org/x/vuln/cmd/govulncheck@latest
 	@govulncheck ./...
 
+# branch-protection blocks merges to main when the security CI fails.
+# Requires GITHUB_TOKEN (PAT with repo admin scope). See docs/DEPLOYMENT.md.
+branch-protection:
+	@./scripts/ci/setup-branch-protection.sh
+
 check: fmt vet test-short
 	@echo "All checks passed!"
 
@@ -172,6 +177,7 @@ help:
 	@echo "  make vet            Run go vet"
 	@echo "  make tidy           Tidy and verify go modules"
 	@echo "  make security       Run security scans"
+	@echo "  make branch-protection  Apply GitHub branch protection (needs GITHUB_TOKEN)"
 	@echo "  make check          Run fmt + vet + test-short"
 	@echo ""
 	@echo "Migrate:"

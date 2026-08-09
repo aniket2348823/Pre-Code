@@ -78,6 +78,23 @@ func (e *Engine) Run(ctx context.Context, in Input) *Report {
 		raw = append(raw, fs...)
 	}
 	rep.Findings = e.mergeScoreAndFilter(raw, in.Filename)
+
+	// Apply comment-based suppression across ALL analyzers (builtin + semgrep
+	// + bandit): a `#nosec` marker on the matched line or up to 3 lines above
+	// documents a deliberate, reviewed decision. The builtin analyzer already
+	// applies this internally; doing it here too keeps semgrep/bandit findings
+	// on par so one escape hatch works everywhere.
+	if len(rep.Findings) > 0 {
+		lines := strings.Split(in.Code, "\n")
+		filtered := rep.Findings[:0]
+		for _, f := range rep.Findings {
+			if f.Line > 0 && f.Line <= len(lines) && hasNosecMarker(lines, f.Line-1) {
+				continue
+			}
+			filtered = append(filtered, f)
+		}
+		rep.Findings = filtered
+	}
 	return rep
 }
 

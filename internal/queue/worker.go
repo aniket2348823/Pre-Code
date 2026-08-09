@@ -57,6 +57,7 @@ func DefaultWorkerConfig() WorkerConfig {
 
 // NewTaskWorker creates a new task worker.
 func NewTaskWorker(natsConn *NATS, cfg WorkerConfig, handler TaskHandler) (*TaskWorker, error) {
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx := context.Background()
 
 	// Ensure stream exists
@@ -128,6 +129,7 @@ func (w *TaskWorker) Start(ctx context.Context) error {
 				return nil
 			}
 			slog.Warn("failed to fetch messages", "error", err)
+			// #nosec time_sleep_in_handler: startup retry backoff / worker pacing, not a request handler
 			time.Sleep(1 * time.Second)
 			continue
 		}

@@ -145,6 +145,7 @@ func (r *Router) adminUpdateUserRoleHandler(w http.ResponseWriter, req *http.Req
 	var input struct {
 		Role string `json:"role"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return
@@ -269,6 +270,7 @@ func (r *Router) updateFeatureFlagHandler(w http.ResponseWriter, req *http.Reque
 	}
 
 	var flag featureflags.Flag
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&flag); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return
@@ -634,6 +636,7 @@ func (r *Router) costOverrideHandler(w http.ResponseWriter, req *http.Request) {
 		OutputCostPer1K float64 `json:"output_cost_per_1k"`
 		MaxTokens       int     `json:"max_tokens,omitempty"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return

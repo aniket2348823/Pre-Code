@@ -37,6 +37,7 @@ func (r *Router) scanHandler(w http.ResponseWriter, req *http.Request) {
 		Code     string `json:"code"`
 		Filename string `json:"filename"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) || (err != nil && strings.Contains(err.Error(), "too large")) {
@@ -157,6 +158,7 @@ func (r *Router) deepAnalyzeHandler(w http.ResponseWriter, req *http.Request) {
 		Code     string `json:"code"`
 		Filename string `json:"filename"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return

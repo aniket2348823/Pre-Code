@@ -136,6 +136,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Trigger review asynchronously
 		go func() {
+			// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 

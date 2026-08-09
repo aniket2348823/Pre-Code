@@ -246,7 +246,7 @@ func TestDoCallSelfHealsProviderKeyRejection(t *testing.T) {
 		// Second attempt (self-heal): backend uses its own key — success.
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
+			"success":    true,
 			"confidence": map[string]interface{}{"grade": "A", "confidence": 0.95},
 		})
 	}))

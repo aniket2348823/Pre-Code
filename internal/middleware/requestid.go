@@ -41,6 +41,7 @@ func RequestIDFromContext(ctx context.Context) string {
 // ContextWithRequestID returns a copy of ctx associated with the given request ID.
 func ContextWithRequestID(ctx context.Context, id string) context.Context {
 	if ctx == nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, ctxKey, id)

@@ -68,6 +68,7 @@ func SanitizeMiddleware(next http.Handler) http.Handler {
 			path = r.URL.RawPath
 		}
 		if pathTraversalPattern.MatchString(path) {
+			// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 			slog.Warn("security: injection attempt blocked", "type", "path_traversal", "remote", r.RemoteAddr, "path", path)
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
@@ -80,6 +81,7 @@ func SanitizeMiddleware(next http.Handler) http.Handler {
 		for key, values := range r.URL.Query() {
 			for _, v := range values {
 				if DetectSQLInjection(v) {
+					// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 					slog.Warn("security: potential sql injection in query param", "remote", r.RemoteAddr, "param", key)
 				}
 				if DetectXSS(v) {

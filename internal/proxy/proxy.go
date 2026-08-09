@@ -207,6 +207,7 @@ func (s *ProxyServer) loggingMiddleware(next http.Handler) http.Handler {
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
 		latency := time.Since(start)
+		// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 		slog.Info("proxy request", "method", r.Method, "path", r.URL.Path, "status", ww.Status(), "latency", latency.Round(time.Millisecond))
 	})
 }
@@ -1064,6 +1065,7 @@ type analyzeRequest struct {
 func (s *ProxyServer) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req analyzeRequest
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
 		return
@@ -1094,6 +1096,7 @@ func (s *ProxyServer) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 func (s *ProxyServer) handleDeepAnalyze(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req analyzeRequest
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
 		return
@@ -1398,11 +1401,13 @@ func (s *ProxyServer) handleProvenanceGet(w http.ResponseWriter, r *http.Request
 // submitting the full record+signature or a stored scan_id+signature.
 // POST /v1/provenance/verify
 func (s *ProxyServer) handleProvenanceVerify(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var body struct {
 		ScanID    string                    `json:"scan_id"`
 		Signature string                    `json:"signature"`
 		Record    *signing.ProvenanceRecord `json:"record,omitempty"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
 		return
@@ -1440,6 +1445,7 @@ func (s *ProxyServer) handleProvenanceVerify(w http.ResponseWriter, r *http.Requ
 // was scanned outside the streaming gateway flow (e.g. MCP attestations).
 // POST /v1/provenance/attest
 func (s *ProxyServer) handleProvenanceAttest(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var body struct {
 		Provider      string `json:"provider"`
 		Model         string `json:"model"`
@@ -1448,6 +1454,7 @@ func (s *ProxyServer) handleProvenanceAttest(w http.ResponseWriter, r *http.Requ
 		ClientType    string `json:"client_type,omitempty"`
 		ClientVersion string `json:"client_version,omitempty"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
 		return

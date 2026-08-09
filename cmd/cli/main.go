@@ -147,6 +147,7 @@ func scanCmd() *cobra.Command {
 Writes a SARIF 2.1.0 report (--sarif) and exits non-zero when findings meet
 the --fail-on severity gate — the CI enforcement layer for protected branches.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 			ctx := context.Background()
 			engine := scanner.DefaultEngine()
 

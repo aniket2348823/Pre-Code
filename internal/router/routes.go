@@ -179,6 +179,7 @@ func (r *Router) setupRoutes() {
 
 			// Skill marketplace RAG endpoints — gated behind feature flag
 			if r.skillRAG != nil {
+				// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 				if r.featureFlags == nil || r.featureFlags.IsEnabled(context.Background(), "skill_rag") {
 					ragHandlers := NewRAGHandlers(r.skillRAG, r.skills)
 					ragHandlers.RegisterRoutes(protected)

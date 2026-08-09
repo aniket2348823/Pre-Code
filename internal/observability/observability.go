@@ -47,6 +47,7 @@ func NewTracer() *Tracer {
 // StartSpan begins a new span and returns a context with the trace ID.
 func (t *Tracer) StartSpan(ctx context.Context, name string) (context.Context, *Span) {
 	if ctx == nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		ctx = context.Background()
 	}
 	traceID, _ := ctx.Value(traceIDKey).(TraceID)
@@ -133,6 +134,7 @@ func (t *Tracer) SpanCount() int {
 // WithTraceID adds a trace ID to a context.
 func WithTraceID(ctx context.Context, id TraceID) context.Context {
 	if ctx == nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, traceIDKey, id)

@@ -18,6 +18,7 @@
 - [VS Code Extension Publishing](#vs-code-extension-publishing)
 - [Health Checks & Monitoring](#health-checks--monitoring)
 - [Production Checklist](#production-checklist)
+- [Branch Protection — Block Merges on Failed Security CI](#branch-protection--block-merges-on-failed-security-ci)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -601,6 +602,79 @@ If you see `too many connections` errors:
 1. Increase `DB_MAX_OPEN_CONNS`
 2. Decrease `DB_MAX_LIFETIME` to recycle connections faster
 3. Check for connection leaks using `DB_SLOW_QUERY_THRESHOLD` logging
+
+## Branch Protection — Block Merges on Failed Security CI
+
+CI gates are only effective if a merge cannot bypass them. Configure GitHub
+branch protection on `main` so every PR must pass the security pipeline before
+it can be merged.
+
+### One-command setup
+
+`scripts/ci/setup-branch-protection.sh` applies the protection rules via the
+GitHub REST API (curl only, no `gh` CLI required). It is idempotent — safe to
+re-run anytime.
+
+```bash
+# Create a PAT with repo admin scope, then:
+export GITHUB_TOKEN=ghp_...
+./scripts/ci/setup-branch-protection.sh          # uses origin remote
+# or explicit:
+./scripts/ci/setup-branch-protection.sh --repo owner/repo --branch main
+```
+
+### What it enforces
+
+| Rule | Setting |
+|---|---|
+| Required status checks | `VigilAgent Policy Scan`, `Static Analysis (SAST)`, `Container Security Scan`, `Dynamic Analysis (DAST)`, `Dependency Security Audit`, `Run Tests & Verification`, `Typecheck, Lint & Package VSIX` |
+| Require branches up to date | `true` (strict) |
+| Require PR review | 1 approving review, stale approvals dismissed |
+| Enforce admins | `true` (admins cannot bypass the checks) |
+| Force pushes / deletions | Disabled |
+
+### Why these checks and not others
+
+Only jobs that run on **every** PR are required. Jobs that are frequently
+*skipped* do not report success on PRs, so requiring them would block every
+merge:
+
+- `Dynamic Analysis (DAST)` — **required**. It is decoupled from
+  `container-scan` in `sast.yml` and runs on every PR (ZAP baseline + nuclei
+  against a live server started in the job). Its baseline exceptions live in
+  `.zap/rules.tsv`.
+- Deploy-only jobs (`Build & Push Container Image`, staging/prod rollout) —
+  main-branch only; not required.
+- `Automated k6 Performance Verification` — runs only when a staging URL is
+  configured; not required.
+
+### Manual setup (equivalent, via UI)
+
+Settings → Branches → Add branch protection rule for `main`:
+
+1. **Require a pull request before merging** — require 1 approval, check
+   *Dismiss stale pull request approvals when new commits are pushed*.
+2. **Require status checks to pass before merging** — enable *Require branches
+   to be up to date before merging* and select the seven checks above.
+3. **Do not allow bypassing the above settings** (enforce admins).
+
+### Note on CODEOWNERS
+
+The repo ships a `CODEOWNERS` that references `@vigilagent/*` teams. Those
+teams must exist in a GitHub **organization** for code-owner review to work.
+On a personal account (no teams), leave `require_code_owner_reviews` off — the
+setup script defaults to `false`. When you move the repo into an org and create
+the teams, re-run with:
+
+```bash
+CODE_OWNER_REVIEW=true ./scripts/ci/setup-branch-protection.sh
+```
+
+> Moving the repo into an organization? See
+> [docs/ORG_MIGRATION.md](ORG_MIGRATION.md) — the step-by-step checklist
+> (teams, CODEOWNERS, org secrets, rulesets, verification).
+
+---
 
 ## Managed Egress — Plane 2 (policy enforcement at the network layer)
 

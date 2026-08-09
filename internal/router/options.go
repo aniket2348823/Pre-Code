@@ -345,6 +345,7 @@ func New(opts Options) *Router {
 func (r *Router) initHandlers() {
 	// Start lockout cleanup goroutine for in-memory implementation
 	if al, ok := r.lockout.(*mw.AccountLockout); ok {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		ctx, cancel := context.WithCancel(context.Background())
 		go al.Cleanup(ctx, 5*time.Minute)
 		r.lockoutCancel = cancel

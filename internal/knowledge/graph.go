@@ -102,6 +102,7 @@ func NewGraphWithDB(pool *pgxpool.Pool) *Graph {
 	g := NewGraph()
 	g.pool = pool
 	if pool != nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		if err := g.ensureTables(context.Background()); err != nil {
 			slog.Warn("knowledge graph: failed to create tables, using in-memory mode", "error", err)
 			g.pool = nil
@@ -215,6 +216,7 @@ func (g *Graph) AddNode(n *Node) {
 
 	// Persist to DB (outside lock)
 	if pool != nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		ctx := context.Background()
 		_, err := pool.Exec(ctx, `
 			INSERT INTO kg_nodes (id, type, name, project_id, attributes, embedding, created_at, updated_at)
@@ -253,6 +255,7 @@ func (g *Graph) AddEdge(e Edge) {
 
 	// Persist to DB (outside lock)
 	if pool != nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		ctx := context.Background()
 		_, err := pool.Exec(ctx,
 			"INSERT INTO kg_edges (from_node, to_node, relation, confidence, project_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)",

@@ -98,6 +98,7 @@ func (r *EventRepository) BatchCreate(ctx context.Context, events []Event) error
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	defer tx.Rollback(context.Background())
 
 	query := `

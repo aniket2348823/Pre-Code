@@ -76,8 +76,9 @@ func RouteRequest(model string, cfg *Config) *ProviderConfig {
 	}
 }
 
-//lint:ignore U1000 used by providers_test.go
 // forwardToProvider sends the request to the real LLM provider and returns the raw response.
+//
+//lint:ignore U1000 used by providers_test.go
 func forwardToProvider(ctx context.Context, client *http.Client, provider *ProviderConfig, requestBody []byte, path string) ([]byte, error) {
 	rawURL := provider.BaseURL + path
 

@@ -22,16 +22,29 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Resolve target URL
+        id: target
+        run: |
+          TARGET="${{ github.event.inputs.target_url }}"
+          if [ -z "$TARGET" ]; then TARGET="${{ secrets.LOADTEST_TARGET_URL }}"; fi
+          # Scheduled runs have no input and (until a secret is configured) no
+          # live deployment to hit — skip cleanly instead of failing against
+          # localhost. Manual runs (workflow_dispatch) always provide a target.
+          echo "url=${TARGET:-http://localhost:8080}" >> "$GITHUB_OUTPUT"
+          echo "configured=$([ -n "$TARGET" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
       - name: Run k6 Load Test
+        if: steps.target.outputs.configured == 'true'
         uses: grafana/k6-action@v0.3.1
         env:
-          BASE_URL: ${{ github.event.inputs.target_url || 'http://localhost:8080' }}
+          BASE_URL: ${{ steps.target.outputs.url }}
           API_TOKEN: ${{ secrets.LOADTEST_API_KEY }}
         with:
           filename: scripts/loadtest.js
           flags: --summary-export=reports/loadtest-summary.json
 
       - name: Upload Load Test Report
+        if: steps.target.outputs.configured == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: k6-loadtest-report

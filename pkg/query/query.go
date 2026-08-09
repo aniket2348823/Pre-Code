@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -63,6 +64,13 @@ func Parse(r *http.Request) (Filter, Sort) {
 
 	sortField := q.Get("sort")
 	if sortField == "" {
+		sortField = "created_at"
+	}
+	// Restrict sort field to a safe Go identifier: reflection below uses
+	// reflect.Value.FieldByName, so an attacker-supplied field name must not
+	// be able to reach arbitrary struct fields/methods. Only [A-Za-z0-9_]
+	// identifiers are accepted; anything else falls back to the default.
+	if !validFieldName.MatchString(sortField) {
 		sortField = "created_at"
 	}
 	sortOrder := strings.ToLower(q.Get("order"))
@@ -245,6 +253,8 @@ func ProcessList[T any](items []T, filter Filter, sorting Sort, pag pagination.P
 // Helpers
 func getFieldValue(val reflect.Value, names ...string) string {
 	for _, name := range names {
+		// #nosec unsafe-reflect-by-name: names here are hardcoded literals
+		// ("Status", "ProjectID", ...) — never derived from user input.
 		f := val.FieldByName(name)
 		if f.IsValid() && f.Kind() == reflect.String {
 			return f.String()
@@ -254,6 +264,12 @@ func getFieldValue(val reflect.Value, names ...string) string {
 }
 
 func getFieldAny(val reflect.Value, name string) interface{} {
+	// Defense-in-depth: the sort field is already restricted to a safe Go
+	// identifier by validFieldName in (q Query) FilterAndSort; re-check here
+	// so this helper is safe regardless of caller.
+	if !validFieldName.MatchString(name) {
+		return nil
+	}
 	// Try PascalCase
 	pascal := strings.ToUpper(name[:1]) + name[1:]
 	if strings.Contains(pascal, "_") {
@@ -264,12 +280,15 @@ func getFieldAny(val reflect.Value, name string) interface{} {
 		pascal = strings.Join(parts, "")
 	}
 
+	// #nosec unsafe-reflect-by-name: name (and pascal) are allowlisted Go
+	// identifiers, so FieldByName can only read existing struct fields.
 	f := val.FieldByName(pascal)
 	if f.IsValid() {
 		return f.Interface()
 	}
 
 	// Try exactly as passed
+	// #nosec unsafe-reflect-by-name: name is allowlisted by validFieldName above.
 	f = val.FieldByName(name)
 	if f.IsValid() {
 		return f.Interface()
@@ -277,6 +296,9 @@ func getFieldAny(val reflect.Value, name string) interface{} {
 
 	return nil
 }
+
+// validFieldName matches safe Go identifiers used as sort/filter field names.
+var validFieldName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
 func compareValues(i, j interface{}) bool {
 	if i == nil || j == nil {

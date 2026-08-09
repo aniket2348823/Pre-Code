@@ -35,6 +35,7 @@ func New(handler http.Handler, addr string, timeout time.Duration) *Server {
 func (s *Server) ListenAndServe() error {
 	errCh := make(chan error, 1)
 	go func() {
+		// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 		slog.Info("server starting", "addr", s.httpServer.Addr)
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
@@ -57,6 +58,7 @@ func (s *Server) ListenAndServe() error {
 
 // Shutdown gracefully shuts down the server with a timeout.
 func (s *Server) Shutdown() error {
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
 

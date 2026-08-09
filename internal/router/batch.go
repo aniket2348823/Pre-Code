@@ -53,6 +53,7 @@ func (r *Router) batchHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var batchReq BatchRequest
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&batchReq); err != nil {
 		response.ErrorR(w, req, http.StatusBadRequest, "BATCH_001", "invalid request body")
 		return
@@ -208,6 +209,7 @@ func (r *Router) batchTaskHandler(w http.ResponseWriter, req *http.Request) {
 			ProjectID string `json:"project_id"`
 		} `json:"tasks"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.ErrorR(w, req, http.StatusBadRequest, "BATCH_001", "invalid request body")
 		return

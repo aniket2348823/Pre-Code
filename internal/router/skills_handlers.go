@@ -145,6 +145,7 @@ func (r *Router) updateSkillHandler(w http.ResponseWriter, req *http.Request) {
 		Version     string `json:"version"`
 		Category    string `json:"category"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return
@@ -217,6 +218,7 @@ func (r *Router) rateSkillHandler(w http.ResponseWriter, req *http.Request) {
 		Rating int    `json:"rating"`
 		Review string `json:"review"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return
@@ -304,6 +306,7 @@ func (r *Router) installSkillHandler(w http.ResponseWriter, req *http.Request) {
 		ProjectID string                 `json:"project_id"`
 		Config    map[string]interface{} `json:"config"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return

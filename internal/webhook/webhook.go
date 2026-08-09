@@ -363,6 +363,7 @@ func (e *Engine) scheduleRetry(ep *Endpoint, event Event, retryCount int) {
 		select {
 		case e.slots <- struct{}{}:
 			defer func() { <-e.slots }()
+			// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 			retryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			e.deliver(retryCtx, ep, event, retryCount+1)
@@ -393,6 +394,7 @@ func (e *Engine) recordResult(ctx context.Context, r DeliveryResult) {
 		r.EndpointID, r.EventType, r.StatusCode, r.Success, r.Error, r.DurationMs,
 	)
 	if err != nil {
+		// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 		slog.Error("webhook: failed to record delivery", "error", err, "endpoint_id", r.EndpointID)
 	}
 }

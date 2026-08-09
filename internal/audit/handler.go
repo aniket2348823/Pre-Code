@@ -69,6 +69,7 @@ func (e *Engine) GetTrail() *Trail {
 func NewHTTPHandler(eng *Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req TraceRequest
+		// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			response.BadRequest(w, "invalid JSON body")
 			return

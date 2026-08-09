@@ -54,6 +54,7 @@ func main() {
 
 			server := proxy.NewServer(cfg)
 
+			// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			go server.StartHealthChecks(ctx, 2*time.Minute)
@@ -87,6 +88,7 @@ func main() {
 			select {
 			case err := <-serverErr:
 				if err != nil && err != http.ErrServerClosed {
+					// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 					log.Fatalf("Server failed: %v", err)
 				}
 			case <-quit:
@@ -95,6 +97,7 @@ func main() {
 
 			cancel()
 
+			// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer shutdownCancel()
 

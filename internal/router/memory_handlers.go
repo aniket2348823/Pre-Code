@@ -30,6 +30,7 @@ func (r *Router) searchMemoryHandler(w http.ResponseWriter, req *http.Request) {
 		Limit     int      `json:"limit,omitempty"`
 		Types     []string `json:"types,omitempty"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return
@@ -81,6 +82,7 @@ func (r *Router) createMemoryHandler(w http.ResponseWriter, req *http.Request) {
 		ProjectID string                 `json:"project_id,omitempty"`
 		Metadata  map[string]interface{} `json:"metadata,omitempty"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return

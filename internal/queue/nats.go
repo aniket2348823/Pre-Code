@@ -56,6 +56,7 @@ func NewNATS(cfg *config.NATSConfig) (*NATS, error) {
 	}
 
 	// Ensure the stream exists
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx := context.Background()
 	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:     cfg.Stream,

@@ -118,6 +118,7 @@ func (r *Router) createTaskHandler(w http.ResponseWriter, req *http.Request) {
 			if rec := recover(); rec != nil {
 				slog.Error("panic in task execution goroutine", "panic", rec, "task_id", task.ID)
 				// Mark task as failed so it doesn't get stuck
+				// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 				if err := r.tasks.UpdateStatus(context.Background(), task.ID, "failed"); err != nil {
 					slog.Error("failed to mark task as failed after panic", "error", err, "task_id", task.ID)
 				}
@@ -451,6 +452,7 @@ func (r *Router) streamTaskHandler(w http.ResponseWriter, req *http.Request) {
 	flusher.Flush()
 
 	// Use a fresh context for the polling goroutine
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	bgCtx := context.Background()
 	ctx, cancel := context.WithCancel(bgCtx)
 	defer cancel()

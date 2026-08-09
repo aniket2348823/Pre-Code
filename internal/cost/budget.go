@@ -201,6 +201,7 @@ func (m *BudgetManager) RecordCost(orgID, taskID string, cost float64) {
 	}
 	// Persist outside the lock; use a bounded background context since the
 	// caller's request context may already be done by settlement time.
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, key := range []string{orgKey, taskKey} {

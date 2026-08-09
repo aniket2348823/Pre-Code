@@ -53,7 +53,7 @@ func main() {
 		MaxConnsPerHost:     10000,
 		IdleConnTimeout:     90 * time.Second,
 		DisableKeepAlives:   false,
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: *insecureTLS},
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: *insecureTLS},
 	}
 	client := &http.Client{
 		Transport: tr,

@@ -20,10 +20,10 @@ type CostTracker struct {
 	records []costRecord
 
 	// aggregation cache (SWR)
-	userCache   map[string]swrEntry[UserCostSummary]
-	orgCache    map[string]swrEntry[OrgCostSummary]
-	modelCache  swrEntry[map[string]ModelCostSummary]
-	cacheTTL    time.Duration
+	userCache  map[string]swrEntry[UserCostSummary]
+	orgCache   map[string]swrEntry[OrgCostSummary]
+	modelCache swrEntry[map[string]ModelCostSummary]
+	cacheTTL   time.Duration
 
 	// Prometheus metrics
 	costMetric  *prometheus.CounterVec

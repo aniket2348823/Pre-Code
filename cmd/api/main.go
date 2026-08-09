@@ -70,6 +70,7 @@ func main() {
 
 	serverErr := make(chan error, 1)
 	go func() {
+		// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 		slog.Info("server listening", "addr", httpServer.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
@@ -81,11 +82,13 @@ func main() {
 
 	select {
 	case err := <-serverErr:
+		// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 		slog.Error("server failed", "error", err)
 	case <-quit:
 		slog.Info("shutting down server...")
 	}
 
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

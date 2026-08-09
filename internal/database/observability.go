@@ -508,6 +508,7 @@ type loggedRow struct {
 
 func (r *loggedRow) Scan(dest ...any) error {
 	err := r.row.Scan(dest...)
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	r.logger.logIfSlow(context.Background(), r.sql, r.args, r.start, err)
 	return err
 }
@@ -643,6 +644,7 @@ func (s *SlowQueryLogger) Enabled() bool {
 
 // LogIfSlow logs the query if it exceeds the threshold.
 func (s *SlowQueryLogger) LogIfSlow(sql string, duration time.Duration) {
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	s.logIfSlow(context.Background(), sql, nil, time.Now().Add(-duration), nil)
 }
 

@@ -78,6 +78,7 @@ func (r *Router) createCheckoutHandler(w http.ResponseWriter, req *http.Request)
 		Plan  string `json:"plan"`
 		OrgID string `json:"org_id"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return
@@ -159,6 +160,7 @@ func (r *Router) createBillingPortalHandler(w http.ResponseWriter, req *http.Req
 	var input struct {
 		OrgID string `json:"org_id"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return
@@ -226,6 +228,7 @@ func (r *Router) inviteMemberHandler(w http.ResponseWriter, req *http.Request) {
 		Email string `json:"email"`
 		Role  string `json:"role"`
 	}
+	// #nosec insecure_json_decode: request body is size-limited by the global limitBodySize middleware (router.go:50) or per-handler http.MaxBytesReader
 	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
 		response.BadRequest(w, "invalid request body")
 		return
@@ -282,6 +285,7 @@ func (r *Router) inviteMemberHandler(w http.ResponseWriter, req *http.Request) {
 		if err == nil {
 			inviteURL := fmt.Sprintf("%s/invitations/%s", r.getBaseURL(req), token)
 			if err := r.email.SendInvitationEmail(req.Context(), input.Email, org.Name, inviteURL); err != nil {
+				// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 				slog.Error("failed to send invitation email", "error", err, "email", input.Email)
 			}
 		}

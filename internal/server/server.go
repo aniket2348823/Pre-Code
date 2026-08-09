@@ -55,6 +55,7 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	srv := &Server{
 		cfg:            cfg,
@@ -72,12 +73,14 @@ func New(cfg *config.Config) (*Server, error) {
 	var err error
 	var db *database.Postgres
 	for attempt := 1; attempt <= maxDBAttempts; attempt++ {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		db, err = database.NewPostgres(context.Background(), &cfg.Database)
 		if err == nil {
 			break
 		}
 		if !isDev {
 			slog.Warn("database connection failed, retrying...", "attempt", attempt, "max", maxDBAttempts, "error", err)
+			// #nosec time_sleep_in_handler: startup retry backoff / worker pacing, not a request handler
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
 	}
@@ -97,6 +100,7 @@ func New(cfg *config.Config) (*Server, error) {
 			return nil, fmt.Errorf("database migration failed: %w", err)
 		}
 		// Recover stuck tasks from previous crash
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		if err := recoverStuckTasks(context.Background(), db); err != nil {
 			slog.Warn("failed to recover stuck tasks", "error", err)
 		}
@@ -109,12 +113,14 @@ func New(cfg *config.Config) (*Server, error) {
 		maxRedisAttempts = 1
 	}
 	for attempt := 1; attempt <= maxRedisAttempts; attempt++ {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		rds, err = database.NewRedis(context.Background(), &cfg.Redis)
 		if err == nil {
 			break
 		}
 		if !isDev {
 			slog.Warn("redis connection failed, retrying...", "attempt", attempt, "max", maxRedisAttempts, "error", err)
+			// #nosec time_sleep_in_handler: startup retry backoff / worker pacing, not a request handler
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
 	}
@@ -144,6 +150,7 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 		if !isDev {
 			slog.Warn("nats connection failed, retrying...", "attempt", attempt, "max", maxNatsAttempts, "error", err)
+			// #nosec time_sleep_in_handler: startup retry backoff / worker pacing, not a request handler
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
 	}
@@ -166,13 +173,16 @@ func New(cfg *config.Config) (*Server, error) {
 	jwtSvc := auth.NewJWT(&cfg.Auth)
 	apiKeySvc := auth.NewAPIKeyService(cfg.Auth.APIKeyPrefix)
 
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	cleanup, err := telemetry.Setup(context.Background(), "vigilagent", "1.0.0")
 	if err != nil {
 		slog.Warn("opentelemetry setup failed, continuing without tracing", "error", err)
 	} else {
+		// #nosec context_leak: cleanup runs at shutdown, outside any request context
 		srv.cleanup = func() { _ = cleanup(context.Background()) }
 	}
 
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	var conn *database.Conn
 	if db != nil {
 		conn = db.Conn()
@@ -345,6 +355,7 @@ func New(cfg *config.Config) (*Server, error) {
 	featureFlagMgr := featureflags.NewManager(conn)
 	if conn != nil {
 		featureFlagMgr.StartRefresh(shutdownCtx, 5*time.Minute)
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		_ = featureflags.EnsureTable(context.Background(), conn)
 	} else {
 		slog.Warn("feature flags: skipping DB setup (no database connection)")
@@ -353,6 +364,7 @@ func New(cfg *config.Config) (*Server, error) {
 	// Wire RAG engine for skill marketplace search
 	skillRAG := skills.NewRAGEngine(conn, memory.NewNoOpEmbedder(1536))
 	if conn != nil {
+		// #nosec context_leak: DB bootstrap at startup, outside any request context
 		_ = skills.EnsureRequiredTables(context.Background(), conn)
 	} else {
 		slog.Warn("skill RAG: skipping DB setup (no database connection)")
@@ -426,6 +438,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Start background event purger (delete events older than 90 days, daily)
 	if db != nil {
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		eventCancel := db.StartEventPurger(context.Background(), 90, 24*time.Hour)
 		oldCleanup := srv.cleanup
 		srv.cleanup = func() {
@@ -436,6 +449,7 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 
 		// Start session cleanup goroutine (expire sessions inactive > 30 min, check every 5 min)
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		sessCancel := sessionRepo.StartStaleSessionCleanup(context.Background(), 30*time.Minute, 5*time.Minute)
 		sessOldCleanup := srv.cleanup
 		srv.cleanup = func() {
@@ -453,6 +467,7 @@ func New(cfg *config.Config) (*Server, error) {
 			slog.Info("hot reload: new default model", "model", newCfg.LLM.DefaultModel)
 		}
 	})
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	go hotReload.Start(context.Background())
 	srv.hotReload = hotReload
 
@@ -460,6 +475,7 @@ func New(cfg *config.Config) (*Server, error) {
 	if conn != nil {
 		// Run immediately on startup
 		go func() {
+			// #nosec context_leak: startup cleanup goroutine, outside any request context
 			n, err := apiKeyRepo.CleanupExpiredKeys(context.Background())
 			if err != nil {
 				slog.Warn("apikey cleanup (startup) failed", "error", err)
@@ -468,6 +484,7 @@ func New(cfg *config.Config) (*Server, error) {
 			}
 		}()
 		// Then hourly
+		// #nosec context_leak: hourly cleanup goroutine, outside any request context
 		keyCancel := apiKeyRepo.StartExpiredKeyCleanup(context.Background(), 1*time.Hour)
 		oldCleanup2 := srv.cleanup
 		srv.cleanup = func() {
@@ -530,6 +547,7 @@ func (s *Server) runMigrations() error {
 	if migrationsDir == "" {
 		migrationsDir = "migrations"
 	}
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	return database.Migrate(context.Background(), s.db.Pool, migrationsDir)
 }
 

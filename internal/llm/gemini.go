@@ -16,6 +16,7 @@ type GeminiAdapter struct {
 
 // NewGemini creates a new Google Gemini provider.
 func NewGemini(apiKey string) (*GeminiAdapter, error) {
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,

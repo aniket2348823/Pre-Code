@@ -39,6 +39,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	}
 
 	// Acquire advisory lock to prevent race conditions during concurrent cluster rollouts.
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	// Use context.Background() so the lock is not released if the request context is cancelled.
 	const migrationLockID int64 = 847291102
 	if _, err := pool.Exec(context.Background(), "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {

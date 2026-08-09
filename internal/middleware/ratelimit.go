@@ -99,6 +99,7 @@ func (rl *RateLimiter) Middleware(keyFunc func(r *http.Request) string) func(htt
 			// denied. count alone cannot distinguish: the last allowed request and
 			// the first denied request both report count == limit.
 			if retryAfter > 0 {
+				// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 				slog.Warn("rate limit exceeded", "key", key, "limit", rl.limit, "remote", r.RemoteAddr)
 				w.Header().Set("Retry-After", strconv.FormatInt(retryAfter, 10))
 				response.JSON(w, http.StatusTooManyRequests, map[string]string{

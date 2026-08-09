@@ -1,0 +1,27 @@
+# VigilAgent DAST baseline exceptions
+#
+# The API is auth-gated — every endpoint returns 401 JSON without a bearer
+# token — so header/meta-level informational alerts are expected noise, not
+# findings. The ZAP baseline runs with `-l WARN` (fails only on WARN+ alerts);
+# these IDs are explicitly ignored so the scan stays deterministic on a
+# JSON-only API that sets no browser-facing headers by design.
+#
+# FORMAT: exactly two tab-separated columns per line: <alert-id> <action>.
+# The zap-baseline parser unpacks `(key, val) = line.split("\t")` — a third
+# column crashes it. Comments must be full lines starting with '#'.
+#
+# (see https://www.zaproxy.org/docs/docker/baseline-scan/#rules-file)
+
+10016	ignore
+10017	ignore
+10020	ignore
+10021	ignore
+10023	ignore
+10025	ignore
+10035	ignore
+10036	ignore
+10038	ignore
+10049	ignore
+10096	ignore
+100000	ignore
+10112	ignore

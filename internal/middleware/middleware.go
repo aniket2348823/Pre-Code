@@ -181,6 +181,7 @@ func (p *Pipeline) Process(ctx context.Context, req *Request) (*Response, error)
 	observability.SetSpanAttr(span, "user_id", req.UserID)
 
 	start := time.Now()
+	// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 	slog.Info("middleware: processing request", "id", req.ID, "type", req.TaskType)
 
 	// Step 0: Sanitize input

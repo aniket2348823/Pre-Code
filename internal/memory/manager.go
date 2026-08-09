@@ -49,6 +49,7 @@ func NewManagerWithEmbedder(pool *database.Conn, embedder Embedder) *Manager {
 	// Validate embedding dimension matches table schema at startup.
 	if pool != nil {
 		var dbDim int
+		// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 		err := pool.QueryRow(context.Background(),
 			"SELECT vector_dims(embedding) FROM memory_patterns LIMIT 1").Scan(&dbDim)
 		if err == nil && dbDim != embedder.Dimensions() {
@@ -546,6 +547,7 @@ func (wm *WorkingMemory) loadFromRedis() {
 	if wm.rds == nil || wm.sessionID == "" {
 		return
 	}
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	data, err := wm.rds.Get(ctx, workingMemoryKey(wm.sessionID)).Bytes()
@@ -577,6 +579,7 @@ func (wm *WorkingMemory) persistToRedis() {
 		slog.Warn("failed to marshal working memory", "error", err)
 		return
 	}
+	// #nosec context_leak: background context for long-running startup/worker/lifecycle code - no request context exists here
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	key := workingMemoryKey(wm.sessionID)
