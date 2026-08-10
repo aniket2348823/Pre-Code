@@ -28,7 +28,7 @@
 
 VigilAgent is a **Go monorepo** that compiles into **8 independent binaries**, each serving a distinct operational concern. The core binary (`vigil-api`) hosts all business logic behind a `chi/v5` HTTP router, backed by PostgreSQL 16 (with pgvector for embeddings), Redis 7 (caching and rate limiting), and NATS JetStream (async job processing).
 
-The system follows a **domain-driven design** where the `internal/` directory contains 67 focused packages, each owning a single business capability. Cross-cutting concerns (auth, tracing, compression) are handled by a layered middleware stack.
+The system follows a **domain-driven design** where the `internal/` directory contains 57 focused packages, each owning a single business capability. Cross-cutting concerns (auth, tracing, compression) are handled by a layered middleware stack.
 
 ---
 

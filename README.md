@@ -421,7 +421,7 @@ cp .env.example .env
 
 ## Testing
 
-VigilAgent maintains **133 test files** across **47 packages** using Go's standard testing framework with [testify](https://github.com/stretchr/testify) assertions.
+VigilAgent maintains **183 test files** across **58 packages** using Go's standard testing framework with [testify](https://github.com/stretchr/testify) assertions.
 
 ```bash
 make test              # Run all unit tests
