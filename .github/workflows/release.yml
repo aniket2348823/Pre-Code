@@ -23,12 +23,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check whether this push is a release tag
+        # github.* is passed via env instead of being interpolated into the
+        # run: script — semgrep flags direct ${{ github.* }} in run blocks
+        # (run-shell-injection), and env indirection is the documented fix.
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ] && [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          if [ "$REF_TYPE" = "tag" ] && [[ "$REF" == refs/tags/v* ]]; then
             echo "RELEASE=1" >> "$GITHUB_ENV"
-            echo "Release tag detected: ${{ github.ref }} — proceeding to build assets."
+            echo "Release tag detected: $REF_NAME — proceeding to build assets."
           else
-            echo "No v* tag on this push (${{ github.ref_type }}) — nothing to release."
+            echo "No v* tag on this push ($REF_TYPE) — nothing to release."
           fi
 
   # ── 1. BUILD ALL RELEASE ASSETS ──

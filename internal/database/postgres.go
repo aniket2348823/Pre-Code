@@ -282,7 +282,7 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 		// CA but do NOT verify the hostname. Go has no "skip hostname only"
 		// switch — InsecureSkipVerify=true disables ALL validation, so chain
 		// validation must be restored explicitly via VerifyPeerCertificate.
-		poolCfg.ConnConfig.TLSConfig = &tls.Config{
+		poolCfg.ConnConfig.TLSConfig = &tls.Config{ // nosemgrep: problem-based-packs.insecure-transport.go-stdlib.bypass-tls-verification.bypass-tls-verification — chain validated by VerifyPeerCertificate below
 			ServerName:            cfg.Host,
 			InsecureSkipVerify:    true, // nosemgrep: go.lang.security.audit.net.tls-with-insecure-skip-verify — required to disable hostname check; chain verified via VerifyPeerCertificate below
 			VerifyPeerCertificate: verifyChainOnly,
@@ -295,7 +295,7 @@ func configureSSL(poolCfg *pgxpool.Config, cfg *config.DatabaseConfig) {
 			MinVersion:         tls.VersionTLS12,
 		}
 	case "prefer":
-		poolCfg.ConnConfig.TLSConfig = &tls.Config{
+		poolCfg.ConnConfig.TLSConfig = &tls.Config{ // nosemgrep: problem-based-packs.insecure-transport.go-stdlib.bypass-tls-verification.bypass-tls-verification — libpq "prefer" semantics, see justification below
 			ServerName: cfg.Host,
 			// #nosec G402 — faithful libpq "prefer" semantics: TLS used when the
 			// server offers it, plaintext fallback allowed (inherent downgrade risk

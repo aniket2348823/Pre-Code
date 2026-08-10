@@ -45,6 +45,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 	if _, err := pool.Exec(context.Background(), "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
 		return fmt.Errorf("failed to acquire migration advisory lock: %w", err)
 	}
+	// #nosec context_leak: unlock must survive request cancellation exactly like the lock above
 	defer pool.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", migrationLockID)
 
 	rows, err := pool.Query(ctx, "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' ORDER BY tablename, indexname")

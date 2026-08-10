@@ -545,6 +545,7 @@ func (r *Router) registerHandler(w http.ResponseWriter, req *http.Request) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := r.email.SendVerificationEmail(ctx, user.ID, user.Email, baseURL); err != nil {
+				// #nosec log_injection: structured key-value logging (the rule's own recommended safe pattern) - no format-string interpolation of user input
 				slog.Error("failed to send verification email", "error", err, "user_id", user.ID)
 			}
 		}()

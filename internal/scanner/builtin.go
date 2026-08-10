@@ -62,12 +62,13 @@ func isTestDataFile(filename string) bool {
 
 // hasNosecMarker reports whether the matched line (or the line immediately
 // above) carries a `#nosec`-style suppression comment (gosec-compatible, also
-// works for shell scripts as `# nosec`). The marker must be a deliberate,
-// documented decision by the author — never a blanket suppression.
+// works for shell scripts as `# nosec`) or a semgrep-style `nosemgrep:`
+// marker. Both conventions document a deliberate, reviewed decision — never
+// a blanket suppression.
 func hasNosecMarker(lines []string, i int) bool {
 	hasMarker := func(l string) bool {
 		lower := strings.ToLower(l)
-		return strings.Contains(lower, "#nosec") || strings.Contains(lower, "# nosec")
+		return strings.Contains(lower, "#nosec") || strings.Contains(lower, "# nosec") || strings.Contains(lower, "nosemgrep:")
 	}
 	// Check the matched line and up to 3 lines above — justification comments
 	// are commonly 1-3 lines long with the marker on the first line.
@@ -488,12 +489,13 @@ func builtinRules() []builtinRule {
 		},
 		{
 			// #nosec weak_hash_sha1: rule-definition pattern text (self-reference), not real usage
-			name:        "weak_hash_sha1",
-			description: "Use of SHA-1 which is vulnerable to collision attacks",
-			severity:    SeverityMedium,
-			pattern:     regexp.MustCompile(`crypto/sha1|sha1\.New\(\)|sha1\.Sum\(`),
-			fix:         "Use SHA-256 or SHA-3 for new applications",
-			category:    "crypto",
+			name:             "weak_hash_sha1",
+			description:      "Use of SHA-1 which is vulnerable to collision attacks",
+			severity:         SeverityMedium,
+			pattern:          regexp.MustCompile(`crypto/sha1|sha1\.New\(\)|sha1\.Sum\(`),
+			fix:              "Use SHA-256 or SHA-3 for new applications",
+			category:         "crypto",
+			excludeFilenames: []string{"builtin.go"}, // rule-definition patterns self-match
 		},
 		{
 			name:             "weak_random",
@@ -818,6 +820,14 @@ func builtinRules() []builtinRule {
 			pattern:     regexp.MustCompile(`context\.Background\(\)`),
 			fix:         "Use request context (r.Context()) instead of Background() to respect cancellation",
 			category:    "quality",
+			// A comment line mentioning context.Background() (doc comments, nosec
+			// justifications) is documentation, not a real leak — only code lines
+			// fire. Go, shell, and C-style comments are all covered.
+			suppressCheck: func(lines []string, i int) bool {
+				trimmed := strings.TrimSpace(lines[i])
+				return strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") ||
+					strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "#")
+			},
 		},
 
 		{
