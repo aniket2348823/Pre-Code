@@ -9,7 +9,6 @@ import (
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
-
 func TestNewEventRepository(t *testing.T) {
 	t.Run("creates repo with pool", func(t *testing.T) {
 		conn := database.NewConn(nil)

@@ -275,3 +275,59 @@ func (r *SkillRepository) Install(ctx context.Context, inst *SkillInstallation) 
 		inst.SkillID, inst.UserID, inst.ProjectID, inst.Status, inst.Config,
 	).Scan(&inst.ID, &inst.InstalledAt)
 }
+
+// FindByName retrieves a published skill by its name.
+// Returns an error when no published skill matches (used by import flows to
+// resolve an export's skill name to its real ID).
+func (r *SkillRepository) FindByName(ctx context.Context, name string) (*Skill, error) {
+	query := `
+		SELECT id, name, description, author, version, category, downloads, rating,
+		       rating_count, permissions, is_verified, is_published, created_at, updated_at
+		FROM skills WHERE name = $1 AND is_published = true
+		LIMIT 1
+	`
+	skill := &Skill{}
+	err := r.pool.QueryRow(ctx, query, name).Scan(
+		&skill.ID, &skill.Name, &skill.Description, &skill.Author, &skill.Version,
+		&skill.Category, &skill.Downloads, &skill.Rating, &skill.RatingCount,
+		&skill.Permissions, &skill.IsVerified, &skill.IsPublished,
+		&skill.CreatedAt, &skill.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("skill not found: %s", name)
+		}
+		return nil, fmt.Errorf("failed to find skill by name: %w", err)
+	}
+	return skill, nil
+}
+
+// ListInstallsByUser returns the skills installed by a specific user.
+// Scoped by user_id so a user can only ever see (or export) their own
+// installations — never the global marketplace catalog.
+func (r *SkillRepository) ListInstallsByUser(ctx context.Context, userID string) ([]SkillInstallation, error) {
+	query := `
+		SELECT id, skill_id, user_id, project_id, status, installed_at
+		FROM skill_installs WHERE user_id = $1
+		ORDER BY installed_at DESC
+	`
+	rows, err := r.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list skill installs: %w", err)
+	}
+	defer rows.Close()
+
+	var installs []SkillInstallation
+	for rows.Next() {
+		var inst SkillInstallation
+		if err := rows.Scan(&inst.ID, &inst.SkillID, &inst.UserID, &inst.ProjectID,
+			&inst.Status, &inst.InstalledAt); err != nil {
+			return nil, fmt.Errorf("failed to scan skill install: %w", err)
+		}
+		installs = append(installs, inst)
+	}
+	if installs == nil {
+		installs = []SkillInstallation{}
+	}
+	return installs, rows.Err()
+}

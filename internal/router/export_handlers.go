@@ -82,18 +82,23 @@ func (r *Router) exportSkillsHandler(w http.ResponseWriter, req *http.Request) {
 		Version:    "1.0",
 		ExportedAt: time.Now(),
 		UserID:     claims.UserID,
+		Skills:     []SkillExport{},
 	}
 
-	// Get installed skills - use list skills endpoint
+	// Export only the user's OWN installed skills. Listing the global
+	// marketplace catalog here would dump every published skill into a
+	// single user's export (and leak the whole catalog beyond intent).
 	if r.skills != nil {
 		ctx := req.Context()
-		skills, _, err := r.skills.List(ctx, "", "", 0, 100)
+		installs, err := r.skills.ListInstallsByUser(ctx, claims.UserID)
 		if err == nil {
-			for _, skill := range skills {
-				export.Skills = append(export.Skills, SkillExport{
-					Name:    skill.Name,
-					Version: skill.Version,
-				})
+			for _, inst := range installs {
+				if skill, err := r.skills.FindByID(ctx, inst.SkillID); err == nil {
+					export.Skills = append(export.Skills, SkillExport{
+						Name:    skill.Name,
+						Version: skill.Version,
+					})
+				}
 			}
 		}
 	}
@@ -127,16 +132,24 @@ func (r *Router) importDataHandler(w http.ResponseWriter, req *http.Request) {
 		"skills": 0,
 	}
 
-	// Import skills
+	// Import skills: resolve each exported skill NAME to its real published
+	// skill ID. Writing the name directly as skill_id would create garbage
+	// install rows that never match a real skill.
 	if r.skills != nil && len(export.Skills) > 0 {
 		ctx := req.Context()
 		for _, skill := range export.Skills {
+			resolved, err := r.skills.FindByName(ctx, skill.Name)
+			if err != nil {
+				continue // unknown/removed skill — skip, don't create a broken install
+			}
 			inst := &repository.SkillInstallation{
-				SkillID: skill.Name,
+				SkillID: resolved.ID,
 				UserID:  claims.UserID,
 				Status:  "active",
 			}
-			_ = r.skills.Install(ctx, inst)
+			if err := r.skills.Install(ctx, inst); err != nil {
+				continue
+			}
 			imported["skills"]++
 		}
 	}

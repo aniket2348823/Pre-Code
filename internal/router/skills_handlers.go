@@ -312,6 +312,16 @@ func (r *Router) installSkillHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// Verify the user is a member of the target project before writing an
+	// installation scoped to it — otherwise any user could attach skills to
+	// another org's project (cross-tenant write).
+	if input.ProjectID != "" {
+		if _, err := r.requireProjectMember(req.Context(), input.ProjectID, claims.UserID); err != nil {
+			response.Forbidden(w, "access denied")
+			return
+		}
+	}
+
 	inst := &repository.SkillInstallation{
 		SkillID:   skillID,
 		UserID:    claims.UserID,
