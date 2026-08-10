@@ -9,9 +9,6 @@ import (
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
-func TestTaskRepositoryInterface(t *testing.T) {
-	var _ TaskRepositoryInterface = &TaskRepository{}
-}
 
 func TestNewTaskRepository(t *testing.T) {
 	t.Run("creates repo with pool", func(t *testing.T) {

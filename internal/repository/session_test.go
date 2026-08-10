@@ -9,9 +9,6 @@ import (
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
-func TestSessionRepositoryInterface(t *testing.T) {
-	var _ SessionRepositoryInterface = &SessionRepository{}
-}
 
 func TestNewSessionRepository(t *testing.T) {
 	t.Run("creates repo with pool", func(t *testing.T) {

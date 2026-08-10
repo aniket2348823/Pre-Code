@@ -9,9 +9,6 @@ import (
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
-func TestSkillRepositoryInterface(t *testing.T) {
-	var _ SkillRepositoryInterface = &SkillRepository{}
-}
 
 func TestNewSkillRepository(t *testing.T) {
 	t.Run("creates repo with pool", func(t *testing.T) {

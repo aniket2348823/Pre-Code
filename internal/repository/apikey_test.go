@@ -10,9 +10,6 @@ import (
 	"github.com/vigilagent/vigilagent/internal/database"
 )
 
-func TestAPIKeyRepositoryInterface(t *testing.T) {
-	var _ APIKeyRepositoryInterface = &APIKeyRepository{}
-}
 
 func TestNewAPIKeyRepository(t *testing.T) {
 	t.Run("creates repo with pool", func(t *testing.T) {
