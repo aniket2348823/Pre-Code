@@ -213,7 +213,7 @@ vigil usage --token YOUR_TOKEN
 
 ## Test Coverage
 
-11 packages with passing tests:
+Core packages with passing tests (snapshot; 58 packages total have tests):
 - internal/agent (state machine transitions)
 - internal/api/contract (request/response validation)
 - internal/auth (JWT, API keys, password hashing)
