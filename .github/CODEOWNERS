@@ -29,7 +29,6 @@
 # Security
 /internal/security/ @vigilagent/security-team
 /internal/webhook/ @vigilagent/security-team
-/internal/secrets/ @vigilagent/security-team
 
 # CI/CD & DevOps
 /.github/ @vigilagent/devops-team

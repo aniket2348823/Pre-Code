@@ -91,10 +91,6 @@ func (t *RunCommandTool) Name() string                                    { retu
 func (t *RunCommandTool) Description() string                             { return "Execute a terminal command and return output" }
 func (t *RunCommandTool) RequiresHITL(params map[string]interface{}) bool { return true }
 
-func NewRunCommandTool(sec *CommandSecurityConfig) *RunCommandTool {
-	return &RunCommandTool{Security: sec}
-}
-
 func (t *RunCommandTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",

@@ -1,13 +1,10 @@
 package response
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -350,159 +347,6 @@ func WritePaginated(w http.ResponseWriter, r *http.Request, data interface{}, pa
 		HasMore: hasMore,
 	}
 	SuccessWithMeta(w, r, http.StatusOK, data, meta)
-}
-
-// Content from cursor.go
-// CursorDirection represents the pagination direction.
-type CursorDirection string
-
-const (
-	CursorForward  CursorDirection = "forward"
-	CursorBackward CursorDirection = "backward"
-)
-
-// Cursor holds pagination state for cursor-based pagination.
-type Cursor struct {
-	Value     string          `json:"v"`
-	Direction CursorDirection `json:"d"`
-	Limit     int             `json:"l"`
-}
-
-// CursorConfig holds default and maximum limits for cursor pagination.
-type CursorConfig struct {
-	DefaultLimit int
-	MaxLimit     int
-}
-
-// EncodeCursor encodes a Cursor into a base64-encoded opaque string.
-func EncodeCursor(c Cursor) (string, error) {
-	data, err := json.Marshal(c)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal cursor: %w", err)
-	}
-	return base64.URLEncoding.EncodeToString(data), nil
-}
-
-// DecodeCursor decodes a base64-encoded cursor string into a Cursor.
-func DecodeCursor(encoded string) (Cursor, error) {
-	if encoded == "" {
-		return Cursor{}, nil
-	}
-	data, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		return Cursor{}, fmt.Errorf("invalid cursor encoding: %w", err)
-	}
-	var c Cursor
-	if err := json.Unmarshal(data, &c); err != nil {
-		return Cursor{}, fmt.Errorf("invalid cursor format: %w", err)
-	}
-	return c, nil
-}
-
-// ParseCursorFromQuery extracts cursor parameters from query string.
-// Supports "cursor" (opaque string) and "limit" parameters.
-func ParseCursorFromQuery(q url.Values, cfg CursorConfig) (Cursor, error) {
-	defaultLimit := cfg.DefaultLimit
-	if defaultLimit <= 0 {
-		defaultLimit = 20
-	}
-	maxLimit := cfg.MaxLimit
-	if maxLimit <= 0 {
-		maxLimit = 100
-	}
-
-	limit := defaultLimit
-	if l := q.Get("limit"); l != "" {
-		parsed, err := strconv.Atoi(l)
-		if err != nil || parsed < 1 {
-			return Cursor{}, fmt.Errorf("invalid limit: %q", l)
-		}
-		if parsed > maxLimit {
-			parsed = maxLimit
-		}
-		limit = parsed
-	}
-
-	encoded := q.Get("cursor")
-	if encoded == "" {
-		return Cursor{Limit: limit, Direction: CursorForward}, nil
-	}
-
-	c, err := DecodeCursor(encoded)
-	if err != nil {
-		return Cursor{}, err
-	}
-	c.Limit = limit
-	return c, nil
-}
-
-// WriteCursorPaginated writes a cursor-paginated response with Link headers (RFC 8288).
-// data is the current page results. nextCursor/prevCursor are opaque cursor strings (empty = none).
-// hasMore indicates if more results exist in the forward direction.
-func WriteCursorPaginated(w http.ResponseWriter, r *http.Request, data interface{}, nextCursor, prevCursor string, hasMore bool) {
-	baseURL := buildBaseURL(r)
-
-	links := []string{}
-	if nextCursor != "" {
-		nextURL := buildCursorURL(baseURL, r.URL.Query(), nextCursor, "next")
-		links = append(links, fmt.Sprintf("<%s>; rel=\"next\"", nextURL))
-	}
-	if prevCursor != "" {
-		prevURL := buildCursorURL(baseURL, r.URL.Query(), prevCursor, "prev")
-		links = append(links, fmt.Sprintf("<%s>; rel=\"prev\"", prevURL))
-	}
-	// Always include "first" link pointing to start (no cursor)
-	firstURL := buildCursorURL(baseURL, r.URL.Query(), "", "first")
-	links = append(links, fmt.Sprintf("<%s>; rel=\"first\"", firstURL))
-
-	if len(links) > 0 {
-		w.Header().Set("Link", strings.Join(links, ", "))
-	}
-
-	cursorMeta := &Meta{
-		HasMore: hasMore,
-	}
-	if nextCursor != "" {
-		cursorMeta.NextCursor = nextCursor
-	}
-
-	SuccessWithMeta(w, r, http.StatusOK, data, cursorMeta)
-}
-
-// buildBaseURL reconstructs the base URL from the request.
-func buildBaseURL(r *http.Request) string {
-	baseURL := r.URL.Scheme + "://" + r.URL.Host + r.URL.Path
-	if baseURL == "://" {
-		baseURL = r.RequestURI
-		if idx := strings.IndexByte(baseURL, '?'); idx != -1 {
-			baseURL = baseURL[:idx]
-		}
-	}
-	return baseURL
-}
-
-// buildCursorURL constructs a URL with updated cursor query parameter.
-func buildCursorURL(baseURL string, existingParams url.Values, cursor string, rel string) string {
-	params := url.Values{}
-	for k, vs := range existingParams {
-		for _, v := range vs {
-			if k == "cursor" || k == "limit" || k == "page" || k == "per_page" {
-				continue
-			}
-			params.Set(k, v)
-		}
-	}
-	if cursor != "" {
-		params.Set("cursor", cursor)
-	}
-	// Preserve the limit from existing params
-	if l := existingParams.Get("limit"); l != "" {
-		params.Set("limit", l)
-	}
-	if len(params) > 0 {
-		return baseURL + "?" + params.Encode()
-	}
-	return baseURL
 }
 
 // Content from hateoas.go

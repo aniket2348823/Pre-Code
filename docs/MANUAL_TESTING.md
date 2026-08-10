@@ -273,11 +273,12 @@ expectations). Every vulnerable snippet is shaped like real AI-generated code:
 | `vulnerable/go_hardcoded_secret.go` | `hardcoded_password` (critical) |
 | `vulnerable/js_xss_innerhtml.js` | `xss_unsafe_js` (medium) |
 
-Golden tests (deterministic engine must flag each vulnerable fixture and leave
-the `clean/` fixtures alone):
+Golden check (deterministic engine must flag each vulnerable fixture and leave
+the `clean/` fixtures alone — via the CLI, no LLM required):
 
 ```bash
-GOTOOLCHAIN=auto go test ./internal/testfixtures -v
+GOTOOLCHAIN=auto go run ./cmd/cli scan --path testdata/fixtures --fail-on high,critical
+# → exits non-zero listing findings for every vulnerable/ fixture; clean/ stays quiet
 ```
 
 **Manual UX test:** paste any vulnerable fixture into a VS Code file (with
@@ -372,7 +373,7 @@ Highlights:
 - `TestRunSuggestionMode_ReturnsSuggestions` — the invariant: in suggestion mode
   the auto-rewrite loop never runs (`Retries == 0`, `FinalOutput` untouched)
 - `TestHandleSuggest` / `TestFormatSuggestionsSummary` — MCP tool contract
-- `TestVulnerableFixturesProduceExpectedFindings` / `TestCleanFixturesProduceNoSeriousFindings` — golden corpus
+- `go run ./cmd/cli scan --path testdata/fixtures --fail-on high,critical` — deterministic-engine golden corpus check (flags every `vulnerable/` fixture, leaves `clean/` alone)
 - `TestComputeVerdict_*` / `TestApplyAnalysisHeaders` — proxy verdict matrix + headers
 - `TestComputePolicy_Matrix` / `TestEnforcePolicy` — observe/balanced/strict decision table
 - `TestRedactCodeBlocks` — balanced-mode withholding

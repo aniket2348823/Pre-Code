@@ -69,10 +69,6 @@ func (t *ReadFileTool) Name() string                                    { return
 func (t *ReadFileTool) Description() string                             { return "Read the contents of a file" }
 func (t *ReadFileTool) RequiresHITL(params map[string]interface{}) bool { return false }
 
-func NewReadFileTool(sec *FileSecurityConfig) *ReadFileTool {
-	return &ReadFileTool{Security: sec}
-}
-
 func (t *ReadFileTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
 		"type": "object",
@@ -132,10 +128,6 @@ func (t *WriteFileTool) RequiresHITL(params map[string]interface{}) bool {
 		}
 	}
 	return false
-}
-
-func NewWriteFileTool(sec *FileSecurityConfig) *WriteFileTool {
-	return &WriteFileTool{Security: sec}
 }
 
 func (t *WriteFileTool) Parameters() map[string]interface{} {
@@ -200,10 +192,6 @@ func (t *EditFileTool) Description() string {
 	return "Edit a file by replacing a specific string with new content"
 }
 func (t *EditFileTool) RequiresHITL(params map[string]interface{}) bool { return true }
-
-func NewEditFileTool(sec *FileSecurityConfig) *EditFileTool {
-	return &EditFileTool{Security: sec}
-}
 
 func (t *EditFileTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
@@ -274,10 +262,6 @@ type ListDirectoryTool struct {
 func (t *ListDirectoryTool) Name() string                                    { return "list_directory" }
 func (t *ListDirectoryTool) Description() string                             { return "List files and directories in a path" }
 func (t *ListDirectoryTool) RequiresHITL(params map[string]interface{}) bool { return false }
-
-func NewListDirectoryTool(sec *FileSecurityConfig) *ListDirectoryTool {
-	return &ListDirectoryTool{Security: sec}
-}
 
 func (t *ListDirectoryTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
