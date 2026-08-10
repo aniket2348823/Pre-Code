@@ -495,6 +495,128 @@ func TestBuiltinAnalyzer_LineNumberCorrect(t *testing.T) {
 	assert.Equal(t, 3, findings[0].Line, "line number should be 3")
 }
 
+// ── Comment-based suppression (hasNosecMarker) ───────────────────────────
+
+func TestHasNosecMarker_GosecStyle(t *testing.T) {
+	lines := []string{
+		"line1",
+		"// #nosec context_leak: background goroutine is intentional",
+		"ctx := context.Background()",
+	}
+	assert.True(t, hasNosecMarker(lines, 2), "#nosec marker 1 line above should suppress")
+}
+
+func TestHasNosecMarker_NosemgrepStyle(t *testing.T) {
+	lines := []string{
+		"line1",
+		"// nosemgrep: go.lang.security.audit.database.string-formatted-query",
+		`countQuery := fmt.Sprintf("SELECT COUNT(*) FROM skills %s", where)`,
+	}
+	assert.True(t, hasNosecMarker(lines, 2), "nosemgrep: marker should be honored")
+}
+
+func TestHasNosecMarker_BareNosemgrep(t *testing.T) {
+	lines := []string{
+		"line1",
+		"// nosemgrep — SSE stream writes are intended",
+		"fmt.Fprintf(w, \"event: %s\\n\", e)",
+	}
+	assert.True(t, hasNosecMarker(lines, 2), "bare nosemgrep marker should be honored")
+}
+
+func TestHasNosecMarker_NoMarker(t *testing.T) {
+	lines := []string{
+		"line1",
+		"line2",
+		"ctx := context.Background()",
+	}
+	assert.False(t, hasNosecMarker(lines, 2), "no marker should not suppress")
+}
+
+func TestHasNosecMarker_MarkerThreeLinesAbove(t *testing.T) {
+	// Marker at index 1, finding at index 4 — exactly 3 lines apart (the
+	// window is the matched line plus up to 3 lines above, inclusive).
+	lines := []string{
+		"line0",
+		"// #nosec G402 — intentional",
+		"line2",
+		"line3",
+		"InsecureSkipVerify: true",
+	}
+	assert.True(t, hasNosecMarker(lines, 4), "marker exactly 3 lines above should suppress")
+}
+
+func TestHasNosecMarker_MarkerTooFarAbove(t *testing.T) {
+	lines := []string{
+		"// #nosec context_leak: intentional",
+		"line2",
+		"line3",
+		"line4",
+		"line5",
+		"ctx := context.Background()",
+	}
+	assert.False(t, hasNosecMarker(lines, 5), "marker 4+ lines above should NOT suppress")
+}
+
+// ── context_leak comment-line suppression ────────────────────────────────
+
+func TestBuiltinAnalyzer_ContextLeak_SkipsCommentLines(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `// re-invoked fn runs with the request's deadline, not context.Background().
+type retryRow struct {
+	ctx context.Context
+}`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "retry.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "context_leak", f.RuleID,
+			"context_leak must not fire on a doc comment mentioning context.Background()")
+	}
+}
+
+func TestBuiltinAnalyzer_ContextLeak_FiresOnRealCode(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `func run() {
+	ctx := context.Background()
+	doWork(ctx)
+}`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "worker.go"})
+	require.NoError(t, err)
+	found := false
+	for _, f := range findings {
+		if f.RuleID == "context_leak" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "real context.Background() usage in code should still fire context_leak")
+}
+
+func TestBuiltinAnalyzer_NosemgrepSuppressesFinding(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	code := `// nosemgrep: go.lang.security.audit.database.string-formatted-query — where is fixed clauses only
+countQuery := fmt.Sprintf("SELECT COUNT(*) FROM skills %s", where)`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "skill.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "sql_injection", f.RuleID,
+			"nosemgrep marker must suppress the sql_injection finding")
+	}
+}
+
+func TestBuiltinAnalyzer_WeakHashSha1_SelfMatchExcluded(t *testing.T) {
+	a := NewBuiltinAnalyzer()
+	// The rule's own pattern string lives in builtin.go — must be excluded.
+	code := `name:        "weak_hash_sha1",
+pattern:     regexp.MustCompile("crypto/sha1|sha1.New()|sha1.Sum(")`
+	findings, err := a.Analyze(nil, Input{Code: code, Filename: "builtin.go"})
+	require.NoError(t, err)
+	for _, f := range findings {
+		assert.NotEqual(t, "weak_hash_sha1", f.RuleID,
+			"weak_hash_sha1 must self-exclude in builtin.go like its sibling crypto rules")
+	}
+}
+
 func TestBuiltinAnalyzer_MultipleFindings(t *testing.T) {
 	a := NewBuiltinAnalyzer()
 	code := `password := "supersecretpassword123"

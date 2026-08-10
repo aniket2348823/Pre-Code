@@ -449,7 +449,7 @@ func (r *Router) streamTaskHandler(w http.ResponseWriter, req *http.Request) {
 		"status":  task.Status,
 		"prompt":  task.Prompt,
 	})
-	// nosemgrep: java.lang.security.audit.no-fprintf-to-responsewriter — SSE stream, not HTML; response writer writes are the intended mechanism
+	// nosemgrep — SSE stream, not HTML; response-writer writes are the intended mechanism
 	fmt.Fprintf(w, "event: task_update\ndata: %s\n\n", data)
 	flusher.Flush()
 
@@ -464,7 +464,7 @@ func (r *Router) streamTaskHandler(w http.ResponseWriter, req *http.Request) {
 
 	// sendSSE writes an SSE event and flushes
 	sendSSE := func(eventType, payload string) {
-		// nosemgrep: java.lang.security.audit.no-fprintf-to-responsewriter — SSE stream, not HTML; response writer writes are the intended mechanism
+		// nosemgrep — SSE stream, not HTML; response-writer writes are the intended mechanism
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload)
 		flusher.Flush()
 	}

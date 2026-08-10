@@ -68,7 +68,11 @@ func isTestDataFile(filename string) bool {
 func hasNosecMarker(lines []string, i int) bool {
 	hasMarker := func(l string) bool {
 		lower := strings.ToLower(l)
-		return strings.Contains(lower, "#nosec") || strings.Contains(lower, "# nosec") || strings.Contains(lower, "nosemgrep:")
+		// Bare "nosemgrep" matches semgrep's native convention (a comment
+		// containing the word suppresses the line); rule-ID forms like
+		// "nosemgrep: <rule>" are covered by the same substring. Intentionally
+		// rule-agnostic, exactly like #nosec.
+		return strings.Contains(lower, "#nosec") || strings.Contains(lower, "# nosec") || strings.Contains(lower, "nosemgrep")
 	}
 	// Check the matched line and up to 3 lines above — justification comments
 	// are commonly 1-3 lines long with the marker on the first line.
