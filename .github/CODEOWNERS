@@ -9,31 +9,87 @@
 /internal/router/ @vigilagent/api-team
 /internal/api/ @vigilagent/api-team
 /internal/middleware/ @vigilagent/api-team
+/internal/server/ @vigilagent/api-team
+/internal/repository/ @vigilagent/api-team
+/internal/schema/ @vigilagent/api-team
+/internal/requestid/ @vigilagent/api-team
+/internal/sse/ @vigilagent/api-team
+/internal/websocket/ @vigilagent/api-team
+/internal/util/ @vigilagent/api-team
 /cmd/api/ @vigilagent/api-team
+/cmd/migrate/ @vigilagent/api-team
+/pkg/pagination/ @vigilagent/api-team
+/pkg/query/ @vigilagent/api-team
+/pkg/response/ @vigilagent/api-team
+/pkg/validation/ @vigilagent/api-team
 
-# Agent & LLM
+# Agent & LLM (incl. MCP middleware + AI internals)
 /internal/agent/ @vigilagent/ai-team
 /internal/llm/ @vigilagent/ai-team
 /internal/memory/ @vigilagent/ai-team
 /internal/tools/ @vigilagent/ai-team
 /internal/skills/ @vigilagent/ai-team
+/internal/mcp/ @vigilagent/ai-team
+/internal/skillengine/ @vigilagent/ai-team
+/internal/knowledge/ @vigilagent/ai-team
+/internal/contextbuilder/ @vigilagent/ai-team
+/internal/confidence/ @vigilagent/ai-team
+/internal/critic/ @vigilagent/ai-team
+/internal/extraction/ @vigilagent/ai-team
+/internal/feedback/ @vigilagent/ai-team
+/cmd/mcp/ @vigilagent/ai-team
+/mcp-server/ @vigilagent/ai-team
+
+# Security (scan pipeline, AI gateway, auth, rate protection)
+/internal/security/ @vigilagent/security-team
+/internal/webhook/ @vigilagent/security-team
+/internal/scanner/ @vigilagent/security-team
+/internal/pipeline/ @vigilagent/security-team
+/internal/proxy/ @vigilagent/security-team
+/cmd/proxy/ @vigilagent/security-team
+/internal/signing/ @vigilagent/security-team
+/internal/auth/ @vigilagent/security-team
+/internal/audit/ @vigilagent/security-team
+/internal/compliance/ @vigilagent/security-team
+/internal/attackgraph/ @vigilagent/security-team
+/internal/ipfilter/ @vigilagent/security-team
+/internal/ratelimit/ @vigilagent/security-team
+/internal/rateguard/ @vigilagent/security-team
 
 # Database & Infrastructure
 /internal/database/ @vigilagent/infra-team
 /internal/config/ @vigilagent/infra-team
+/internal/cache/ @vigilagent/infra-team
+/internal/queue/ @vigilagent/infra-team
+/internal/telemetry/ @vigilagent/infra-team
+/internal/observability/ @vigilagent/infra-team
+/internal/health/ @vigilagent/infra-team
+/internal/featureflags/ @vigilagent/infra-team
+/internal/idempotency/ @vigilagent/infra-team
+/internal/compression/ @vigilagent/infra-team
+/internal/cors/ @vigilagent/infra-team
+/internal/email/ @vigilagent/infra-team
+/internal/logging/ @vigilagent/infra-team
+/internal/slogger/ @vigilagent/infra-team
+/internal/configdrift/ @vigilagent/infra-team
+/internal/cost/ @vigilagent/infra-team
+/internal/costintel/ @vigilagent/infra-team
+/internal/e2e/ @vigilagent/infra-team
 /migrations/ @vigilagent/infra-team
 /Dockerfile @vigilagent/infra-team
 /docker-compose*.yml @vigilagent/infra-team
 /k8s/ @vigilagent/infra-team
-
-# Security
-/internal/security/ @vigilagent/security-team
-/internal/webhook/ @vigilagent/security-team
+/configs/ @vigilagent/infra-team
+/deploy/ @vigilagent/infra-team
+/cmd/bench/ @vigilagent/infra-team
+/cmd/loadtest/ @vigilagent/infra-team
+/cmd/healthcheck/ @vigilagent/infra-team
 
 # CI/CD & DevOps
 /.github/ @vigilagent/devops-team
 /Makefile @vigilagent/devops-team
 /scripts/ @vigilagent/devops-team
+/cmd/cli/ @vigilagent/devops-team
 
 # Browser Extension
 /browser-extension/ @vigilagent/frontend-team
