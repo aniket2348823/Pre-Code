@@ -148,14 +148,14 @@ webhook → pgxpool, ssrf
 | Retry | `internal/retry/` | Retry logic with backoff |
 | Compression | `internal/compression/` | HTTP response compression |
 | CORS | `internal/cors/` | CORS middleware |
-| Validation | `internal/validator/` | Input validation rules |
+| Validation | `pkg/validation/` | Input validation rules |
 | Schema | `internal/schema/` | Output schema validation |
 | Requirements | `internal/requirements/` | Security requirements resolution |
 | Tools | `internal/tools/` | File, terminal, search tool abstractions |
 | Agent | `internal/agent/` | Agent state machine and execution |
 | Queue | `internal/queue/` | NATS JetStream connection and worker |
 | Signing | `internal/signing/` | Request signing |
-| Timeout | `internal/timeout/` | Request timeout handling |
+| Timeout | stdlib `net/http` `TimeoutHandler` | Request timeout handling |
 | Slogger | `internal/slogger/` | Structured logging middleware |
 | Observability | `internal/observability/` | Observability helpers |
 

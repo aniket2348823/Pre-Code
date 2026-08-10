@@ -295,7 +295,6 @@ result := doSomething()   // Only runs if no error above
 | `internal/ipfilter`       | CIDR filtering, IP extraction, trusted proxies      |
 | `internal/cors`           | Origin matching, preflight handling, credentials    |
 | `internal/signing`        | HMAC-SHA256, Ed25519 payload signing                |
-| `internal/secrets`        | High-entropy secret detection                       |
 
 ---
 
@@ -376,33 +375,16 @@ make test-integration
 
 | Package                 | Tests                                              |
 |-------------------------|----------------------------------------------------|
-| `internal/integration`  | Full API workflow tests with test server harness   |
+| root `internal/integration_test.go` | Full API workflow tests with real server harness |
 | `internal/e2e`          | End-to-end tests with mock environment setup       |
 | `internal/router`       | Handler integration tests with real middleware     |
 
 ### Test Server Harness
 
-The `internal/integration/` package provides a reusable test server:
+The root `internal/integration_test.go` package provides the end-to-end
+workflow harness — it boots the full router and exercises the complete API
+surface (register → login → create project) against real middleware.
 
-```go
-func TestFullWorkflow(t *testing.T) {
-    // Start test server with all dependencies
-    srv := integration.NewTestServer(t)
-    defer srv.Close()
-
-    // Register user
-    resp := srv.POST("/api/v1/auth/register", registerPayload)
-    require.Equal(t, 201, resp.StatusCode)
-
-    // Login
-    resp = srv.POST("/api/v1/auth/login", loginPayload)
-    token := extractToken(resp)
-
-    // Create project with auth
-    resp = srv.WithAuth(token).POST("/api/v1/projects", projectPayload)
-    require.Equal(t, 201, resp.StatusCode)
-}
-```
 
 ---
 

@@ -88,9 +88,6 @@ func isTestFile(p string) bool {
 		// Package-private test helper files (not _test.go) — by convention they
 		// import `testing` and hold fixtures, never production logic.
 		return true
-	case strings.Contains(norm, "/integration/"):
-		// Integration test infrastructure (testdb.go, testredis.go).
-		return true
 	case ext == ".go" && strings.HasSuffix(base, "_test"):
 		return true
 	case ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx":

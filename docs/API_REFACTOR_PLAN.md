@@ -202,7 +202,7 @@ GET /api/v1/alerts?is_active=true&type=cost_threshold
 
 ### Current State
 - Manual `json.NewDecoder().Decode()` + string checks in every handler
-- `internal/validator` package exists but is not used by handlers
+- `pkg/validation` package exists but is not used by handlers
 - No request body schema validation
 - No query parameter validation
 

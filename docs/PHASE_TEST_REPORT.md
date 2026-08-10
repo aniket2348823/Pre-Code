@@ -6,6 +6,11 @@
 **Packages with No Test Files:** 5 (cmd/api, cmd/cli, cmd/migrate, internal/email, internal/featureflags, internal/server)
 **Actual Test Coverage:** Measured via `go test -coverprofile` (see Section 10)
 
+> **Note (dead-code cleanup, 2026-08):** packages covered in this report —
+> `internal/batch`, `internal/graceful`, `internal/timeout`, `internal/validator`
+> — were removed in commit `42c3f46` (they had zero importers). The results
+> below reflect the state at the time of testing.
+
 ---
 
 ## Table of Contents

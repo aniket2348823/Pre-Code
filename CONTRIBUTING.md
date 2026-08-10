@@ -281,7 +281,7 @@ Every new feature must include:
 
 ### Testing Utilities
 
-The `internal/router/test_helpers_test.go` file provides shared test utilities for HTTP handler tests. The `internal/e2e/` and `internal/integration/` packages provide harnesses for integration and end-to-end tests.
+The `internal/router/test_helpers_test.go` file provides shared test utilities for HTTP handler tests, and `internal/integration_test.go` at the repo root provides the end-to-end integration harness.
 
 See [docs/TESTING.md](docs/TESTING.md) for the complete testing guide.
 

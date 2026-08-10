@@ -29,7 +29,7 @@ At the heart of the backend (`cmd/api`) is the verification engine, orchestrated
 
 ### Background Systems
 * **Webhook Engine (`internal/webhook/`)**: Handles external event routing, allowing VigilAgent to receive and process events asynchronously.
-* **Batch Processing & Queueing (`internal/queue/`, `internal/batch/`)**: Handles high-volume workloads using NATS JetStream, processing requests concurrently in the background.
+* **Batch Processing & Queueing (`internal/queue/`)**: Handles high-volume workloads using NATS JetStream, processing requests concurrently in the background.
 * **Server-Sent Events (SSE) (`internal/sse/`)**: Allows real-time streaming of review progress and findings to clients.
 
 ---
