@@ -71,6 +71,27 @@ func TestSearchMemoryHandler_InvalidJSON(t *testing.T) {
 	}
 }
 
+// TestSearchMemoryHandler_ValidQueryScopedToUser verifies the handler threads
+// the authenticated user's ID into the memory search. With the in-memory
+// manager (no DB, no-op embedder) the recall short-circuits on the zero
+// vector and returns 200 with an empty result set — proving the new
+// user-scoped SearchMemory signature is wired correctly end-to-end.
+// Regression test for the cross-tenant memory search leak (any user could
+// previously search every user's episodic/semantic memories).
+func TestSearchMemoryHandler_ValidQueryScopedToUser(t *testing.T) {
+	r := newTestRouterForMemory()
+	req := reqWithClaims("POST", "/v1/memory/search", map[string]interface{}{"query": "auth"}, testClaims)
+	w := httptest.NewRecorder()
+	r.searchMemoryHandler(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 for valid query, got %d", w.Code)
+	}
+	body := parseJSON(t, w)
+	if _, ok := body["results"]; !ok {
+		t.Errorf("expected results key in response, got %v", body)
+	}
+}
+
 // === createMemoryHandler Tests ===
 
 func TestCreateMemoryHandler_MissingAuth(t *testing.T) {

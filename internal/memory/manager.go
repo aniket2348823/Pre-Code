@@ -83,13 +83,16 @@ func (m *Manager) initWorkingMemory() {
 }
 
 // Recall performs cascading memory recall: working -> episodic -> semantic.
-func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]MemoryResult, error) {
+// The userID scopes episodic/semantic lookups so one user can never recall
+// another user's memories (cross-tenant isolation). An empty userID falls
+// back to unscoped search for internal/system use only.
+func (m *Manager) Recall(ctx context.Context, userID, query string, limit int) ([]MemoryResult, error) {
 	var results []MemoryResult
 
 	// Layer 1: Check working memory (current session)
 	working := m.working.Load()
 	if working != nil {
-		workingMsgs := working.Search(query, limit)
+		workingMsgs := working.Search(userID, query, limit)
 		for _, msg := range workingMsgs {
 			results = append(results, MemoryResult{
 				Type:     "working",
@@ -127,7 +130,7 @@ func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]Memory
 
 	// Layer 2: Check episodic memory (past interactions)
 	if m.episodic != nil {
-		episodes, err := m.episodic.Search(ctx, "", queryVec, limit-len(results))
+		episodes, err := m.episodic.Search(ctx, userID, queryVec, limit-len(results))
 		if err == nil {
 			for _, ep := range episodes {
 				results = append(results, MemoryResult{
@@ -146,7 +149,7 @@ func (m *Manager) Recall(ctx context.Context, query string, limit int) ([]Memory
 
 	// Layer 3: Check semantic memory (codebase patterns)
 	if m.semantic != nil {
-		patterns, err := m.semantic.Search(ctx, "", queryVec, limit-len(results))
+		patterns, err := m.semantic.Search(ctx, userID, "", queryVec, limit-len(results))
 		if err == nil {
 			for _, p := range patterns {
 				results = append(results, MemoryResult{
@@ -204,11 +207,21 @@ func (m *Manager) StorePattern(ctx context.Context, userID, projectID, patternTy
 	return m.semantic.Store(ctx, pattern)
 }
 
-// AddWorkingMessage adds a message to working memory.
+// AddWorkingMessage adds a message to working memory without user scoping
+// (internal/system use only). Callers handling user content must use
+// AddWorkingMessageForUser so cross-tenant recall isolation holds.
 func (m *Manager) AddWorkingMessage(role, content string, tokens int) {
+	m.AddWorkingMessageForUser("", role, content, tokens)
+}
+
+// AddWorkingMessageForUser adds a user-scoped message to working memory.
+// The userID tag ensures Recall only surfaces the message to its owner
+// (working memory is a shared in-process/Redis bucket, so the tag is the
+// isolation boundary). An empty userID is treated as a global/system message.
+func (m *Manager) AddWorkingMessageForUser(userID, role, content string, tokens int) {
 	working := m.working.Load()
 	if working != nil {
-		working.Add(Message{Role: role, Content: content, Tokens: tokens})
+		working.Add(Message{UserID: userID, Role: role, Content: content, Tokens: tokens})
 	}
 }
 
@@ -263,8 +276,9 @@ type MemoryResult struct {
 }
 
 // SearchMemory performs unified semantic search across all memory layers.
-func (m *Manager) SearchMemory(ctx context.Context, query string, types []string, limit int, minRelevance float64) ([]MemoryResult, error) {
-	results, err := m.Recall(ctx, query, limit*2) // Get extra to filter
+// The userID scopes results to the caller's own memories (see Recall).
+func (m *Manager) SearchMemory(ctx context.Context, userID, query string, types []string, limit int, minRelevance float64) ([]MemoryResult, error) {
+	results, err := m.Recall(ctx, userID, query, limit*2) // Get extra to filter
 	if err != nil {
 		return nil, fmt.Errorf("memory recall failed: %w", err)
 	}
@@ -439,18 +453,20 @@ func (s *SemanticStore) Store(ctx context.Context, pattern *Pattern) error {
 	).Scan(&pattern.ID, &pattern.CreatedAt)
 }
 
-// Search finds patterns by semantic similarity.
-func (s *SemanticStore) Search(ctx context.Context, projectID string, embedding pgvector.Vector, limit int) ([]Pattern, error) {
+// Search finds patterns by semantic similarity, scoped to a user.
+// The userID filter prevents cross-tenant leakage: a caller can only ever
+// retrieve patterns they created (patterns carry a user_id column).
+func (s *SemanticStore) Search(ctx context.Context, userID, projectID string, embedding pgvector.Vector, limit int) ([]Pattern, error) {
 	query := `
 		SELECT id, user_id, project_id, pattern_type, name, description, confidence,
 		       observation_count, file_patterns, created_at,
 		       1 - (embedding <=> $1) as similarity
 		FROM memory_patterns
-		WHERE ($2 = '' OR project_id = $2)
+		WHERE ($2 = '' OR user_id = $2) AND ($3 = '' OR project_id = $3)
 		ORDER BY embedding <=> $1
-		LIMIT $3
+		LIMIT $4
 	`
-	rows, err := s.pool.Query(ctx, query, embedding, projectID, limit)
+	rows, err := s.pool.Query(ctx, query, embedding, userID, projectID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("semantic search failed: %w", err)
 	}
@@ -508,7 +524,10 @@ type WorkingMemory struct {
 }
 
 // Message represents a conversation message in working memory.
+// UserID tags the owner so Recall can enforce cross-tenant isolation on the
+// shared working-memory bucket; empty means a global/system message.
 type Message struct {
+	UserID    string    `json:"user_id,omitempty"`
 	Role      string    `json:"role"`
 	Content   string    `json:"content"`
 	Tokens    int       `json:"tokens"`
@@ -617,8 +636,11 @@ func (wm *WorkingMemory) Get() []Message {
 	return result
 }
 
-// Search performs a simple text search in working memory.
-func (wm *WorkingMemory) Search(query string, limit int) []Message {
+// Search performs a simple text search in working memory, scoped to a user.
+// Messages tagged with a different userID are never returned (cross-tenant
+// isolation). Global/system messages (empty UserID) are visible to everyone;
+// an empty caller userID (internal use) sees all messages.
+func (wm *WorkingMemory) Search(userID, query string, limit int) []Message {
 	wm.mu.RLock()
 	defer wm.mu.RUnlock()
 
@@ -627,6 +649,9 @@ func (wm *WorkingMemory) Search(query string, limit int) []Message {
 	for _, msg := range wm.messages {
 		if len(results) >= limit {
 			break
+		}
+		if msg.UserID != "" && userID != "" && msg.UserID != userID {
+			continue // another user's message — never surface
 		}
 		if strings.Contains(strings.ToLower(msg.Content), queryLower) {
 			results = append(results, msg)

@@ -44,7 +44,7 @@ type storeEpisodeCall struct {
 	importance                          float64
 }
 
-func (m *mockMemory) Recall(_ context.Context, _ string, _ int) ([]MemoryResult, error) {
+func (m *mockMemory) Recall(_ context.Context, _, _ string, _ int) ([]MemoryResult, error) {
 	return m.recallResults, m.recallErr
 }
 func (m *mockMemory) StoreEpisode(_ context.Context, userID, episodeType, title, content string, importance float64) error {

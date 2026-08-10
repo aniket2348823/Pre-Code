@@ -101,7 +101,7 @@ func TestMemoryAdapter_Recall_NilManager(t *testing.T) {
 	adapter := &memoryAdapter{mgr: nil}
 	// Should panic or error when mgr is nil
 	assert.Panics(t, func() {
-		adapter.Recall(context.Background(), "query", 10)
+		adapter.Recall(context.Background(), "user-1", "query", 10)
 	})
 }
 

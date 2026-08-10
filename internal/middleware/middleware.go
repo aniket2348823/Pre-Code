@@ -260,9 +260,12 @@ func (p *Pipeline) Process(ctx context.Context, req *Request) (*Response, error)
 		}
 	}
 
-	// Step 5: Recall relevant memory
-	if p.memory != nil && p.config.EnableMemory {
-		memoryResults, err := p.memory.Recall(ctx, req.Description, 5)
+	// Step 5: Recall relevant memory (scoped to the requesting user so one
+	// tenant can never pull another tenant's stored interactions). Unscoped
+	// requests (empty userID) skip recall entirely — an empty scope would
+	// otherwise match every stored row and leak cross-tenant data.
+	if p.memory != nil && p.config.EnableMemory && req.UserID != "" {
+		memoryResults, err := p.memory.Recall(ctx, req.UserID, req.Description, 5)
 		if err == nil && len(memoryResults) > 0 {
 			slog.Info("middleware: recalled memory", "count", len(memoryResults))
 			var memoryContext []contextbuilder.MemorySnippet

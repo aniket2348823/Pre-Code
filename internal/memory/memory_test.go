@@ -126,7 +126,7 @@ func TestOpenAIEmbedder_Embed_Success(t *testing.T) {
 
 func TestWorkingMemory_EmptySearch(t *testing.T) {
 	wm := NewWorkingMemory(0)
-	results := wm.Search("anything", 10)
+	results := wm.Search("", "anything", 10)
 	if len(results) != 0 {
 		t.Errorf("expected 0, got %d", len(results))
 	}
@@ -146,7 +146,7 @@ func TestWorkingMemory_GetReturnsCopy(t *testing.T) {
 func TestWorkingMemory_SearchCaseInsensitive(t *testing.T) {
 	wm := NewWorkingMemory(0)
 	wm.Add(Message{Role: "user", Content: "HELLO WORLD"})
-	results := wm.Search("hello", 10)
+	results := wm.Search("", "hello", 10)
 	if len(results) != 1 {
 		t.Errorf("expected 1, got %d", len(results))
 	}
@@ -155,7 +155,7 @@ func TestWorkingMemory_SearchCaseInsensitive(t *testing.T) {
 func TestWorkingMemory_SearchNoMatch(t *testing.T) {
 	wm := NewWorkingMemory(0)
 	wm.Add(Message{Role: "user", Content: "hello"})
-	results := wm.Search("xyz", 10)
+	results := wm.Search("", "xyz", 10)
 	if len(results) != 0 {
 		t.Errorf("expected 0, got %d", len(results))
 	}
@@ -266,7 +266,7 @@ func TestManager_Recall_WorkingOnly(t *testing.T) {
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
-	results, err := m.Recall(context.Background(), "auth", 10)
+	results, err := m.Recall(context.Background(), "user-1", "auth", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestManager_Recall_Empty(t *testing.T) {
 	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
-	results, err := m.Recall(context.Background(), "anything", 10)
+	results, err := m.Recall(context.Background(), "user-1", "anything", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestManager_SearchMemory_FilterByType(t *testing.T) {
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
-	results, err := m.SearchMemory(context.Background(), "auth", []string{"episodic"}, 10, 0)
+	results, err := m.SearchMemory(context.Background(), "user-1", "auth", []string{"episodic"}, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestManager_SearchMemory_FilterByScore(t *testing.T) {
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
-	results, err := m.SearchMemory(context.Background(), "auth", nil, 10, 0.95)
+	results, err := m.SearchMemory(context.Background(), "user-1", "auth", nil, 10, 0.95)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestManager_Recall_EarlyReturnFromWorking(t *testing.T) {
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth bug", 5)
 	m.AddWorkingMessage("assistant", "done", 3)
-	results, err := m.Recall(context.Background(), "auth", 1)
+	results, err := m.Recall(context.Background(), "user-1", "auth", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func TestManager_SearchMemory_TypeMatches(t *testing.T) {
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
-	results, err := m.SearchMemory(context.Background(), "auth", []string{"working"}, 10, 0)
+	results, err := m.SearchMemory(context.Background(), "user-1", "auth", []string{"working"}, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +508,7 @@ func TestManager_SearchMemory_TypeMatchLimit(t *testing.T) {
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
 	m.AddWorkingMessage("assistant", "done", 3)
-	results, err := m.SearchMemory(context.Background(), "auth", []string{"working"}, 1, 0)
+	results, err := m.SearchMemory(context.Background(), "user-1", "auth", []string{"working"}, 1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +523,7 @@ func TestManager_SearchMemory_EmptyTypes(t *testing.T) {
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
-	results, err := m.SearchMemory(context.Background(), "auth", []string{}, 10, 0)
+	results, err := m.SearchMemory(context.Background(), "user-1", "auth", []string{}, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func TestManager_SearchMemory_NoResults(t *testing.T) {
 	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
-	results, err := m.SearchMemory(context.Background(), "anything", nil, 10, 0)
+	results, err := m.SearchMemory(context.Background(), "user-1", "anything", nil, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +552,7 @@ func TestManager_SearchMemory_MultipleTypesOneMatch(t *testing.T) {
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
-	results, err := m.SearchMemory(context.Background(), "auth", []string{"episodic", "working"}, 10, 0)
+	results, err := m.SearchMemory(context.Background(), "user-1", "auth", []string{"episodic", "working"}, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,7 +624,7 @@ func TestManager_Recall_WorkingMetadata(t *testing.T) {
 	m.episodic = nil
 	m.semantic = nil
 	m.AddWorkingMessage("user", "fix auth", 5)
-	results, _ := m.Recall(context.Background(), "auth", 10)
+	results, _ := m.Recall(context.Background(), "user-1", "auth", 10)
 	if results[0].Metadata["role"] != "user" {
 		t.Errorf("expected role=user, got %v", results[0].Metadata["role"])
 	}
@@ -653,9 +653,47 @@ func TestManager_NewManagerWithEmbedder_NilPool(t *testing.T) {
 func TestWorkingMemory_SearchLimitZero(t *testing.T) {
 	wm := NewWorkingMemory(0)
 	wm.Add(Message{Role: "user", Content: "hello"})
-	results := wm.Search("hello", 0)
+	results := wm.Search("", "hello", 0)
 	if len(results) != 0 {
 		t.Errorf("expected 0, got %d", len(results))
+	}
+}
+
+// TestWorkingMemory_SearchUserIsolation is a regression test for the
+// cross-tenant working-memory leak: user-scoped messages must never surface
+// to another user's recall, while global (empty-userID) messages stay visible.
+func TestWorkingMemory_SearchUserIsolation(t *testing.T) {
+	wm := NewWorkingMemory(0)
+	wm.Add(Message{UserID: "user-a", Role: "user", Content: "user A secret plan"})
+	wm.Add(Message{UserID: "user-b", Role: "user", Content: "user B secret plan"})
+	wm.Add(Message{Role: "system", Content: "global announcement"})
+
+	// User A sees their own message and global messages, never user B's.
+	aResults := wm.Search("user-a", "secret", 10)
+	if len(aResults) != 1 {
+		t.Fatalf("user-a: expected 1 (own), got %d", len(aResults))
+	}
+	for _, m := range aResults {
+		if m.UserID == "user-b" {
+			t.Errorf("user-a recall leaked user-b message: %+v", m)
+		}
+	}
+
+	// User B sees their own message and global messages, never user A's.
+	bResults := wm.Search("user-b", "secret", 10)
+	if len(bResults) != 1 {
+		t.Fatalf("user-b: expected 1 (own), got %d", len(bResults))
+	}
+	for _, m := range bResults {
+		if m.UserID == "user-a" {
+			t.Errorf("user-b recall leaked user-a message: %+v", m)
+		}
+	}
+
+	// Internal/unscoped caller sees everything (system use only).
+	allResults := wm.Search("", "secret", 10)
+	if len(allResults) != 2 {
+		t.Errorf("unscoped caller: expected 2 (both users), got %d", len(allResults))
 	}
 }
 
@@ -671,7 +709,7 @@ func TestManager_Recall_EmbedFallback(t *testing.T) {
 	m.initWorkingMemory()
 	m.episodic = nil
 	m.semantic = nil
-	results, err := m.Recall(context.Background(), "query", 10)
+	results, err := m.Recall(context.Background(), "user-1", "query", 10)
 	if err != nil {
 		t.Fatal(err)
 	}

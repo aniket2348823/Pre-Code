@@ -16,7 +16,7 @@ import (
 // MemoryStore is the interface the agent uses to recall and store memories.
 // Satisfied by memory.Manager.
 type MemoryStore interface {
-	Recall(ctx context.Context, query string, limit int) ([]MemoryResult, error)
+	Recall(ctx context.Context, userID, query string, limit int) ([]MemoryResult, error)
 	StoreEpisode(ctx context.Context, userID, episodeType, title, content string, importance float64) error
 }
 
@@ -301,7 +301,7 @@ func (a *Agent) recallMemory(ctx context.Context, task *Task) string {
 	}
 
 	query := task.Title + " " + task.Description
-	results, err := a.memory.Recall(ctx, query, 3)
+	results, err := a.memory.Recall(ctx, task.UserID, query, 3)
 	if err != nil || len(results) == 0 {
 		return ""
 	}

@@ -12,8 +12,10 @@ import (
 )
 
 // searchMemoryHandler searches across memory layers (POST /v1/memory/search).
+// Results are scoped to the authenticated user: the manager filters episodic
+// and semantic stores by user_id so no caller can see another user's memories.
 func (r *Router) searchMemoryHandler(w http.ResponseWriter, req *http.Request) {
-	_, ok := auth.ClaimsFromContext(req.Context())
+	claims, ok := auth.ClaimsFromContext(req.Context())
 	if !ok {
 		response.Unauthorized(w, "missing authentication")
 		return
@@ -47,7 +49,7 @@ func (r *Router) searchMemoryHandler(w http.ResponseWriter, req *http.Request) {
 		input.Limit = 100
 	}
 
-	results, err := r.memory.SearchMemory(req.Context(), input.Query, input.Types, input.Limit, 0)
+	results, err := r.memory.SearchMemory(req.Context(), claims.UserID, input.Query, input.Types, input.Limit, 0)
 	if err != nil {
 		response.InternalError(w, "memory search failed")
 		return
@@ -133,12 +135,21 @@ func (r *Router) createMemoryHandler(w http.ResponseWriter, req *http.Request) {
 			response.BadRequest(w, "project_id is required for semantic memory")
 			return
 		}
+		// Verify the user is a member of the target project before writing a
+		// pattern there — otherwise any user could poison another project's
+		// semantic memory (cross-tenant write).
+		if _, err := r.requireProjectMember(req.Context(), input.ProjectID, claims.UserID); err != nil {
+			response.Forbidden(w, "access denied")
+			return
+		}
 		if err := r.memory.StorePattern(req.Context(), claims.UserID, input.ProjectID, "codebase", title, input.Content); err != nil {
 			response.InternalError(w, "failed to store memory")
 			return
 		}
 	case "procedural":
-		r.memory.AddWorkingMessage("system", input.Content, 0)
+		// Scope to the user so other tenants' Recall can never surface this
+		// content from the shared working-memory bucket.
+		r.memory.AddWorkingMessageForUser(claims.UserID, "system", input.Content, 0)
 	}
 
 	response.Created(w, map[string]interface{}{

@@ -31,25 +31,25 @@ func BenchmarkWorkingMemory_Search(b *testing.B) {
 
 	b.Run("found", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			wm.Search("keyword", 10)
+			wm.Search("", "keyword", 10)
 		}
 	})
 
 	b.Run("not_found", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			wm.Search("nonexistent", 10)
+			wm.Search("", "nonexistent", 10)
 		}
 	})
 
 	b.Run("limit_1", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			wm.Search("keyword", 1)
+			wm.Search("", "keyword", 1)
 		}
 	})
 
 	b.Run("limit_all", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			wm.Search("keyword", 1000)
+			wm.Search("", "keyword", 1000)
 		}
 	})
 }

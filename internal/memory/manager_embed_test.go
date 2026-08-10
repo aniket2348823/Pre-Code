@@ -112,7 +112,7 @@ func TestWorkingMemory_Search(t *testing.T) {
 	wm.Add(Message{Role: "user", Content: "fix the auth bug"})
 	wm.Add(Message{Role: "user", Content: "add login page"})
 	wm.Add(Message{Role: "assistant", Content: "auth fixed"})
-	results := wm.Search("auth", 10)
+	results := wm.Search("", "auth", 10)
 	if len(results) != 2 {
 		t.Errorf("expected 2 results, got %d", len(results))
 	}
@@ -123,7 +123,7 @@ func TestWorkingMemory_SearchLimit(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		wm.Add(Message{Role: "user", Content: "test message"})
 	}
-	results := wm.Search("test", 3)
+	results := wm.Search("", "test", 3)
 	if len(results) != 3 {
 		t.Errorf("expected 3 results, got %d", len(results))
 	}
@@ -156,7 +156,7 @@ func TestWorkingMemory_Concurrent(t *testing.T) {
 			defer wg.Done()
 			wm.Add(Message{Role: "user", Content: "test"})
 			wm.Get()
-			wm.Search("test", 10)
+			wm.Search("", "test", 10)
 			wm.Count()
 		}(i)
 	}

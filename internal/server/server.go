@@ -594,8 +594,8 @@ type memoryAdapter struct {
 	mgr *memory.Manager
 }
 
-func (a *memoryAdapter) Recall(ctx context.Context, query string, limit int) ([]agent.MemoryResult, error) {
-	results, err := a.mgr.Recall(ctx, query, limit)
+func (a *memoryAdapter) Recall(ctx context.Context, userID, query string, limit int) ([]agent.MemoryResult, error) {
+	results, err := a.mgr.Recall(ctx, userID, query, limit)
 	if err != nil {
 		return nil, err
 	}
