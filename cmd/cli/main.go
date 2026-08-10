@@ -165,14 +165,14 @@ the --fail-on severity gate — the CI enforcement layer for protected branches.
 					}
 					if d.IsDir() {
 						// Excluded dirs are skipped during recursive discovery, but an
-						// explicitly-passed root (e.g. --path testdata/fixtures/...) is
-						// always scanned — fixtures are only excluded as nested dirs.
-						// testfixtures/ and *_test files hold INTENTIONAL vulnerable
-						// code samples for the accuracy suite — they must never trip
-						// the CI fail gate (the gate guards production code). scripts/
-						// holds ops/deploy/load-test tooling (env-var-driven shell
-						// scripts, k6 tests) — not production application code.
-						if p != path && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "dist" || d.Name() == "vendor" || d.Name() == "bin" || d.Name() == "coverage" || d.Name() == "testdata" || d.Name() == "testfixtures" || d.Name() == "scripts") {
+						// explicitly-passed root is always scanned — exclusions apply
+						// only to nested dirs discovered during the walk. *_test files
+						// hold INTENTIONAL vulnerable code samples for the accuracy
+						// suite — they must never trip the CI fail gate (the gate
+						// guards production code). scripts/ holds ops/deploy/load-test
+						// tooling (env-var-driven shell scripts, k6 tests) — not
+						// production application code.
+						if p != path && (d.Name() == ".git" || d.Name() == "node_modules" || d.Name() == "dist" || d.Name() == "vendor" || d.Name() == "bin" || d.Name() == "coverage" || d.Name() == "testdata" || d.Name() == "scripts") {
 							return filepath.SkipDir
 						}
 						return nil

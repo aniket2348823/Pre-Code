@@ -258,33 +258,6 @@ streaming requests the verdict is prefixed to the final analysis chunk
 > `warn` = any medium finding or score < 70, `pass` = otherwise. Clients decide
 > whether to enforce it — the proxy itself never drops or alters traffic.
 
-## 4.6 Test with the vulnerability fixture corpus
-
-The corpus lives in `testdata/fixtures/` (`manifest.json` = golden
-expectations). Every vulnerable snippet is shaped like real AI-generated code:
-
-| Fixture | Expected finding |
-|---|---|
-| `vulnerable/python_sqli_fstring.py` | `python_sql_injection` (critical) |
-| `vulnerable/python_cmd_injection.py` | `python_command_injection` (critical) |
-| `vulnerable/python_ssrf.py` | `python_ssrf` (high) |
-| `vulnerable/python_path_traversal.py` | `python_path_traversal` (high) |
-| `vulnerable/go_sqli_concat.go` | `sql_injection` (critical) |
-| `vulnerable/go_hardcoded_secret.go` | `hardcoded_password` (critical) |
-| `vulnerable/js_xss_innerhtml.js` | `xss_unsafe_js` (medium) |
-
-Golden check (deterministic engine must flag each vulnerable fixture and leave
-the `clean/` fixtures alone — via the CLI, no LLM required):
-
-```bash
-GOTOOLCHAIN=auto go run ./cmd/cli scan --path testdata/fixtures --fail-on high,critical
-# → exits non-zero listing findings for every vulnerable/ fixture; clean/ stays quiet
-```
-
-**Manual UX test:** paste any vulnerable fixture into a VS Code file (with
-`vigilagent.autoVerify` on) → expect squiggles on the exact vulnerable line and
-the **⚡ Apply fix / 🗑 Dismiss** quick fixes within ~2 seconds of the paste.
-
 ## 4.7 Test the gateway (spec Phase 1: policy modes, provenance, /v1/responses, design gate)
 
 The proxy at `:9090` is the **Secure AI Gateway**. It speaks the OpenAI API
@@ -373,7 +346,6 @@ Highlights:
 - `TestRunSuggestionMode_ReturnsSuggestions` — the invariant: in suggestion mode
   the auto-rewrite loop never runs (`Retries == 0`, `FinalOutput` untouched)
 - `TestHandleSuggest` / `TestFormatSuggestionsSummary` — MCP tool contract
-- `go run ./cmd/cli scan --path testdata/fixtures --fail-on high,critical` — deterministic-engine golden corpus check (flags every `vulnerable/` fixture, leaves `clean/` alone)
 - `TestComputeVerdict_*` / `TestApplyAnalysisHeaders` — proxy verdict matrix + headers
 - `TestComputePolicy_Matrix` / `TestEnforcePolicy` — observe/balanced/strict decision table
 - `TestRedactCodeBlocks` — balanced-mode withholding
