@@ -1,6 +1,9 @@
 # VigilAgent CODEOWNERS
 # Each line is a file pattern followed by one or more owners.
 # Order matters: later rules take precedence over earlier ones.
+# Team-to-real-user mapping + setup steps: docs/CODEOWNERS_GUIDE.md
+# NOTE: the @vigilagent org/teams do not exist yet — CODEOWNERS is inert until they are
+# created (see the guide). Until then, add @aniket2348823 to a line to enforce it today.
 
 # Default: all code requires review from the core team
 * @vigilagent/core
