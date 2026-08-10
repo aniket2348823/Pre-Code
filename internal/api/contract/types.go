@@ -1,5 +1,5 @@
 // Package contract defines the API request/response types for VigilAgent.
-// All types match the wire format specified in doc 04-api-contract.
+// All types match the wire format specified in docs/API_REFERENCE.md.
 package contract
 
 import (

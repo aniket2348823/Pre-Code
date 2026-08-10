@@ -1,6 +1,6 @@
 // Package errors provides application-level error types and HTTP status mapping
 // for VigilAgent. Implements the standard error contract documented in
-// doc 04-api-contract §3.
+// docs/API_REFERENCE.md §3.
 package errors
 
 import (

@@ -12,7 +12,6 @@
 - [Local Development](#local-development)
 - [Docker Deployment](#docker-deployment)
 - [Kubernetes Deployment](#kubernetes-deployment)
-- [Helm Chart Deployment](#helm-chart-deployment)
 - [Database Migrations](#database-migrations)
 - [MCP Server Distribution](#mcp-server-distribution)
 - [VS Code Extension Publishing](#vs-code-extension-publishing)
@@ -32,7 +31,6 @@ VigilAgent supports multiple deployment models:
 | Local (`make`) | Development and debugging           | Low        |
 | Docker         | Single-server or staging            | Medium     |
 | Kubernetes     | Production multi-node clusters      | High       |
-| Helm           | Kubernetes with templated configs   | High       |
 
 ---
 
@@ -44,7 +42,6 @@ VigilAgent supports multiple deployment models:
 | Docker            | 24.0+           | Container builds                   |
 | Docker Compose    | 2.20+           | Local infrastructure stack         |
 | kubectl           | 1.28+           | Kubernetes deployments             |
-| Helm              | 3.12+           | Helm chart deployments             |
 | PostgreSQL        | 16              | Primary database (with pgvector)   |
 | Redis             | 7.0+            | Caching and rate limiting          |
 | NATS              | 2.10+           | Message queue (JetStream enabled)  |
@@ -129,7 +126,6 @@ VIGILAGENT_LOG_FORMAT=json          # json | text
 
 Alternatively, use YAML config files in `configs/`:
 - `configs/config.yaml` — Default local configuration
-- `configs/config.prod.yaml` — Production environment template
 
 ---
 
@@ -291,7 +287,6 @@ kubectl apply -f k8s/ -n vigilagent
 | `deployment.yaml`       | API server deployment with replicas     |
 | `service.yaml`          | ClusterIP/LoadBalancer service          |
 | `configmap.yaml`        | Non-sensitive configuration             |
-| `secret.yaml`           | Sensitive credentials (base64 encoded)  |
 | `ingress.yaml`          | Ingress rules for external access       |
 | `hpa.yaml`              | Horizontal Pod Autoscaler               |
 
@@ -315,62 +310,6 @@ readinessProbe:
   initialDelaySeconds: 5
   periodSeconds: 10
   failureThreshold: 3
-```
-
----
-
-## Helm Chart Deployment
-
-Helm charts are located in `helm/vigilagent/`.
-
-### Install
-
-```bash
-helm install vigilagent ./helm/vigilagent \
-  --namespace vigilagent \
-  --create-namespace \
-  --set config.database.host=postgres.vigilagent.svc \
-  --set config.database.password=your-password \
-  --set config.auth.jwtSecret=your-secret \
-  --set config.llm.openaiKey=sk-...
-```
-
-### Upgrade
-
-```bash
-helm upgrade vigilagent ./helm/vigilagent \
-  --namespace vigilagent \
-  -f values-production.yaml
-```
-
-### Values Customization
-
-Override defaults in a `values-production.yaml`:
-
-```yaml
-replicaCount: 3
-
-resources:
-  requests:
-    cpu: 500m
-    memory: 512Mi
-  limits:
-    cpu: 2000m
-    memory: 2Gi
-
-autoscaling:
-  enabled: true
-  minReplicas: 3
-  maxReplicas: 10
-  targetCPUUtilization: 70
-
-config:
-  server:
-    env: production
-    rateLimitPerMin: 300
-  database:
-    sslMode: require
-    maxOpenConns: 50
 ```
 
 ---

@@ -31,7 +31,7 @@
 VigilAgent uses [Viper](https://github.com/spf13/viper) for configuration management. Configuration values are resolved in the following priority order (highest first):
 
 1. **Environment variables** (prefixed with `VIGILAGENT_`)
-2. **YAML configuration files** (`configs/config.yaml`, `configs/config.prod.yaml`)
+2. **YAML configuration files** (`configs/config.yaml`)
 3. **Default values** (hardcoded in `internal/config/`)
 
 ---
@@ -330,29 +330,3 @@ cors:
   max_age: 86400
 ```
 
-### Production Configuration (`configs/config.prod.yaml`)
-
-```yaml
-server:
-  env: production
-  rate_limit: 300
-  read_timeout: 30s
-  write_timeout: 30s
-
-database:
-  ssl_mode: require
-  max_open_conns: 50
-  max_idle_conns: 25
-  statement_timeout: 30s
-
-auth:
-  jwt_bind_to_ip: true
-  jwt_bind_to_ua: true
-
-logging:
-  level: info
-  format: json
-
-cors:
-  allow_origins: ["https://app.yourdomain.com"]
-```

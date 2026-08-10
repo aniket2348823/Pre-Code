@@ -155,7 +155,7 @@ Static analysis pipeline integrating multiple scanning engines:
 | Observability    | OpenTelemetry + Prometheus                           |
 | CLI Framework    | Cobra + Viper                                        |
 | Testing          | testify + httptest + table-driven tests              |
-| Containerization | Multi-stage Docker + Helm + Kubernetes              |
+| Containerization | Multi-stage Docker + Kubernetes                        |
 | CI/CD            | GitHub Actions                                       |
 
 ---
@@ -238,9 +238,7 @@ go build -o vigil ./cmd/cli
 │   ├── cli/                      # Command-line client (vigil)
 │   ├── healthcheck/              # Container health probe binary
 │   ├── loadtest/                 # Concurrent HTTP load testing engine
-│   └── bench/                    # LLM cost optimization benchmark harness
-│
-├── internal/                     # Core application packages (67 packages)
+│   └── bench/                    # LLM cost optimization benchmark harness│   ├── internal/                     # Core application packages
 │   ├── agent/                    # 8-state machine agent execution engine
 │   ├── api/                      # DTOs, request/response models, validation
 │   ├── auth/                     # JWT, API keys, bcrypt, RBAC
@@ -274,7 +272,6 @@ go build -o vigil ./cmd/cli
 ├── migrations/                   # SQL migration files
 ├── configs/                      # YAML configs & setup scripts
 ├── deploy/                       # Deployment templates
-├── helm/                         # Helm charts for Kubernetes
 ├── k8s/                          # Kubernetes manifests
 ├── scripts/                      # Build & load test scripts
 ├── docs/                         # Extended documentation
@@ -450,11 +447,9 @@ make docker-run        # Run container on port 8080
 
 ### Kubernetes
 
-Helm charts and raw manifests are provided:
+Raw Kubernetes manifests are provided:
 
 ```bash
-helm install vigilagent ./helm/vigilagent
-# or
 kubectl apply -f k8s/
 ```
 
